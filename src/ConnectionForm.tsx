@@ -27,7 +27,7 @@ export const protocols = {
 };
 function connectionError(error: unknown) {
   const detail = error instanceof Error ? error.message : String(error);
-  if (/温度|重复惩罚/.test(detail)) return detail;
+  if (/温度|重复惩罚|输出格式|缓存参数|响应格式/.test(detail)) return detail;
   if (/401|403|unauthor|forbidden|鉴权|密钥/i.test(detail))
     return "密钥未通过验证。请检查 API Key 是否完整、是否有这个模型的使用权限。";
   if (/404|not found|模型不存在/i.test(detail))
@@ -78,6 +78,8 @@ export function ConnectionForm({
   function change(patch: Partial<Profile>, invalidate = true) {
     if ("url" in patch || "protocol" in patch) setModels([]);
     if (patch.protocol) {
+      if (patch.protocol === "claude" && p.outputMode === "json")
+        patch.outputMode = "auto";
       const max = maxFrequencyPenalty(patch.protocol);
       if (p.temperature !== undefined)
         patch.temperature = Math.min(
@@ -388,7 +390,7 @@ export function ConnectionForm({
         <details className="starter-details">
           <summary>
             <span>高级设置</span>
-            <small>协议、容量与超时</small>
+            <small>协议、输出格式、缓存与容量</small>
             <ChevronDown size={15} />
           </summary>
           <div className="details-content">
@@ -415,6 +417,43 @@ export function ConnectionForm({
                 ))}
               </select>
             </label>
+            <div className="two-col">
+              <label className="field">
+                <span>输出格式</span>
+                <select
+                  value={p.outputMode || "auto"}
+                  onChange={(e) =>
+                    change({
+                      outputMode: e.target.value as Profile["outputMode"],
+                    })
+                  }
+                >
+                  <option value="auto">自动选择</option>
+                  <option value="schema">严格结构 · JSON Schema</option>
+                  {p.protocol !== "claude" && (
+                    <option value="json">JSON 模式</option>
+                  )}
+                  <option value="compatible">兼容模式</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>显式缓存标记</span>
+                <select
+                  value={p.cachePolicy || "auto"}
+                  onChange={(e) =>
+                    change({
+                      cachePolicy: e.target.value as Profile["cachePolicy"],
+                    })
+                  }
+                >
+                  <option value="auto">按协议自动使用</option>
+                  <option value="off">关闭显式标记</option>
+                </select>
+              </label>
+            </div>
+            <p className="hint">
+              自动格式仅对已识别的官方模型使用严格结构；自定义接口可按服务说明选择。若接口拒绝格式或缓存参数，可改为兼容模式或关闭显式标记。服务自身的自动缓存仍由服务管理，命中统计可在开发者模式查看。
+            </p>
             <div className="two-col">
               <label className="field">
                 <span>上下文容量 · token</span>

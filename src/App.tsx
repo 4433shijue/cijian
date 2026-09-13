@@ -26,6 +26,8 @@ import { db, makeStory, deleteStory, reviseEvent } from "./db";
 import { loadRoleDraft, saveRoleDraft, saveCreatedRole } from "./role-draft";
 import { InspirationAssistant } from "./InspirationAssistant";
 import { inspirationCount, chooseInspiration } from "./inspiration";
+import { proseCount } from "./context";
+import { draftText, missingQuotes } from "./output";
 import {
   uid,
   paragraphs,
@@ -46,6 +48,7 @@ import {
   extractFacts,
   organizeMemory,
   preview,
+  adoptDraft,
 } from "./engine";
 import { ConnectionForm, protocols } from "./ConnectionForm";
 import {
@@ -1020,8 +1023,42 @@ function Reference({
         本地估算 {report.estimate.toLocaleString()} /{" "}
         {report.limit.toLocaleString()} token
         {report.usage &&
-          ` · 服务实际用量 输入 ${report.usage.input} / 输出 ${report.usage.output}`}
+          ` · 服务实际用量 输入 ${report.usage.input ?? "未返回"} / 输出 ${report.usage.output ?? "未返回"}`}
       </p>
+      {report.history && (
+        <p className="hint">
+          正文窗口 {report.history.sources.length} / {report.history.limit}{" "}
+          回合，按发生顺序排列。
+        </p>
+      )}
+      {developer && (
+        <div className="reference-metrics">
+          <p>
+            缓存读取{" "}
+            {report.usage?.cachedInput === undefined
+              ? "服务未返回"
+              : `${report.usage.cachedInput.toLocaleString()} token`}
+            {report.usage?.cachedInput !== undefined &&
+            report.usage.input &&
+            report.usage.cachedInput <= report.usage.input
+              ? ` · 占输入 ${((report.usage.cachedInput / report.usage.input) * 100).toFixed(1)}%`
+              : ""}
+          </p>
+          <p>
+            缓存写入{" "}
+            {report.usage?.cacheWriteInput === undefined
+              ? "服务未返回"
+              : `${report.usage.cacheWriteInput.toLocaleString()} token`}{" "}
+            · 请求耗时{" "}
+            {report.durationMs === undefined
+              ? "暂无记录"
+              : `${(report.durationMs / 1000).toFixed(1)} 秒`}
+          </p>
+          <p className="hint">
+            统计来自本次接口响应。固定前缀有助于复用缓存，实际命中还取决于模型、服务、前缀长度与有效期。
+          </p>
+        </div>
+      )}
       <h3>实际带入 {report.included.length} 项</h3>
       {report.included.map((m) => (
         <details key={m.id}>
@@ -1046,6 +1083,99 @@ function Reference({
         </details>
       )}
     </div>
+  );
+}
+function DraftReview({
+  event,
+  onClose,
+  onAdopted,
+}: {
+  event: SceneEvent;
+  onClose: () => void;
+  onAdopted: () => void;
+}) {
+  const [text, setText] = useState(event.text || draftText(event.raw));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const missing = missingQuotes(event.input, text);
+  return (
+    <Modal
+      title="检查草稿并采用"
+      onClose={() => {
+        if (!saving) onClose();
+      }}
+    >
+      <p>
+        请先读一遍，按你的想法修改。确认后，这段文字会成为正式正文，供后续生成参考。
+      </p>
+      {event.rewriteOf && (
+        <p className="review">
+          这是一份重写草稿，采用后将替换对应原文，并保留旧版本。后续经历会标记为待复核。
+        </p>
+      )}
+      <p className="error">
+        {event.error || "这次生成没有完整通过检查，请确认文字是否完整。"}
+      </p>
+      <details>
+        <summary>查看本次输入</summary>
+        <pre>{event.input}</pre>
+      </details>
+      <label className="field">
+        <span>准备采用的正文</span>
+        <textarea
+          className="long-text"
+          value={text}
+          disabled={saving}
+          onChange={(e) => setText(e.target.value)}
+        />
+      </label>
+      {missing.length > 0 && (
+        <div className="review">
+          <p>
+            以下台词仍可能被改动或遗漏。你可以补回，也可以按当前文字确认采用。
+          </p>
+          {missing.map((q, i) => (
+            <p key={i}>「{q}」</p>
+          ))}
+        </div>
+      )}
+      <details>
+        <summary>查看模型原始输出</summary>
+        <pre>{event.raw || "没有收到输出"}</pre>
+      </details>
+      <p className="hint">
+        采用操作不会调用
+        AI。角色知情事实先留空，可以之后用「摘录事实」整理并确认。
+      </p>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="row">
+        <button
+          className="primary"
+          disabled={saving || !text.trim()}
+          onClick={async () => {
+            setSaving(true);
+            setError("");
+            try {
+              await adoptDraft(event.id, text, event.versionId, event.raw);
+              onAdopted();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          {saving ? "正在采用…" : "我同意，采用为正文"}
+        </button>
+        <button disabled={saving} onClick={onClose}>
+          先保留草稿
+        </button>
+      </div>
+    </Modal>
   );
 }
 function EventEditor({
@@ -1413,14 +1543,18 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
     [panel, setPanel] = useState(""),
     [busy, setBusy] = useState(false),
     [editing, setEditing] = useState<SceneEvent>(),
+    [adopting, setAdopting] = useState<SceneEvent>(),
     [versions, setVersions] = useState<SceneEvent>(),
     [role, setRole] = useState<Role>(),
     [reference, setReference] = useState<ContextReport>(),
+    [referenceEvent, setReferenceEvent] = useState<string>(),
     [saveState, setSaveState] = useState("已保存到本机");
   useEffect(() => {
     setPanel("");
     setEditing(undefined);
+    setAdopting(undefined);
     setReference(undefined);
+    setReferenceEvent(undefined);
     setBusy(isBusy(id));
   }, [id]);
   async function update(patch: Partial<Story>) {
@@ -1502,7 +1636,14 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
         </button>
       )}
       {e.request && (
-        <button onClick={() => setReference(e.request)}>参考内容</button>
+        <button
+          onClick={() => {
+            setReferenceEvent(e.id);
+            setReference(e.request);
+          }}
+        >
+          参考内容
+        </button>
       )}
       <button
         disabled={busy || isBusy(id)}
@@ -1546,6 +1687,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
         <button
           onClick={async () => {
             try {
+              setReferenceEvent(undefined);
               setReference(await preview(id, mode, input));
             } catch (e) {
               notify(String(e));
@@ -1778,12 +1920,28 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
                   e.kind === "novel" && e.status === "complete" && e.collapsed
                 }
               >
-                <p className="event-text">{e.text || "文字正在路上…"}</p>
+                <p className="event-text">
+                  {e.text ||
+                    (e.status === "draft" && draftText(e.raw)) ||
+                    (busy && !e.error
+                      ? "文字正在路上…"
+                      : "这次没有收到可显示的文字，可以取回输入后重试。")}
+                </p>
+                {e.acceptedByAuthor && <p className="hint">作者确认采用</p>}
                 {e.error && <p className="error">{e.error}</p>}
                 {e.status === "complete" ? (
                   actions(e)
                 ) : (
                   <div className="row">
+                    {e.kind === "novel" && (e.text.trim() || e.raw.trim()) && (
+                      <button
+                        className="primary"
+                        disabled={busy}
+                        onClick={() => setAdopting(structuredClone(e))}
+                      >
+                        检查并采用
+                      </button>
+                    )}
                     <button
                       disabled={busy}
                       onClick={() => {
@@ -1802,6 +1960,22 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
                       删除草稿
                     </button>
                   </div>
+                )}
+                {e.status === "draft" && e.raw && (
+                  <details>
+                    <summary>查看模型原始输出</summary>
+                    <pre>{e.raw}</pre>
+                  </details>
+                )}
+                {e.status === "draft" && e.request && (
+                  <button
+                    onClick={() => {
+                      setReferenceEvent(e.id);
+                      setReference(e.request);
+                    }}
+                  >
+                    参考内容
+                  </button>
                 )}
               </div>
             </article>
@@ -1889,6 +2063,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
           <button
             onClick={async () => {
               try {
+                setReferenceEvent(undefined);
                 setReference(await preview(id, mode, input));
               } catch (e) {
                 notify(String(e));
@@ -2126,6 +2301,23 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
           onClose={() => setEditing(undefined)}
         />
       )}{" "}
+      {adopting && (
+        <DraftReview
+          key={adopting.id}
+          event={adopting}
+          onClose={() => setAdopting(undefined)}
+          onAdopted={() => {
+            setLocalInputs((current) => {
+              const next = { ...current };
+              if (next[id + ":novel"] === adopting.input)
+                delete next[id + ":novel"];
+              return next;
+            });
+            setAdopting(undefined);
+            notify("已按你确认的文字采用为正文。");
+          }}
+        />
+      )}
       {versions && (
         <Modal title="版本对照与恢复" onClose={() => setVersions(undefined)}>
           <div className="versions">
@@ -2157,7 +2349,14 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
       )}
       {reference && (
         <Modal title="本次参考内容" onClose={() => setReference(undefined)}>
-          <Reference report={reference} developer={prefs?.developer} />
+          <Reference
+            report={
+              (referenceEvent &&
+                events.find((e) => e.id === referenceEvent)?.request) ||
+              reference
+            }
+            developer={prefs?.developer}
+          />
         </Modal>
       )}
     </div>
@@ -2235,6 +2434,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
     [backup, setBackup] = useState<Backup>(),
     [kind, setKind] = useState<PromptKind>("novel"),
     [inspirationWindow, setInspirationWindow] = useState("3"),
+    [novelWindow, setNovelWindow] = useState("7"),
     [custom, setCustom] = useState(""),
     [importing, setImporting] = useState(false);
   useEffect(() => {
@@ -2245,6 +2445,9 @@ function SettingsPage({ notify }: { notify: Notice }) {
       String(inspirationCount(prefs?.inspirationParagraphs)),
     );
   }, [prefs?.inspirationParagraphs]);
+  useEffect(() => {
+    setNovelWindow(String(proseCount(prefs?.novelContextRounds)));
+  }, [prefs?.novelContextRounds]);
   if (!prefs) return null;
   return (
     <div className="page settings-page">
@@ -2367,6 +2570,31 @@ function SettingsPage({ notify }: { notify: Notice }) {
         </p>
         {prefs.developer && (
           <>
+            <Field label="正文参考回合数">
+              <input
+                type="number"
+                min={1}
+                max={50}
+                step={1}
+                value={novelWindow}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setNovelWindow(value);
+                  const count = Number(value);
+                  if (Number.isInteger(count) && count >= 1 && count <= 50)
+                    void db.preferences
+                      .update("preferences", { novelContextRounds: count })
+                      .catch(() => notify("正文参考回合数没能保存，请重试。"));
+                }}
+                onBlur={() =>
+                  setNovelWindow(String(proseCount(prefs.novelContextRounds)))
+                }
+              />
+            </Field>
+            <p className="hint">
+              默认读取最近 7 回合完整正文，可设为 1 到
+              50。待复核和未采用的草稿不计入，重写只参考原文之前的经历。材料超出容量时会提示调整，不会悄悄少带正文。关闭开发者模式后仍生效。
+            </p>
             <Field label="灵感小助手参考正文段数">
               <input
                 type="number"

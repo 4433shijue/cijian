@@ -1471,6 +1471,15 @@ details pre {
   font-size: 10px;
   color: #a0aa98;
 }
+.reference-metrics {
+  margin: 14px 0;
+  padding: 12px 16px;
+  border: 1px solid #dce5d3;
+  border-radius: 12px;
+  background: #f1f5eb;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
 .story-toolbar + .mode-bar {
   margin-top: 10px;
 }

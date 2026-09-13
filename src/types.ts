@@ -103,6 +103,8 @@ export interface SceneEvent {
   created: number;
   request?: ContextReport;
   collapsed?: boolean;
+  rewriteOf?: SourceRef;
+  acceptedByAuthor?: boolean;
 }
 export interface SourceRef {
   id: string;
@@ -131,6 +133,8 @@ export interface Profile {
   temperature?: number;
   // Missing values use the app's maximum; null keeps the model's own default.
   frequencyPenalty?: number | null;
+  outputMode?: "auto" | "schema" | "json" | "compatible";
+  cachePolicy?: "auto" | "off";
   remember: boolean;
   key?: string;
   testedAt?: number;
@@ -141,6 +145,7 @@ export interface Preferences {
   activeProfile: string;
   developer: boolean;
   inspirationParagraphs?: number;
+  novelContextRounds?: number;
   prompts: Partial<Record<PromptKind, { text: string; enabled: boolean }>>;
 }
 export interface Job {
@@ -159,6 +164,13 @@ export interface Material {
   text: string;
   mandatory: boolean;
   priority: number;
+  stable?: boolean;
+}
+export interface ModelUsage {
+  input?: number;
+  output?: number;
+  cachedInput?: number;
+  cacheWriteInput?: number;
 }
 export interface ContextReport {
   system: string;
@@ -167,13 +179,17 @@ export interface ContextReport {
   omitted: Material[];
   estimate: number;
   limit: number;
-  usage?: { input: number; output: number };
+  stablePrefix?: string;
+  history?: { limit: number; sources: SourceRef[] };
+  usage?: ModelUsage;
+  durationMs?: number;
 }
 export interface ModelResult {
   text: string;
   complete: boolean;
   reason: string;
-  usage?: { input: number; output: number };
+  usage?: ModelUsage;
+  durationMs?: number;
 }
 export const uid = () => crypto.randomUUID();
 export const paragraphs = (

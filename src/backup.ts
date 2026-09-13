@@ -86,6 +86,8 @@ const event = z.object({
   deleted: z.boolean(),
   created: z.number(),
   collapsed: z.boolean().optional(),
+  rewriteOf: z.object({ id: str, versionId: str }).optional(),
+  acceptedByAuthor: z.boolean().optional(),
 });
 const memory = z.object({
   id: str,
@@ -109,6 +111,8 @@ const profile = z.object({
   timeout: z.number().positive(),
   temperature: z.number().finite().min(0).max(2).optional(),
   frequencyPenalty: z.number().finite().min(0).max(2).nullable().optional(),
+  outputMode: z.enum(["auto", "schema", "json", "compatible"]).optional(),
+  cachePolicy: z.enum(["auto", "off"]).optional(),
   remember: z.boolean(),
   key: str.optional(),
 });
@@ -117,6 +121,7 @@ const prefs = z.object({
   activeProfile: str,
   developer: z.boolean(),
   inspirationParagraphs: z.number().int().min(1).max(20).optional(),
+  novelContextRounds: z.number().int().min(1).max(50).optional(),
   prompts: z.record(
     z.enum(["novel", "chat", "facts", "memory", "inspiration"]),
     z.object({ text: str, enabled: z.boolean() }),
@@ -150,6 +155,18 @@ export function validateBackup(raw: unknown) {
       throw Error("备份存在重复 ID");
   const stories = new Set(b.stories.map((x) => x.id));
   const events = new Map(b.events.map((x) => [x.id, x]));
+  for (const e of b.events) {
+    if (!e.rewriteOf) continue;
+    const target = events.get(e.rewriteOf.id);
+    if (
+      !target ||
+      target.id === e.id ||
+      target.storyId !== e.storyId ||
+      target.kind !== e.kind ||
+      !target.versions.some((v) => v.id === e.rewriteOf!.versionId)
+    )
+      throw Error("重写草稿的原文关联无效");
+  }
   for (const e of b.events)
     if (
       !stories.has(e.storyId) ||
@@ -259,6 +276,10 @@ export async function importBackup(value: unknown, replace = false) {
         speaker: remap(x.speaker),
         participants: x.participants.map(remap),
         versionId: remap(x.versionId),
+        rewriteOf: x.rewriteOf && {
+          id: remap(x.rewriteOf.id),
+          versionId: remap(x.rewriteOf.versionId),
+        },
         facts: x.facts.map(f),
         versions: x.versions.map((v) => ({
           ...v,

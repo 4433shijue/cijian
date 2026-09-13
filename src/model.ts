@@ -1,5 +1,29 @@
-import type { Profile, ModelResult } from "./types";
+import type { Profile, ModelResult, PromptKind, ModelUsage } from "./types";
 import { samplingParameters } from "./sampling";
+import { outputSchemas } from "./output";
+export interface GenerationOptions {
+  kind?: PromptKind;
+  stablePrefix?: string;
+}
+function nativeSchema(p: Profile) {
+  const host = new URL(p.url).hostname;
+  if (p.protocol === "chat" || p.protocol === "responses")
+    return (
+      host === "api.openai.com" &&
+      /^(?:gpt-(?:4o(?:$|-mini|-(?:2024-08|2024-11))|4\.1|5(?:[.-]|$))|o[34](?:-|$))/.test(
+        p.model,
+      )
+    );
+  if (p.protocol === "claude")
+    return (
+      host === "api.anthropic.com" &&
+      /^claude-(?:opus|sonnet|haiku)-(?:4-[567]|5)(?:-|$)/.test(p.model)
+    );
+  return (
+    host === "generativelanguage.googleapis.com" &&
+    /^(?:models\/)?gemini-(?:2\.5|3[.-])/.test(p.model)
+  );
+}
 export function endpoint(p: Profile, stream = p.stream) {
   let url = new URL(p.url);
   if (!["https:", "http:"].includes(url.protocol))
@@ -41,6 +65,7 @@ export function requestSpec(
   key: string,
   system: string,
   user: string,
+  options: GenerationOptions = {},
 ) {
   const { temperature, frequencyPenalty } = samplingParameters(p);
   const sampling = temperature === undefined ? {} : { temperature };
@@ -97,6 +122,92 @@ export function requestSpec(
             ...sampling,
           };
   }
+  const mode = p.outputMode || "auto";
+  if (options.kind && mode !== "compatible") {
+    const schemaMode =
+      mode === "schema" || (mode === "auto" && nativeSchema(p));
+    const schema = outputSchemas[options.kind];
+    const format = schemaMode
+      ? {
+          type: "json_schema",
+          name: "cijian_" + options.kind,
+          strict: true,
+          schema,
+        }
+      : mode === "json"
+        ? { type: "json_object" }
+        : undefined;
+    if (format) {
+      if (p.protocol === "chat")
+        body.response_format = schemaMode
+          ? {
+              type: "json_schema",
+              json_schema: { name: format.name, strict: true, schema },
+            }
+          : format;
+      else if (p.protocol === "responses") body.text = { format };
+      else if (p.protocol === "claude") {
+        if (!schemaMode)
+          throw Error(
+            "Claude 协议不支持 JSON 模式，请选择自动、严格结构或兼容模式。",
+          );
+        body.output_config = { format: { type: "json_schema", schema } };
+      } else
+        body.generationConfig = {
+          ...(body.generationConfig as object),
+          responseMimeType: "application/json",
+          ...(schemaMode ? { responseJsonSchema: schema } : {}),
+        };
+    }
+  }
+  const prefix = options.stablePrefix;
+  if (
+    p.cachePolicy !== "off" &&
+    prefix &&
+    user.startsWith(prefix) &&
+    prefix.length < user.length
+  ) {
+    if (p.protocol === "claude")
+      body.messages = [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: prefix,
+              cache_control: { type: "ephemeral" },
+            },
+            { type: "text", text: user.slice(prefix.length) },
+          ],
+        },
+      ];
+    if (
+      p.protocol === "responses" &&
+      new URL(p.url).hostname === "api.openai.com" &&
+      /^gpt-5\.6(?:-|$)/.test(p.model)
+    ) {
+      body.prompt_cache_options = { mode: "explicit" };
+      body.input = [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: prefix,
+              prompt_cache_breakpoint: { mode: "explicit" },
+            },
+            { type: "input_text", text: user.slice(prefix.length) },
+          ],
+        },
+      ];
+    }
+  }
+  if (
+    p.protocol === "chat" &&
+    p.stream &&
+    new URL(p.url).hostname === "api.openai.com"
+  )
+    body.stream_options = { include_usage: true };
   return { url: endpoint(p), headers, body };
 }
 export async function* sse(response: Response) {
@@ -146,7 +257,9 @@ export async function generate(
   signal: AbortSignal,
   onDelta: (s: string) => void = () => {},
   fetcher: typeof fetch = fetch,
+  options: GenerationOptions = {},
 ): Promise<ModelResult> {
+  const started = Date.now();
   if (!key.trim()) throw Error("请先在设置中填写 API Key");
   if (!p.model.trim()) throw Error("请填写模型名称");
   const controller = new AbortController();
@@ -163,7 +276,7 @@ export async function generate(
     complete = false,
     usage: ModelResult["usage"];
   try {
-    const spec = requestSpec(p, key, system, user);
+    const spec = requestSpec(p, key, system, user, options);
     const r = await fetcher(spec.url, {
       method: "POST",
       headers: spec.headers,
@@ -178,6 +291,18 @@ export async function generate(
         detail = r.statusText;
       }
       if ([400, 422].includes(r.status)) {
+        if (/cache_control|prompt_cache|breakpoint/i.test(detail))
+          throw Error(
+            "接口不接受显式缓存参数。请在 API 设置中关闭显式缓存标记，再手动重试。",
+          );
+        if (
+          /response_format|json_schema|responseJsonSchema|responseMimeType|output_config|text\.format|structured.output/i.test(
+            detail,
+          )
+        )
+          throw Error(
+            "接口不接受这个输出格式。请在 API 设置中将输出格式设为兼容模式，再手动重试。",
+          );
         if (/temperature|温度/i.test(detail))
           throw Error(
             "模型没有接受这个温度值。请在 API 设置中调整温度，或清空以使用模型默认值。",
@@ -190,12 +315,23 @@ export async function generate(
       throw Error(`接口 ${r.status} · ${detail}`);
     }
     const add = (s: string) => {
-      if (s) {
+      if (typeof s === "string" && s) {
         text += s;
         onDelta(text);
       }
     };
+    const mergeUsage = (next: ModelUsage) => {
+      const valid = Object.fromEntries(
+        Object.entries(next).filter(
+          ([, v]) => typeof v === "number" && Number.isFinite(v) && v >= 0,
+        ),
+      );
+      if (Object.keys(valid).length) usage = { ...usage, ...valid };
+    };
+    let claudeInput: number | undefined;
     const consume = (d: any, stream: boolean) => {
+      if (!d || typeof d !== "object")
+        throw Error("接口返回了无法读取的响应格式，已保留收到的内容。");
       if (d.error || d.type === "error") throw Error(errorMessage(d));
       if (p.protocol === "chat") {
         const c = d.choices?.[0];
@@ -205,10 +341,14 @@ export async function generate(
           complete = reason === "stop";
         }
         if (d.usage)
-          usage = {
-            input: d.usage.prompt_tokens || 0,
-            output: d.usage.completion_tokens || 0,
-          };
+          mergeUsage({
+            input: d.usage.prompt_tokens,
+            output: d.usage.completion_tokens,
+            cachedInput:
+              d.usage.prompt_tokens_details?.cached_tokens ??
+              d.usage.prompt_cache_hit_tokens,
+            cacheWriteInput: d.usage.prompt_tokens_details?.cache_write_tokens,
+          });
       }
       if (p.protocol === "responses") {
         if (stream && d.type === "response.output_text.delta")
@@ -234,7 +374,12 @@ export async function generate(
         }
         const u = (d.response || d).usage;
         if (u)
-          usage = { input: u.input_tokens || 0, output: u.output_tokens || 0 };
+          mergeUsage({
+            input: u.input_tokens,
+            output: u.output_tokens,
+            cachedInput: u.input_tokens_details?.cached_tokens,
+            cacheWriteInput: u.input_tokens_details?.cache_write_tokens,
+          });
       }
       if (p.protocol === "claude") {
         if (
@@ -256,11 +401,26 @@ export async function generate(
           complete = ["end_turn", "stop_sequence"].includes(stop);
         }
         const u = d.usage || d.message?.usage;
-        if (u)
-          usage = {
-            input: u.input_tokens ?? usage?.input ?? 0,
-            output: u.output_tokens ?? usage?.output ?? 0,
-          };
+        if (u) {
+          if (
+            typeof u.input_tokens === "number" &&
+            Number.isFinite(u.input_tokens) &&
+            u.input_tokens >= 0
+          )
+            claudeInput = u.input_tokens;
+          mergeUsage({
+            output: u.output_tokens,
+            cachedInput: u.cache_read_input_tokens,
+            cacheWriteInput: u.cache_creation_input_tokens,
+          });
+          if (claudeInput !== undefined)
+            mergeUsage({
+              input:
+                claudeInput +
+                (usage?.cachedInput || 0) +
+                (usage?.cacheWriteInput || 0),
+            });
+        }
       }
       if (p.protocol === "gemini") {
         const c = d.candidates?.[0];
@@ -275,10 +435,11 @@ export async function generate(
           complete = reason === "STOP";
         }
         if (d.usageMetadata)
-          usage = {
-            input: d.usageMetadata.promptTokenCount || 0,
-            output: d.usageMetadata.candidatesTokenCount || 0,
-          };
+          mergeUsage({
+            input: d.usageMetadata.promptTokenCount,
+            output: d.usageMetadata.candidatesTokenCount,
+            cachedInput: d.usageMetadata.cachedContentTokenCount,
+          });
         if (d.promptFeedback?.blockReason)
           throw Error("服务拦截了请求 · " + d.promptFeedback.blockReason);
       }
@@ -294,12 +455,25 @@ export async function generate(
         }
         consume(obj, true);
       }
-    } else consume(await r.json(), false);
+    } else {
+      let data;
+      const raw = await r.text();
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        add(raw);
+        throw Error(
+          "接口返回了无法读取的响应格式，请检查接口地址和协议。已保留收到的内容。",
+        );
+      }
+      consume(data, false);
+    }
     return {
       text,
       complete: complete && !!text.trim(),
       reason: reason || "连接结束但未收到完成标记",
       usage,
+      durationMs: Date.now() - started,
     };
   } catch (e) {
     if (controller.signal.aborted)

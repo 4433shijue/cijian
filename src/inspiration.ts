@@ -3,6 +3,7 @@ import { db, keyFor } from "./db";
 import { assemble } from "./context";
 import { generate } from "./model";
 import { prompt } from "./prompts";
+import { parseJSON } from "./output";
 import {
   uid,
   type InspirationOption,
@@ -48,12 +49,7 @@ export function parseInspiration(
 ) {
   let options: InspirationOption[];
   try {
-    const data = JSON.parse(
-      raw
-        .trim()
-        .replace(/^```(?:json)?\s*/, "")
-        .replace(/\s*```$/, ""),
-    );
+    const data = parseJSON(raw);
     options = z
       .object({ options: z.array(optionSchema).length(4) })
       .parse(data).options;
@@ -85,23 +81,14 @@ export function buildInspirationContext(
     inspirationCount(prefs.inspirationParagraphs),
   );
   const materials: Material[] = [];
-  const add = (id: string, label: string, text: string) => {
-    if (text) materials.push({ id, label, text, mandatory: true, priority: 0 });
+  const add = (id: string, label: string, text: string, stable = false) => {
+    if (text)
+      materials.push({ id, label, text, mandatory: true, priority: 0, stable });
   };
-  add("background", "故事开场背景", story.background);
-  for (const role of story.roles)
-    add(
-      role.id,
-      "当前故事人物 · " + role.name,
-      [
-        role.bio,
-        role.persona || role.paragraphs.map((p) => p.text).join("\n\n"),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    );
   const present = story.roles.map((r) => r.id);
-  for (const entry of world) {
+  for (const entry of story.worldIds.flatMap((id) =>
+    world.filter((w) => w.id === id),
+  )) {
     if (
       !story.worldIds.includes(entry.id) ||
       !entry.enabled ||
@@ -112,8 +99,21 @@ export function buildInspirationContext(
           : entry.roleIds.some((id) => present.includes(id))))
     )
       continue;
-    add(entry.id, "世界书 · " + entry.title, entry.text);
+    add(entry.id, "世界书 · " + entry.title, entry.text, true);
   }
+  for (const role of story.roles)
+    add(
+      role.id,
+      "当前故事人物 · " + role.name,
+      [
+        role.bio,
+        role.persona || role.paragraphs.map((p) => p.text).join("\n\n"),
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      true,
+    );
+  add("background", "故事开场背景", story.background, true);
   recent.forEach((event, i) =>
     add(event.id, `最近正文 ${i + 1} / 版本 ${event.versionId}`, event.text),
   );
@@ -204,6 +204,9 @@ export async function requestInspiration(storyId: string): Promise<void> {
       report.system,
       report.user,
       control.signal,
+      undefined,
+      fetch,
+      { kind: "inspiration", stablePrefix: report.stablePrefix },
     );
     if (control.signal.aborted) return;
     if (!result.complete)

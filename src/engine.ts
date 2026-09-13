@@ -13,8 +13,10 @@ import {
 import { generate } from "./model";
 import { buildContext, assemble } from "./context";
 import { prompt } from "./prompts";
+import { parseJSON, draftText, checkQuotes } from "./output";
+export { parseJSON, draftText, checkQuotes } from "./output";
 const novelSchema = z.object({
-  text: z.string().min(1),
+  text: z.string().trim().min(1),
   facts: z
     .array(
       z.object({
@@ -42,37 +44,6 @@ const memoriesSchema = z.object({
     }),
   ),
 });
-export function parseJSON(raw: string) {
-  return JSON.parse(
-    raw
-      .trim()
-      .replace(/^```(?:json)?\s*/, "")
-      .replace(/\s*```$/, ""),
-  );
-}
-export function draftText(raw: string) {
-  try {
-    const d = parseJSON(raw);
-    return d.text || d.messages?.join("\n") || "";
-  } catch {
-    const m = raw.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)/s);
-    if (m) {
-      try {
-        return JSON.parse('"' + m[1] + '"');
-      } catch {
-        return m[1].replace(/\\n/g, "\n");
-      }
-    }
-    return "";
-  }
-}
-export function checkQuotes(input: string, text: string) {
-  const quotes = [...input.matchAll(/[“「"]([^”」"]+)[”」"]/g)].map(
-    (m) => m[1],
-  );
-  if (quotes.some((q) => !text.includes(q)))
-    throw Error("输出改动或遗漏了明确台词，已保留草稿，请检查后重写。");
-}
 const active = new Map<string, AbortController>();
 export const isBusy = (id: string) => active.has(id);
 export function stop(id: string) {
@@ -92,13 +63,23 @@ async function report(
   input: string,
   until = Infinity,
 ) {
+  const prior = (
+    await db.events.where("storyId").equals(s.id).sortBy("seq")
+  ).filter((e) => e.seq < until);
+  const priorVersions = new Map(
+    prior
+      .filter((e) => !e.deleted && e.status === "complete" && !e.review)
+      .map((e) => [e.id, e.versionId]),
+  );
   return buildContext(
     kind,
     s,
-    (await db.events.where("storyId").equals(s.id).sortBy("seq")).filter(
-      (e) => e.seq < until,
+    prior,
+    (await db.memories.where("storyId").equals(s.id).toArray()).filter((m) =>
+      m.sources.every(
+        (source) => priorVersions.get(source.id) === source.versionId,
+      ),
     ),
-    await db.memories.where("storyId").equals(s.id).toArray(),
     await db.world.toArray(),
     prefs,
     p,
@@ -154,8 +135,9 @@ async function runUnlocked(
   const control = new AbortController();
   active.set(storyId, control);
   let event: SceneEvent | undefined,
-    jobId = uid(),
-    success = false;
+    jobId = uid();
+  let saving = Promise.resolve();
+  let storageError: unknown;
   try {
     const s = await db.stories.get(storyId);
     if (!s) throw Error("故事不存在");
@@ -164,7 +146,15 @@ async function runUnlocked(
     const { p, prefs, key } = await settings();
     if (!key.trim()) throw Error("请先到设置填写 API Key，当前没有发送请求");
     const old = rewriteId ? await db.events.get(rewriteId) : undefined;
-    if (rewriteId && !old) throw Error("要重写的内容已不存在");
+    if (
+      rewriteId &&
+      (!old ||
+        old.storyId !== storyId ||
+        old.deleted ||
+        (kind === "novel" && old.status !== "complete") ||
+        old.kind !== (kind === "novel" ? "novel" : "message"))
+    )
+      throw Error("要重写的内容已不存在或不属于当前故事");
     if (old && kind === "chat") {
       s.player = old.participants.find((x) => x !== old.speaker) || s.player;
       s.partner = old.speaker;
@@ -187,6 +177,8 @@ async function runUnlocked(
     }
     event = blankEvent(s, ++seq, kind === "novel" ? "novel" : "message", input);
     event.request = context;
+    if (old && kind === "novel")
+      event.rewriteOf = { id: old.id, versionId: old.versionId };
     await db.transaction("rw", [db.events, db.jobs, db.stories], async () => {
       if (!(await db.stories.get(storyId)))
         throw Error("故事已删除，未发送请求");
@@ -203,7 +195,6 @@ async function runUnlocked(
         error: "",
       });
     });
-    let saving = Promise.resolve();
     let last = 0;
     const result = await generate(
       p,
@@ -220,17 +211,35 @@ async function runUnlocked(
           const update = { raw, text: event.text };
           saving = saving
             .then(() => db.events.update(event!.id, update))
-            .then(() => {});
+            .then(() => {})
+            .catch((error) => {
+              storageError ??= error;
+            });
         }
       },
+      fetch,
+      { kind, stablePrefix: context.stablePrefix },
     );
     await saving;
+    if (storageError) throw storageError;
     event.raw = result.text;
-    event.request = { ...context, usage: result.usage };
+    event.text = draftText(result.text);
+    event.request = {
+      ...context,
+      usage: result.usage,
+      durationMs: result.durationMs,
+    };
     if (!result.complete) throw Error("服务未完整结束 · " + result.reason);
     let texts: string[];
     if (kind === "novel") {
-      const data = novelSchema.parse(parseJSON(result.text));
+      let data: z.infer<typeof novelSchema>;
+      try {
+        data = novelSchema.parse(parseJSON(result.text));
+      } catch {
+        throw Error(
+          "模型返回的格式未通过检查，收到的文字已保留。可以检查并修改后，确认采用为正文。",
+        );
+      }
       checkQuotes(input, data.text);
       texts = [data.text];
       event.facts = data.facts
@@ -241,7 +250,15 @@ async function runUnlocked(
           quote: f.quote,
           knownBy: [],
         }));
-    } else texts = chatSchema.parse(parseJSON(result.text)).messages;
+    } else {
+      try {
+        texts = chatSchema.parse(parseJSON(result.text)).messages;
+      } catch {
+        throw Error(
+          "模型返回的消息格式未通过检查，已保留收到的内容，请取回输入后重试。",
+        );
+      }
+    }
     // A rewrite only replaces its target when the source version is still current.
     if (old) {
       const current = await db.events.get(old.id);
@@ -259,64 +276,68 @@ async function runUnlocked(
         created: Date.now(),
       },
     ];
-    await db.transaction("rw", [db.events, db.stories], async () => {
-      if (!(await db.stories.get(storyId)))
-        throw Error("故事已删除，未写入结果");
-      if (!old) await db.events.put(event!);
-      if (!old && kind === "chat")
-        for (const text of texts.slice(1)) {
-          const e = blankEvent(s, ++seq, "message", input);
-          e.text = text;
-          e.status = "complete";
-          e.versions = [
-            { id: e.versionId, text, input, facts: [], created: Date.now() },
-          ];
-          await db.events.add(e);
+    await db.transaction(
+      "rw",
+      [db.events, db.stories, db.memories, db.jobs],
+      async () => {
+        if (!(await db.stories.get(storyId)))
+          throw Error("故事已删除，未写入结果");
+        if (!old) await db.events.put(event!);
+        else {
+          await reviseEvent(
+            old.id,
+            texts.join("\n"),
+            false,
+            event!.facts,
+            old.versionId,
+          );
+          await db.events.update(old.id, {
+            status: "complete",
+            error: "",
+            raw: result.text,
+            request: event!.request,
+            acceptedByAuthor: undefined,
+            rewriteOf: undefined,
+          });
+          await db.events.delete(event!.id);
         }
-      const latest = await db.stories.get(storyId);
-      await db.stories.update(storyId, {
-        updated: Date.now(),
-        ...(!old && kind === "novel"
-          ? {
-              inspiration: undefined,
-              inspirationRequest: undefined,
-              inspirationRevision: uid(),
-            }
-          : {}),
-        ...(!old &&
-        (kind === "novel" ? latest?.draft : latest?.chatDraft) === input
-          ? kind === "novel"
-            ? { draft: "" }
-            : { chatDraft: "" }
-          : {}),
-      });
-    });
-    if (old) {
-      await reviseEvent(
-        old.id,
-        texts.join("\n"),
-        false,
-        event.facts,
-        old.versionId,
-      );
-      await db.events.update(old.id, {
-        status: "complete",
-        error: "",
-        raw: result.text,
-        request: event.request,
-      });
-      await db.events.delete(event.id);
-      if (kind === "novel")
+        if (!old && kind === "chat")
+          for (const text of texts.slice(1)) {
+            const e = blankEvent(s, ++seq, "message", input);
+            e.text = text;
+            e.status = "complete";
+            e.versions = [
+              { id: e.versionId, text, input, facts: [], created: Date.now() },
+            ];
+            await db.events.add(e);
+          }
+        const latest = await db.stories.get(storyId);
         await db.stories.update(storyId, {
-          inspiration: undefined,
-          inspirationRequest: undefined,
-          inspirationRevision: uid(),
+          updated: Date.now(),
+          ...(kind === "novel"
+            ? {
+                inspiration: undefined,
+                inspirationRequest: undefined,
+                inspirationRevision: uid(),
+              }
+            : {}),
+          ...(!old &&
+          (kind === "novel" ? latest?.draft : latest?.chatDraft) === input
+            ? kind === "novel"
+              ? { draft: "" }
+              : { chatDraft: "" }
+            : {}),
         });
-      event = undefined;
-    }
-    await db.jobs.update(jobId, { status: "complete" });
-    success = true;
+        await db.jobs.update(jobId, {
+          status: "complete",
+          eventId: old?.id || event!.id,
+        });
+      },
+    );
+    event = undefined;
   } catch (error) {
+    // Drain queued stream writes before releasing the lock or exposing adoption.
+    await saving;
     const message = error instanceof Error ? error.message : String(error);
     if (event && (await db.stories.get(storyId))) {
       await db.events.put({ ...event, status: "draft", error: message });
@@ -347,7 +368,16 @@ async function extractFactsUnlocked(id: string) {
       p.context,
       p.maxOutput,
     );
-    const result = await generate(p, key, r.system, r.user, control.signal);
+    const result = await generate(
+      p,
+      key,
+      r.system,
+      r.user,
+      control.signal,
+      undefined,
+      fetch,
+      { kind: "facts" },
+    );
     if (!result.complete) throw Error("事实摘录未完整生成，请重试");
     const facts: Fact[] = factsSchema
       .parse(parseJSON(result.text))
@@ -430,7 +460,16 @@ async function organizeMemoryUnlocked(storyId: string) {
       p.context,
       p.maxOutput,
     );
-    const result = await generate(p, key, r.system, r.user, controller.signal);
+    const result = await generate(
+      p,
+      key,
+      r.system,
+      r.user,
+      controller.signal,
+      undefined,
+      fetch,
+      { kind: "memory" },
+    );
     if (!result.complete) throw Error("整理未完整结束，进度未前移");
     const parsed = memoriesSchema.parse(parseJSON(result.text));
     await db.transaction(
@@ -503,4 +542,88 @@ export async function extractFacts(id: string) {
   const e = await db.events.get(id);
   if (!e) throw Error("内容不存在");
   return withStoryLock(e.storyId, () => extractFactsUnlocked(id));
+}
+
+export async function adoptDraft(
+  id: string,
+  text: string,
+  expectedVersion: string,
+  expectedRaw: string,
+) {
+  if (!text.trim()) throw Error("正文还没有文字，请先填写再采用。");
+  const original = await db.events.get(id);
+  if (!original) throw Error("草稿已不存在。");
+  return withStoryLock(original.storyId, () =>
+    db.transaction(
+      "rw",
+      [db.events, db.stories, db.jobs, db.memories],
+      async () => {
+        const draft = await db.events.get(id);
+        const story = await db.stories.get(original.storyId);
+        if (
+          !story ||
+          !draft ||
+          draft.status !== "draft" ||
+          draft.kind !== "novel" ||
+          draft.deleted
+        )
+          throw Error("这份正文草稿已改变，请关闭窗口后重新打开。");
+        if (
+          isBusy(story.id) ||
+          (await db.jobs
+            .where("storyId")
+            .equals(story.id)
+            .filter((j) => j.status === "running")
+            .count())
+        )
+          throw Error("请等待当前任务完成后再采用。");
+        if (draft.versionId !== expectedVersion || draft.raw !== expectedRaw)
+          throw Error("草稿内容已更新，请重新检查后采用。");
+        let target = draft;
+        if (draft.rewriteOf) {
+          const current = await db.events.get(draft.rewriteOf.id);
+          if (
+            !current ||
+            current.storyId !== story.id ||
+            current.kind !== "novel" ||
+            current.deleted ||
+            current.status !== "complete" ||
+            current.versionId !== draft.rewriteOf.versionId
+          )
+            throw Error(
+              "要重写的原文已经修改或删除，本次草稿不会覆盖它。可以取回输入后重新生成。",
+            );
+          target = current;
+        }
+        await reviseEvent(target.id, text.trim(), false, [], target.versionId);
+        await db.events.update(target.id, {
+          status: "complete",
+          error: "",
+          acceptedByAuthor: true,
+          raw: draft.raw,
+          request: draft.request,
+          rewriteOf: undefined,
+        });
+        if (target.id !== draft.id) await db.events.delete(draft.id);
+        for (const job of await db.jobs
+          .where("storyId")
+          .equals(story.id)
+          .filter((j) => j.eventId === id)
+          .toArray())
+          await db.jobs.update(job.id, {
+            eventId: target.id,
+            status: "complete",
+            error: "",
+          });
+        await db.stories.update(story.id, {
+          updated: Date.now(),
+          inspiration: undefined,
+          inspirationRequest: undefined,
+          inspirationRevision: uid(),
+          ...(story.draft === draft.input ? { draft: "" } : {}),
+        });
+        return target.id;
+      },
+    ),
+  );
 }
