@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="garden" x1="12" y1="6" x2="52" y2="61" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EDF2DD"/>
+      <stop offset="1" stop-color="#D8E6CC"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="20" y1="23" x2="43" y2="49" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFDF0"/>
+      <stop offset="1" stop-color="#F2F1DE"/>
+    </linearGradient>
+  </defs>
+  <path d="M32 3C49 3 60 14 60 31C60 49 49 61 32 61C15 61 4 50 4 33C4 15 15 3 32 3Z" fill="url(#garden)"/>
+  <path d="M10 27C18 24 25 26 32 30C39 26 46 24 54 27V48C46 46 39 47 32 51C25 47 18 46 10 48V27Z" fill="#ADC5A6" opacity=".45"/>
+  <path d="M13 24C20 22 26 23 32 27C38 23 44 22 51 24V45C44 43 38 44 32 48C26 44 20 43 13 45V24Z" fill="url(#paper)" stroke="#4D7960" stroke-width="2.2" stroke-linejoin="round"/>
+  <path d="M32 27V48" stroke="#4D7960" stroke-width="2" stroke-linecap="round"/>
+  <path d="M18 30C21 29.7 24 30.2 27 31.7M18 35.5C21 35.2 23.2 35.6 25.5 36.5M37 31.7C40 30.2 43 29.7 46 30M37 37C39.8 35.7 42 35.3 44 35.5" stroke="#92AA85" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M45 9L46.7 13.3L51 15L46.7 16.7L45 21L43.3 16.7L39 15L43.3 13.3L45 9Z" fill="#BAA567"/>
+  <circle cx="25" cy="16" r="1.4" fill="#7E9C72" opacity=".75"/>
+</svg>

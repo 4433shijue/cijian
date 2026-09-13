@@ -1,0 +1,15 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+.env*
+work/
+outputs/
+backups/
+backup/
+此间-完整备份-*.json
+*.log
+*.pem
+*.key
+*.tsbuildinfo
+*.local
