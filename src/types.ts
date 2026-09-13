@@ -128,6 +128,9 @@ export interface Profile {
   context: number;
   maxOutput: number;
   timeout: number;
+  temperature?: number;
+  // Missing values use the app's maximum; null keeps the model's own default.
+  frequencyPenalty?: number | null;
   remember: boolean;
   key?: string;
   testedAt?: number;

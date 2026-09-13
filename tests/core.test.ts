@@ -9,7 +9,7 @@ import {
   type Preferences,
 } from "../src/types";
 import { assemble, buildContext } from "../src/context";
-import { endpoint, generate } from "../src/model";
+import { endpoint, generate, requestSpec } from "../src/model";
 import { exportBackup, importBackup, validateBackup } from "../src/backup";
 import { memoryDue, checkQuotes, run, organizeMemory } from "../src/engine";
 const profile: Profile = {
@@ -176,6 +176,43 @@ describe("knowledge and context", () => {
   });
 });
 describe("history and backup", () => {
+  it("preserves sampling preferences and model defaults across backup import", async () => {
+    await db.profiles.bulkAdd([
+      { ...profile, temperature: 0, frequencyPenalty: 1.5 },
+      { ...profile, id: "model-defaults", frequencyPenalty: null },
+      { ...profile, id: "legacy" },
+    ]);
+    const backup = await exportBackup();
+    await importBackup(backup, true);
+    const restored = await db.profiles.toArray();
+    expect(restored).toHaveLength(3);
+    expect(restored.find((p) => p.temperature === 0)).toMatchObject({
+      temperature: 0,
+      frequencyPenalty: 1.5,
+    });
+    const defaults = restored.find((p) => p.frequencyPenalty === null)!;
+    expect(requestSpec(defaults, "k", "s", "u").body).not.toHaveProperty(
+      "frequency_penalty",
+    );
+    expect(requestSpec(defaults, "k", "s", "u").body).not.toHaveProperty(
+      "temperature",
+    );
+    const legacy = restored.find((p) => p.frequencyPenalty === undefined)!;
+    expect(requestSpec(legacy, "k", "s", "u").body.frequency_penalty).toBe(2);
+  });
+  it("rejects invalid sampling in backups before replacing any data", async () => {
+    const backup = await exportBackup();
+    for (const invalid of [
+      { ...profile, temperature: -0.1 },
+      { ...profile, protocol: "claude", temperature: 1.1 },
+      { ...profile, protocol: "gemini", frequencyPenalty: 2 },
+    ]) {
+      await expect(
+        importBackup({ ...backup, profiles: [invalid] }, true),
+      ).rejects.toThrow();
+    }
+    expect((await exportBackup()).stories).toEqual(backup.stories);
+  });
   it("retains future versions and invalidates source memory", async () => {
     const { s, e } = await fixture();
     await db.events.add({ ...e, id: uid(), seq: 2 });
@@ -256,6 +293,115 @@ describe("history and backup", () => {
   });
 });
 describe("protocol contracts", () => {
+  it.each([
+    ["chat", 2],
+    ["gemini", 1.99],
+    ["responses", undefined],
+    ["claude", undefined],
+  ] as const)(
+    "applies the maximum supported repetition penalty to old %s profiles",
+    (protocol, penalty) => {
+      const body = requestSpec({ ...profile, protocol }, "k", "s", "u").body;
+      const config = (
+        protocol === "gemini" ? body.generationConfig : body
+      ) as Record<string, unknown>;
+      if (penalty === undefined) {
+        expect(config).not.toHaveProperty("frequency_penalty");
+      } else {
+        expect(
+          config[
+            protocol === "gemini" ? "frequencyPenalty" : "frequency_penalty"
+          ],
+        ).toBe(penalty);
+      }
+      expect(config).not.toHaveProperty("temperature");
+      expect(body).not.toHaveProperty("repetition_penalty");
+      expect(body).not.toHaveProperty("presence_penalty");
+    },
+  );
+  it.each(["chat", "responses", "claude", "gemini"] as const)(
+    "sends chosen temperatures including zero and allows model defaults for %s",
+    (protocol) => {
+      for (const temperature of [0, 0.75]) {
+        const body = requestSpec(
+          { ...profile, protocol, temperature, frequencyPenalty: null },
+          "k",
+          "s",
+          "u",
+        ).body;
+        const config = (
+          protocol === "gemini" ? body.generationConfig : body
+        ) as Record<string, unknown>;
+        expect(config.temperature).toBe(temperature);
+        expect(config).not.toHaveProperty("frequency_penalty");
+        expect(config).not.toHaveProperty("frequencyPenalty");
+      }
+    },
+  );
+  it("uses custom repetition values and rejects invalid sampling before a request", async () => {
+    expect(
+      requestSpec({ ...profile, frequencyPenalty: 0 }, "k", "s", "u").body
+        .frequency_penalty,
+    ).toBe(0);
+    expect(
+      requestSpec(
+        { ...profile, protocol: "gemini", frequencyPenalty: 1.25 },
+        "k",
+        "s",
+        "u",
+      ).body.generationConfig,
+    ).toMatchObject({ frequencyPenalty: 1.25 });
+    const fetcher = vi.fn();
+    for (const patch of [
+      { temperature: -0.01 },
+      { temperature: 2.01 },
+      { temperature: NaN },
+      { protocol: "claude" as const, temperature: 1.01 },
+      { frequencyPenalty: Infinity },
+      { frequencyPenalty: -1 },
+      { protocol: "gemini" as const, frequencyPenalty: 2 },
+    ]) {
+      await expect(
+        generate(
+          { ...profile, ...patch },
+          "k",
+          "s",
+          "u",
+          new AbortController().signal,
+          undefined,
+          fetcher,
+        ),
+      ).rejects.toThrow(/温度|重复惩罚/);
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it.each(["temperature", "frequency_penalty"])(
+    "explains rejected %s without retrying",
+    async (parameter) => {
+      const fetcher = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              error: { message: `Unsupported parameter: ${parameter}` },
+            }),
+            { status: 400 },
+          ),
+        );
+      await expect(
+        generate(
+          profile,
+          "k",
+          "s",
+          "u",
+          new AbortController().signal,
+          undefined,
+          fetcher,
+        ),
+      ).rejects.toThrow(/API 设置.*清空/);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    },
+  );
   it.each(["chat", "responses", "claude", "gemini"] as const)(
     "normalizes %s full endpoint without duplicate paths",
     (protocol) => {

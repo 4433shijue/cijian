@@ -17,6 +17,10 @@ Windows 双击根目录 `start.bat`，打开终端提示的 http://127.0.0.1:417
 
 普通连接管理仍在「设置 → 添加接口」。已创建的故事可以在「故事设置 → 带入另一位角色」中添加角色库中的角色。
 
+API 设置的「生成偏好」可调整温度，留空使用模型默认值。Chat、Responses、Gemini 可填写 0 到 2，Claude 为 0 到 1；部分模型只接受默认温度。重复惩罚默认设为最高可选值，Chat 为 2，Gemini 按两位小数精度设为 1.99（避开 2 的边界），Claude 和 Responses 不发送此参数。可调低或清空重复惩罚以使用模型默认值。旧接口配置也会应用新的重复惩罚默认值；手动调整按接口保存，并随备份导出和恢复，正文、聊天、灵感小助手及记忆整理都会使用当前接口的设置。模型拒绝这些参数时会提示修改，不会自动重试。
+
+参数依据 [OpenAI Docs · Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、[Responses](https://developers.openai.com/api/reference/python/resources/responses/methods/create)、[Claude Messages](https://platform.claude.com/docs/en/api/messages/create)、[Gemini GenerationConfig](https://ai.google.dev/api/generate-content#v1beta.GenerationConfig) 与 [Google 生成参数范围](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference)。兼容服务最终支持哪些参数，以服务和所选模型为准。
+
 「角色 → 添加角色」会随输入自动保存草稿，包括名字、简介、完整人设、头像和逐段设置。关闭窗口、切换页面或刷新后，再次点击「添加角色」即可接着填写。只有点击「保存角色」并保存成功才会清除草稿，下次创建会打开空白表单；保存失败会保留草稿。草稿留在当前浏览器，不会出现在角色库中，也不随正式角色备份导出。
 
 每段正文生成完成后，可以点击「折叠本段」，再用「展开本段」重读。折叠状态会保留，不影响后续生成参考原文。

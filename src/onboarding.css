@@ -434,6 +434,33 @@
   margin: 0;
   min-height: 36px;
 }
+.connection-sampling {
+  margin: 10px 0 18px;
+  padding: 16px;
+  border: 1px solid #dce5d1;
+  border-radius: 10px;
+  background: #f4f7ec80;
+}
+.connection-sampling h3 {
+  margin: 0 0 13px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #405d44;
+}
+.connection-sampling .two-col {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+}
+.connection-sampling .field {
+  margin: 0 0 6px;
+}
+.connection-sampling .hint {
+  margin: 0;
+  line-height: 1.8;
+}
+.connection-sampling input:disabled {
+  background: #edf1e8;
+  cursor: not-allowed;
+}
 .connection-form .connection-remember {
   display: flex;
   margin: 6px 0 4px;

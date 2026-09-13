@@ -3,6 +3,7 @@ import { Check, LoaderCircle, PlugZap, ChevronDown } from "lucide-react";
 import { db, keyFor, saveProfile } from "./db";
 import { generate, modelList } from "./model";
 import { uid, type Profile } from "./types";
+import { maxFrequencyPenalty, maxTemperature } from "./sampling";
 
 export function newProfile(): Profile {
   return {
@@ -26,6 +27,7 @@ export const protocols = {
 };
 function connectionError(error: unknown) {
   const detail = error instanceof Error ? error.message : String(error);
+  if (/温度|重复惩罚/.test(detail)) return detail;
   if (/401|403|unauthor|forbidden|鉴权|密钥/i.test(detail))
     return "密钥未通过验证。请检查 API Key 是否完整、是否有这个模型的使用权限。";
   if (/404|not found|模型不存在/i.test(detail))
@@ -62,6 +64,8 @@ export function ConnectionForm({
   const modelField = useRef<HTMLInputElement | HTMLSelectElement>(null);
   const request = useRef<AbortController | null>(null);
   const form = useRef<HTMLFormElement>(null);
+  const temperatureLimit = maxTemperature(p.protocol);
+  const penaltyLimit = maxFrequencyPenalty(p.protocol);
   useEffect(() => {
     if (models.length) modelField.current?.focus();
   }, [models, manualModel]);
@@ -73,6 +77,16 @@ export function ConnectionForm({
   );
   function change(patch: Partial<Profile>, invalidate = true) {
     if ("url" in patch || "protocol" in patch) setModels([]);
+    if (patch.protocol) {
+      const max = maxFrequencyPenalty(patch.protocol);
+      if (p.temperature !== undefined)
+        patch.temperature = Math.min(
+          p.temperature,
+          maxTemperature(patch.protocol),
+        );
+      if (max !== undefined && typeof p.frequencyPenalty === "number")
+        patch.frequencyPenalty = Math.min(p.frequencyPenalty, max);
+    }
     const next = {
       ...p,
       ...patch,
@@ -284,6 +298,78 @@ export function ConnectionForm({
             </button>
           )}
         </div>
+        <section className="connection-sampling" aria-label="生成偏好">
+          <h3>生成偏好</h3>
+          <div className="two-col">
+            <div>
+              <label className="field">
+                <span>
+                  温度 <small>0–{temperatureLimit}</small>
+                </span>
+                <input
+                  aria-label="温度"
+                  aria-describedby="temperature-help"
+                  type="number"
+                  min={0}
+                  max={temperatureLimit}
+                  step={0.01}
+                  value={p.temperature ?? ""}
+                  placeholder="模型默认"
+                  onChange={(e) =>
+                    change({
+                      temperature:
+                        e.target.value === ""
+                          ? undefined
+                          : e.target.valueAsNumber,
+                    })
+                  }
+                />
+              </label>
+              <p className="hint" id="temperature-help">
+                低一些更稳定，高一些变化更多。留空使用模型默认。
+                {p.protocol === "claude" && "部分 Claude 模型只支持默认温度。"}
+              </p>
+            </div>
+            <div>
+              <label className="field">
+                <span>
+                  重复惩罚{" "}
+                  {penaltyLimit !== undefined && (
+                    <small>0–{penaltyLimit}</small>
+                  )}
+                </span>
+                <input
+                  aria-label="重复惩罚"
+                  aria-describedby="penalty-help"
+                  type="number"
+                  min={0}
+                  max={penaltyLimit}
+                  step={0.01}
+                  disabled={penaltyLimit === undefined}
+                  value={
+                    penaltyLimit === undefined || p.frequencyPenalty === null
+                      ? ""
+                      : (p.frequencyPenalty ?? penaltyLimit)
+                  }
+                  placeholder={
+                    penaltyLimit === undefined ? "当前协议不支持" : "模型默认"
+                  }
+                  onChange={(e) =>
+                    change({
+                      frequencyPenalty:
+                        e.target.value === "" ? null : e.target.valueAsNumber,
+                    })
+                  }
+                />
+              </label>
+              <p className="hint" id="penalty-help">
+                {penaltyLimit === undefined
+                  ? "当前协议不支持单独调整重复惩罚。"
+                  : `默认设为最高 ${penaltyLimit}，减少重复措辞。可调低或留空使用模型默认。`}
+              </p>
+            </div>
+          </div>
+        </section>
         <label className="toggle connection-remember">
           <input
             type="checkbox"

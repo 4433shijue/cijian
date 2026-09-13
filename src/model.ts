@@ -1,4 +1,5 @@
 import type { Profile, ModelResult } from "./types";
+import { samplingParameters } from "./sampling";
 export function endpoint(p: Profile, stream = p.stream) {
   let url = new URL(p.url);
   if (!["https:", "http:"].includes(url.protocol))
@@ -41,6 +42,8 @@ export function requestSpec(
   system: string,
   user: string,
 ) {
+  const { temperature, frequencyPenalty } = samplingParameters(p);
+  const sampling = temperature === undefined ? {} : { temperature };
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -50,7 +53,11 @@ export function requestSpec(
     body = {
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts: [{ text: user }] }],
-      generationConfig: { maxOutputTokens: p.maxOutput },
+      generationConfig: {
+        maxOutputTokens: p.maxOutput,
+        ...sampling,
+        ...(frequencyPenalty === undefined ? {} : { frequencyPenalty }),
+      },
     };
   } else if (p.protocol === "claude") {
     headers["x-api-key"] = key;
@@ -62,6 +69,7 @@ export function requestSpec(
       messages: [{ role: "user", content: user }],
       max_tokens: p.maxOutput,
       stream: p.stream,
+      ...sampling,
     };
   } else {
     headers.Authorization = "Bearer " + key;
@@ -75,6 +83,10 @@ export function requestSpec(
             ],
             max_tokens: p.maxOutput,
             stream: p.stream,
+            ...sampling,
+            ...(frequencyPenalty === undefined
+              ? {}
+              : { frequency_penalty: frequencyPenalty }),
           }
         : {
             model: p.model,
@@ -82,6 +94,7 @@ export function requestSpec(
             input: user,
             max_output_tokens: p.maxOutput,
             stream: p.stream,
+            ...sampling,
           };
   }
   return { url: endpoint(p), headers, body };
@@ -163,6 +176,16 @@ export async function generate(
         detail = errorMessage(await r.json());
       } catch {
         detail = r.statusText;
+      }
+      if ([400, 422].includes(r.status)) {
+        if (/temperature|温度/i.test(detail))
+          throw Error(
+            "模型没有接受这个温度值。请在 API 设置中调整温度，或清空以使用模型默认值。",
+          );
+        if (/frequency.?penalty|repetition.?penalty|重复惩罚/i.test(detail))
+          throw Error(
+            "模型没有接受这个重复惩罚值。请在 API 设置中调低重复惩罚，或清空以使用模型默认值。",
+          );
       }
       throw Error(`接口 ${r.status} · ${detail}`);
     }

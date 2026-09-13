@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { db } from "./db";
 import { uid } from "./types";
+import { samplingParameters } from "./sampling";
 const str = z.string(),
   ids = z.array(str),
   aud = z.enum(["all", "roles", "author"]);
@@ -106,6 +107,8 @@ const profile = z.object({
   context: z.number().positive(),
   maxOutput: z.number().positive(),
   timeout: z.number().positive(),
+  temperature: z.number().finite().min(0).max(2).optional(),
+  frequencyPenalty: z.number().finite().min(0).max(2).nullable().optional(),
   remember: z.boolean(),
   key: str.optional(),
 });
@@ -134,6 +137,7 @@ const schema = z.object({
 export type Backup = z.infer<typeof schema>;
 export function validateBackup(raw: unknown) {
   const b = schema.parse(raw);
+  for (const p of b.profiles) samplingParameters(p);
   for (const list of [
     b.roles,
     b.stories,
