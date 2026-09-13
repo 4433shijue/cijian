@@ -1,5 +1,18 @@
 export type Protocol = "chat" | "responses" | "claude" | "gemini";
-export type PromptKind = "novel" | "chat" | "facts" | "memory";
+export type PromptKind = "novel" | "chat" | "facts" | "memory" | "inspiration";
+export type InspirationDirection =
+  "relationship" | "discovery" | "external" | "decision";
+export interface InspirationOption {
+  direction: InspirationDirection;
+  title: string;
+  text: string;
+}
+export interface Inspiration {
+  options: InspirationOption[];
+  sources: SourceRef[];
+  created: number;
+  selectedText?: string;
+}
 export interface Paragraph {
   id: string;
   text: string;
@@ -51,6 +64,9 @@ export interface Story {
   memoryCursor: number;
   memoryState: "idle" | "running" | "failed" | "interrupted";
   memoryError: string;
+  inspiration?: Inspiration;
+  inspirationRequest?: string;
+  inspirationRevision?: string;
 }
 export interface Fact {
   id: string;
@@ -86,6 +102,7 @@ export interface SceneEvent {
   deleted: boolean;
   created: number;
   request?: ContextReport;
+  collapsed?: boolean;
 }
 export interface SourceRef {
   id: string;
@@ -120,6 +137,7 @@ export interface Preferences {
   id: "preferences";
   activeProfile: string;
   developer: boolean;
+  inspirationParagraphs?: number;
   prompts: Partial<Record<PromptKind, { text: string; enabled: boolean }>>;
 }
 export interface Job {

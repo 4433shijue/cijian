@@ -276,6 +276,13 @@ async function runUnlocked(
       const latest = await db.stories.get(storyId);
       await db.stories.update(storyId, {
         updated: Date.now(),
+        ...(!old && kind === "novel"
+          ? {
+              inspiration: undefined,
+              inspirationRequest: undefined,
+              inspirationRevision: uid(),
+            }
+          : {}),
         ...(!old &&
         (kind === "novel" ? latest?.draft : latest?.chatDraft) === input
           ? kind === "novel"
@@ -299,6 +306,12 @@ async function runUnlocked(
         request: event.request,
       });
       await db.events.delete(event.id);
+      if (kind === "novel")
+        await db.stories.update(storyId, {
+          inspiration: undefined,
+          inspirationRequest: undefined,
+          inspirationRevision: uid(),
+        });
       event = undefined;
     }
     await db.jobs.update(jobId, { status: "complete" });

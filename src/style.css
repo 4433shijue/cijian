@@ -792,6 +792,27 @@ details pre {
   letter-spacing: 2px;
   color: #acb49f;
 }
+.prose-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.prose-collapse {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-color: transparent;
+  background: transparent;
+  color: #647e60;
+}
+.prose-preview {
+  margin-top: 12px;
+  color: #849078;
+  font-size: 13px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .event-text {
   font-family: "Songti SC", "SimSun", serif;
   font-size: 17px;
@@ -881,10 +902,87 @@ details pre {
 }
 .composer footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   border-top: 1px solid #e5eadb;
   padding-top: 12px;
+}
+.inspiration-trigger {
+  font-size: 12px;
+  padding: 7px 9px;
+  background: #eef4e5;
+}
+.inspiration-assistant {
+  padding-top: 20px;
+}
+.inspiration-intro {
+  font-size: 13px;
+  color: #647e60;
+  margin-bottom: 18px;
+}
+.inspiration-thinking {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 16px 0;
+  color: #527461;
+}
+.inspiration-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.inspiration-option {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  text-align: left;
+  padding: 18px;
+  gap: 10px;
+  background: #f4f7ed;
+  border-color: #dce5d0;
+}
+.inspiration-option strong {
+  font-size: 17px;
+  font-family: "Songti SC", "SimSun", serif;
+  font-weight: 500;
+}
+.inspiration-direction {
+  color: #758578;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+.inspiration-text {
+  font-size: 13px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.inspiration-use {
+  color: #497963;
+  font-size: 11px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+.inspiration-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 20px 0 12px;
+}
+@media (max-width: 600px) {
+  .inspiration-grid {
+    grid-template-columns: 1fr;
+  }
+  .inspiration-option {
+    padding: 14px;
+  }
+  .inspiration-trigger {
+    font-size: 11px;
+    padding: 7px;
+  }
 }
 .composer footer > button:first-child {
   background: transparent;

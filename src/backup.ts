@@ -84,6 +84,7 @@ const event = z.object({
   review: z.boolean(),
   deleted: z.boolean(),
   created: z.number(),
+  collapsed: z.boolean().optional(),
 });
 const memory = z.object({
   id: str,
@@ -112,8 +113,9 @@ const prefs = z.object({
   id: z.literal("preferences"),
   activeProfile: str,
   developer: z.boolean(),
+  inspirationParagraphs: z.number().int().min(1).max(20).optional(),
   prompts: z.record(
-    z.enum(["novel", "chat", "facts", "memory"]),
+    z.enum(["novel", "chat", "facts", "memory", "inspiration"]),
     z.object({ text: str, enabled: z.boolean() }),
   ),
 });
@@ -180,7 +182,10 @@ export async function exportBackup() {
       version: 1,
       created: new Date().toISOString(),
       roles: await db.roles.toArray(),
-      stories: await db.stories.toArray(),
+      stories: (await db.stories.toArray()).map(
+        ({ inspiration, inspirationRequest, inspirationRevision, ...story }) =>
+          story,
+      ),
       world: await db.world.toArray(),
       events: (await db.events.toArray()).map(({ request, ...e }) => e),
       memories: await db.memories.toArray(),

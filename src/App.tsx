@@ -18,9 +18,14 @@ import {
   RefreshCw,
   BookMarked,
   X,
+  ChevronDown,
+  ChevronUp,
+  Lightbulb,
 } from "lucide-react";
 import { db, makeStory, deleteStory, reviseEvent } from "./db";
 import { loadRoleDraft, saveRoleDraft, saveCreatedRole } from "./role-draft";
+import { InspirationAssistant } from "./InspirationAssistant";
+import { inspirationCount, chooseInspiration } from "./inspiration";
 import {
   uid,
   paragraphs,
@@ -1708,9 +1713,34 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
               }
             >
               {e.kind === "novel" ? (
-                <span className="event-number">
-                  {String(i + 1).padStart(2, "0")} / 这一刻
-                </span>
+                <div className="prose-heading">
+                  <span className="event-number">
+                    {String(i + 1).padStart(2, "0")} / 这一刻
+                  </span>
+                  {e.status === "complete" && (
+                    <button
+                      className="prose-collapse"
+                      aria-expanded={!e.collapsed}
+                      aria-controls={"prose-body-" + e.id}
+                      onClick={async () => {
+                        try {
+                          await db.events.update(e.id, {
+                            collapsed: !e.collapsed,
+                          });
+                        } catch {
+                          notify("折叠状态没能保存，请再试一次。");
+                        }
+                      }}
+                    >
+                      {e.collapsed ? (
+                        <ChevronDown size={15} />
+                      ) : (
+                        <ChevronUp size={15} />
+                      )}
+                      {e.collapsed ? "展开本段" : "折叠本段"}
+                    </button>
+                  )}
+                </div>
               ) : (
                 <div className="message-author">
                   <Avatar
@@ -1739,31 +1769,41 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
                     : "未完成草稿 · 不进入正式经历"}
                 </div>
               )}
-              <p className="event-text">{e.text || "文字正在路上…"}</p>
-              {e.error && <p className="error">{e.error}</p>}
-              {e.status === "complete" ? (
-                actions(e)
-              ) : (
-                <div className="row">
-                  <button
-                    disabled={busy}
-                    onClick={() => {
-                      changeInput(e.input);
-                      notify("原输入已放回输入框；草稿仍保留");
-                    }}
-                  >
-                    取回输入
-                  </button>
-                  <button
-                    disabled={busy}
-                    onClick={async () => {
-                      await db.events.delete(e.id);
-                    }}
-                  >
-                    删除草稿
-                  </button>
-                </div>
+              {e.kind === "novel" && e.status === "complete" && e.collapsed && (
+                <p className="prose-preview">{e.text.slice(0, 100)}</p>
               )}
+              <div
+                id={"prose-body-" + e.id}
+                hidden={
+                  e.kind === "novel" && e.status === "complete" && e.collapsed
+                }
+              >
+                <p className="event-text">{e.text || "文字正在路上…"}</p>
+                {e.error && <p className="error">{e.error}</p>}
+                {e.status === "complete" ? (
+                  actions(e)
+                ) : (
+                  <div className="row">
+                    <button
+                      disabled={busy}
+                      onClick={() => {
+                        changeInput(e.input);
+                        notify("原输入已放回输入框；草稿仍保留");
+                      }}
+                    >
+                      取回输入
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={async () => {
+                        await db.events.delete(e.id);
+                      }}
+                    >
+                      删除草稿
+                    </button>
+                  </div>
+                )}
+              </div>
             </article>
           );
         })}
@@ -1857,6 +1897,16 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
           >
             本次参考内容
           </button>
+          {mode === "novel" && (
+            <button
+              className="inspiration-trigger"
+              disabled={busy || isBusy(id)}
+              onClick={() => setPanel("inspiration")}
+            >
+              <Lightbulb size={16} />
+              灵感小助手
+            </button>
+          )}
           <span className="hint">Ctrl / ⌘ + Enter</span>
           {busy || isBusy(id) ? (
             <button className="primary" onClick={() => stop(id)}>
@@ -1878,6 +1928,30 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
           )}
         </footer>
       </section>
+      {panel === "inspiration" && (
+        <Modal title="灵感小助手" onClose={() => setPanel("")}>
+          <InspirationAssistant
+            story={s}
+            blocked={busy || isBusy(id)}
+            onClose={() => setPanel("")}
+            onChoose={async (text) => {
+              try {
+                const draft = await chooseInspiration(id, text, input);
+                setLocalInputs((current) => ({
+                  ...current,
+                  [inputKey]: draft,
+                }));
+                setSaveState("已保存到本机");
+                setPanel("");
+                document.getElementById("story-input")?.focus();
+                notify("灵感已放进输入框，可以调整后再扩写。");
+              } catch {
+                notify("输入没能保存，灵感仍保留在窗口里，请重试。");
+              }
+            }}
+          />
+        </Modal>
+      )}
       {panel === "memory" && (
         <Memories s={s} notify={notify} onClose={() => setPanel("")} />
       )}{" "}
@@ -2160,11 +2234,17 @@ function SettingsPage({ notify }: { notify: Notice }) {
   const [edit, setEdit] = useState<Profile>(),
     [backup, setBackup] = useState<Backup>(),
     [kind, setKind] = useState<PromptKind>("novel"),
+    [inspirationWindow, setInspirationWindow] = useState("3"),
     [custom, setCustom] = useState(""),
     [importing, setImporting] = useState(false);
   useEffect(() => {
     setCustom(prefs?.prompts[kind]?.text ?? defaults[kind]);
   }, [kind, prefs?.prompts[kind]?.text]);
+  useEffect(() => {
+    setInspirationWindow(
+      String(inspirationCount(prefs?.inspirationParagraphs)),
+    );
+  }, [prefs?.inspirationParagraphs]);
   if (!prefs) return null;
   return (
     <div className="page settings-page">
@@ -2287,6 +2367,33 @@ function SettingsPage({ notify }: { notify: Notice }) {
         </p>
         {prefs.developer && (
           <>
+            <Field label="灵感小助手参考正文段数">
+              <input
+                type="number"
+                min={1}
+                max={20}
+                step={1}
+                value={inspirationWindow}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setInspirationWindow(value);
+                  const count = Number(value);
+                  if (Number.isInteger(count) && count >= 1 && count <= 20)
+                    void db.preferences
+                      .update("preferences", { inspirationParagraphs: count })
+                      .catch(() => notify("参考段数没能保存，请重试。"));
+                }}
+                onBlur={() =>
+                  setInspirationWindow(
+                    String(inspirationCount(prefs.inspirationParagraphs)),
+                  )
+                }
+              />
+            </Field>
+            <p className="hint">
+              默认参考最近 3 段完整正文，可设为 1 到 20
+              段。新一轮灵感会使用新段数，关闭开发者模式后设置仍生效。
+            </p>
             <Field label="编辑提示词">
               <select
                 value={kind}
@@ -2296,6 +2403,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
                 <option value="chat">手机聊天</option>
                 <option value="facts">事实摘录</option>
                 <option value="memory">记忆整理</option>
+                <option value="inspiration">灵感小助手</option>
               </select>
             </Field>
             <textarea
