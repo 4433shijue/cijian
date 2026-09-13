@@ -216,7 +216,9 @@ export async function importBackup(value: unknown, replace = false) {
       throw Error(
         "请先停止正在进行的生成或记忆整理，再导入备份。现有资料未改变。",
       );
-    if (replace) for (const table of db.tables) await table.clear();
+    if (replace)
+      for (const table of db.tables)
+        if (table.name !== db.roleDrafts.name) await table.clear();
     await db.roles.bulkAdd(b.roles.map(r));
     await db.world.bulkAdd(
       b.world.map((x) => ({

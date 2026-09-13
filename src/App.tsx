@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { db, makeStory, deleteStory, reviseEvent } from "./db";
+import { loadRoleDraft, saveRoleDraft, saveCreatedRole } from "./role-draft";
 import {
   uid,
   paragraphs,
@@ -264,7 +265,13 @@ export default function App() {
     <div className="app">
       <aside className="sidebar" data-guide="sidebar">
         <a className="brand" href="#stories">
-          <img className="brand-mark" src={brandMark} alt="" width={48} height={48} />
+          <img
+            className="brand-mark"
+            src={brandMark}
+            alt=""
+            width={48}
+            height={48}
+          />
           <strong>
             此间<small>角色小剧场</small>
           </strong>
@@ -485,131 +492,221 @@ function RoleEditor({
   value,
   onSave,
   onClose,
+  onDraftChange,
 }: {
   value: Role;
   onSave: (r: Role) => Promise<void>;
   onClose: () => void;
+  onDraftChange?: (r: Role) => Promise<unknown>;
 }) {
-  const [r, setR] = useState(structuredClone(value));
-  const update = (patch: Partial<Role>) => setR({ ...r, ...patch });
+  const [r, setR] = useState(() => structuredClone(value));
+  const current = useRef(r);
+  const revision = useRef(0);
+  const submitting = useRef(false);
+  const pendingFiles = useRef(0);
   const [busy, setBusy] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [error, setError] = useState("");
+  const [draftStatus, setDraftStatus] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const update = (patch: Partial<Role> | ((role: Role) => Partial<Role>)) => {
+    if (submitting.current) return;
+    const next = {
+      ...current.current,
+      ...(typeof patch === "function" ? patch(current.current) : patch),
+    };
+    current.current = next;
+    setR(next);
+    setError("");
+    if (onDraftChange) {
+      const edit = ++revision.current;
+      setDraftStatus("saving");
+      onDraftChange(next).then(
+        () => {
+          if (edit === revision.current) setDraftStatus("saved");
+        },
+        () => {
+          if (edit === revision.current) setDraftStatus("error");
+        },
+      );
+    }
+  };
+  const readFile = async (file: File, avatar = false) => {
+    pendingFiles.current += 1;
+    setReading(true);
+    setError("");
+    try {
+      if (avatar) {
+        if (!file.type.startsWith("image/")) throw Error("请选择图片");
+        const data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(reader.error);
+          reader.onabort = () => reject(Error("图片读取已中断"));
+          reader.readAsDataURL(file);
+        });
+        update({ avatar: data });
+      } else {
+        const persona = await file.text();
+        update((latest) => ({
+          persona,
+          paragraphs: paragraphs(persona, latest.paragraphs),
+        }));
+      }
+    } catch {
+      setError("文件没能读取，请重新选择。已填写的内容仍在这里。");
+    } finally {
+      pendingFiles.current -= 1;
+      setReading(pendingFiles.current > 0);
+    }
+  };
   return (
-    <Modal title={"角色档案 · " + (value.name || "新朋友")} onClose={onClose}>
+    <Modal
+      title={"角色档案 · " + (value.name || "新朋友")}
+      onClose={() => {
+        if (!submitting.current && !pendingFiles.current) onClose();
+      }}
+    >
       <form
         onSubmit={async (e) => {
           e.preventDefault();
+          if (submitting.current || pendingFiles.current) return;
+          submitting.current = true;
           setBusy(true);
+          setError("");
           try {
-            await onSave({ ...r, updated: Date.now() });
+            await onSave({ ...current.current, updated: Date.now() });
             onClose();
+          } catch {
+            setError("角色没能保存，请重试。填写的内容和已有草稿都会保留。");
           } finally {
+            submitting.current = false;
             setBusy(false);
           }
         }}
       >
-        <div className="role-top">
-          <Avatar role={r} size={68} />
-          <Field label="头像">
+        {onDraftChange && (
+          <p
+            className={
+              draftStatus === "error" ? "error" : "hint role-draft-status"
+            }
+            role={draftStatus === "error" ? "alert" : "status"}
+          >
+            {draftStatus === "saving"
+              ? "正在保存草稿…"
+              : draftStatus === "saved"
+                ? "草稿已自动保存，关闭后可继续填写。保存角色后会清除这份草稿。"
+                : draftStatus === "error"
+                  ? "草稿暂时没能保存，请先不要关闭窗口，可以点击「保存角色」重试。"
+                  : "输入会自动保存为草稿，关闭后可继续填写。保存角色后，下次创建会从空白开始。"}
+          </p>
+        )}
+        <fieldset className="role-editor-fields" disabled={busy}>
+          <div className="role-top">
+            <Avatar role={r} size={68} />
+            <Field label="头像">
+              <input
+                type="file"
+                accept="image/*"
+                disabled={reading}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void readFile(f, true);
+                  e.target.value = "";
+                }}
+              />
+            </Field>
+          </div>
+          <Field label="名字">
+            <input
+              required
+              value={r.name}
+              onChange={(e) => update({ name: e.target.value })}
+            />
+          </Field>
+          <Field label="公开简介 · 其他角色可以看到">
+            <textarea
+              value={r.bio}
+              onChange={(e) => update({ bio: e.target.value })}
+            />
+          </Field>
+          <Field label="导入 TXT / Markdown 人设">
             <input
               type="file"
-              accept="image/*"
-              onChange={async (e) => {
+              accept=".txt,.md,.markdown,text/plain,text/markdown"
+              disabled={reading}
+              onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (!f) return;
-                if (!f.type.startsWith("image/")) throw Error("请选择图片");
-                const reader = new FileReader();
-                reader.onload = () => update({ avatar: String(reader.result) });
-                reader.readAsDataURL(f);
+                if (f) void readFile(f);
+                e.target.value = "";
               }}
             />
           </Field>
-        </div>
-        <Field label="名字">
-          <input
-            required
-            value={r.name}
-            onChange={(e) => update({ name: e.target.value })}
-          />
-        </Field>
-        <Field label="公开简介 · 其他角色可以看到">
-          <textarea
-            value={r.bio}
-            onChange={(e) => update({ bio: e.target.value })}
-          />
-        </Field>
-        <Field label="导入 TXT / Markdown 人设">
-          <input
-            type="file"
-            accept=".txt,.md,.markdown,text/plain,text/markdown"
-            onChange={async (e) => {
-              const f = e.target.files?.[0];
-              if (f) {
-                const persona = await f.text();
+          <Field label="完整人设 · 原文完整保存">
+            <textarea
+              className="long-text"
+              value={r.persona}
+              onChange={(e) =>
                 update({
-                  persona,
-                  paragraphs: paragraphs(persona, r.paragraphs),
-                });
+                  persona: e.target.value,
+                  paragraphs: paragraphs(e.target.value, r.paragraphs),
+                })
               }
-            }}
-          />
-        </Field>
-        <Field label="完整人设 · 原文完整保存">
-          <textarea
-            className="long-text"
-            value={r.persona}
-            onChange={(e) =>
-              update({
-                persona: e.target.value,
-                paragraphs: paragraphs(e.target.value, r.paragraphs),
-              })
-            }
-            placeholder="自由书写，以空行分段。私密内容默认不向其他角色公开。"
-          />
-        </Field>
-        <p className="hint">
-          {r.persona.length.toLocaleString()} 字符 ·
-          不设输入字数门槛。每次必读仍受模型容量限制。
-        </p>
-        <details>
-          <summary>逐段设置必读 / 公开（{r.paragraphs.length} 段）</summary>
-          {r.paragraphs.map((p, i) => (
-            <div className="paragraph" key={p.id}>
-              <p>{p.text}</p>
-              <Toggle
-                label="每次必读"
-                value={p.pin}
-                onChange={(v) =>
-                  update({
-                    paragraphs: r.paragraphs.map((x, j) =>
-                      j === i ? { ...x, pin: v } : x,
-                    ),
-                  })
-                }
-              />
-              <Toggle
-                label="对其他角色公开"
-                value={p.public}
-                onChange={(v) =>
-                  update({
-                    paragraphs: r.paragraphs.map((x, j) =>
-                      j === i ? { ...x, public: v } : x,
-                    ),
-                  })
-                }
-              />
-            </div>
-          ))}
-        </details>
-        <button disabled={busy} className="primary" type="submit">
-          {busy ? "保存中…" : "保存角色"}
-        </button>
+              placeholder="自由书写，以空行分段。私密内容默认不向其他角色公开。"
+            />
+          </Field>
+          <p className="hint">
+            {r.persona.length.toLocaleString()} 字符 ·
+            不设输入字数门槛。每次必读仍受模型容量限制。
+          </p>
+          <details>
+            <summary>逐段设置必读 / 公开（{r.paragraphs.length} 段）</summary>
+            {r.paragraphs.map((p, i) => (
+              <div className="paragraph" key={p.id}>
+                <p>{p.text}</p>
+                <Toggle
+                  label="每次必读"
+                  value={p.pin}
+                  onChange={(v) =>
+                    update({
+                      paragraphs: r.paragraphs.map((x, j) =>
+                        j === i ? { ...x, pin: v } : x,
+                      ),
+                    })
+                  }
+                />
+                <Toggle
+                  label="对其他角色公开"
+                  value={p.public}
+                  onChange={(v) =>
+                    update({
+                      paragraphs: r.paragraphs.map((x, j) =>
+                        j === i ? { ...x, public: v } : x,
+                      ),
+                    })
+                  }
+                />
+              </div>
+            ))}
+          </details>
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          <button disabled={busy || reading} className="primary" type="submit">
+            {busy ? "保存中…" : reading ? "正在读取文件…" : "保存角色"}
+          </button>
+        </fieldset>
       </form>
     </Modal>
   );
 }
 function RolesPage({ notify }: { notify: Notice }) {
   const roles = useLiveQuery(() => db.roles.toArray(), []) || [];
-  const [editing, setEditing] = useState<Role>();
+  const [editing, setEditing] = useState<{ role: Role; creating: boolean }>();
+  const [opening, setOpening] = useState(false);
   return (
     <div className="page">
       <header className="page-heading">
@@ -620,17 +717,29 @@ function RolesPage({ notify }: { notify: Notice }) {
         </div>
         <button
           className="primary"
-          onClick={() =>
-            setEditing({
-              id: uid(),
-              name: "",
-              bio: "",
-              persona: "",
-              avatar: "",
-              paragraphs: [],
-              updated: Date.now(),
-            })
-          }
+          disabled={opening}
+          onClick={async () => {
+            setOpening(true);
+            try {
+              const draft = await loadRoleDraft();
+              setEditing({
+                creating: true,
+                role: draft || {
+                  id: uid(),
+                  name: "",
+                  bio: "",
+                  persona: "",
+                  avatar: "",
+                  paragraphs: [],
+                  updated: Date.now(),
+                },
+              });
+            } catch {
+              notify("角色草稿暂时没能读取，请重试，已有草稿不会被覆盖。");
+            } finally {
+              setOpening(false);
+            }
+          }}
         >
           <Plus size={18} />
           添加角色
@@ -644,7 +753,9 @@ function RolesPage({ notify }: { notify: Notice }) {
             <h2>{r.name}</h2>
             <p>{r.bio || "这位朋友还没有写下简介。"}</p>
             <div className="card-actions">
-              <button onClick={() => setEditing(r)}>翻开档案</button>
+              <button onClick={() => setEditing({ role: r, creating: false })}>
+                翻开档案
+              </button>
               <button
                 aria-label={"删除" + r.name}
                 onClick={async () => {
@@ -666,10 +777,12 @@ function RolesPage({ notify }: { notify: Notice }) {
       </div>
       {editing && (
         <RoleEditor
-          value={editing}
+          value={editing.role}
+          onDraftChange={editing.creating ? saveRoleDraft : undefined}
           onClose={() => setEditing(undefined)}
           onSave={async (r) => {
-            await db.roles.put(r);
+            if (editing.creating) await saveCreatedRole(r);
+            else await db.roles.put(r);
             notify("角色已保存");
           }}
         />

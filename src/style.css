@@ -625,8 +625,18 @@ input[type="radio"] {
   padding: 8px 0 13px;
   border-bottom: 1px solid #e4e8db;
 }
-.modal form > .primary {
+.modal form > .primary,
+.role-editor-fields > .primary {
   margin-top: 20px;
+}
+.role-editor-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.role-draft-status {
+  margin: 16px 0;
 }
 .modal header button {
   border: 0;

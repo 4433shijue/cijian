@@ -13,6 +13,7 @@ import {
 } from "./types";
 export class SceneDB extends Dexie {
   roles!: Table<Role, string>;
+  roleDrafts!: Table<{ id: string; role: Role }, string>;
   stories!: Table<Story, string>;
   world!: Table<WorldEntry, string>;
   events!: Table<SceneEvent, string>;
@@ -32,6 +33,7 @@ export class SceneDB extends Dexie {
       preferences: "id",
       jobs: "id,storyId,status",
     });
+    this.version(2).stores({ roleDrafts: "id" });
   }
 }
 export const db = new SceneDB();
