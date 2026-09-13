@@ -58,8 +58,13 @@ export function ConnectionForm({
   const [result, setResult] = useState("");
   const [failure, setFailure] = useState("");
   const [models, setModels] = useState<string[]>([]);
+  const [manualModel, setManualModel] = useState(false);
+  const modelField = useRef<HTMLInputElement | HTMLSelectElement>(null);
   const request = useRef<AbortController | null>(null);
   const form = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    if (models.length) modelField.current?.focus();
+  }, [models, manualModel]);
   useEffect(
     () => () => {
       request.current?.abort();
@@ -67,6 +72,7 @@ export function ConnectionForm({
     [],
   );
   function change(patch: Partial<Profile>, invalidate = true) {
+    if ("url" in patch || "protocol" in patch) setModels([]);
     const next = {
       ...p,
       ...patch,
@@ -188,6 +194,7 @@ export function ConnectionForm({
             value={key}
             onChange={(e) => {
               setKey(e.target.value);
+              setModels([]);
               change({});
             }}
             placeholder="粘贴你自己的模型服务密钥"
@@ -195,45 +202,88 @@ export function ConnectionForm({
         </label>
         <label className="field">
           <span>模型名</span>
-          <input
-            required
-            value={p.model}
-            list="connection-models"
-            onChange={(e) => change({ model: e.target.value })}
-            placeholder="填写服务提供方给出的模型 ID"
-          />
-          <datalist id="connection-models">
-            {models.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
+          {models.length > 0 && !manualModel ? (
+            <span className="model-select-control">
+              <select
+                ref={(element) => {
+                  modelField.current = element;
+                }}
+                aria-label="模型名"
+                required
+                value={p.model}
+                onChange={(e) => change({ model: e.target.value })}
+              >
+                <option value="">点击选择模型</option>
+                {p.model && !models.includes(p.model) && (
+                  <option value={p.model}>{p.model}（当前填写）</option>
+                )}
+                {models.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={18} aria-hidden="true" />
+            </span>
+          ) : (
+            <input
+              ref={(element) => {
+                modelField.current = element;
+              }}
+              aria-label="模型名"
+              required
+              value={p.model}
+              onChange={(e) => change({ model: e.target.value })}
+              placeholder="填写服务提供方给出的模型 ID"
+            />
+          )}
         </label>
-        <button
-          type="button"
-          className="text-action"
-          onClick={async () => {
-            if (!p.url.trim()) {
-              setFailure("先填写接口地址，再获取模型列表。");
-              return;
-            }
-            setBusy("models");
-            setFailure("");
-            try {
-              setModels(await modelList(p, key));
-              setResult(
-                "模型列表已获取，可在模型名中选择；服务不支持列表时也可以直接填写。",
-              );
-            } catch (error) {
-              setFailure(
-                connectionError(error) + "也可以直接填写模型名继续测试。",
-              );
-            } finally {
-              setBusy("");
-            }
-          }}
-        >
-          {busy === "models" ? "正在获取模型…" : "尝试获取模型列表"}
-        </button>
+        <div className="connection-model-actions">
+          <button
+            type="button"
+            className="text-action"
+            onClick={async () => {
+              if (!p.url.trim()) {
+                setFailure("先填写接口地址，再获取模型列表。");
+                return;
+              }
+              setBusy("models");
+              setFailure("");
+              setResult("");
+              setModels([]);
+              try {
+                const available = await modelList(p, key);
+                setModels(available);
+                setManualModel(false);
+                if (available.length)
+                  setResult(
+                    `已获取 ${available.length} 个模型，请在「模型名」下拉框中选择。`,
+                  );
+                else
+                  setFailure(
+                    "服务没有返回可选模型，可以直接手动填写模型名继续测试。",
+                  );
+              } catch (error) {
+                setFailure(
+                  connectionError(error) + "也可以直接填写模型名继续测试。",
+                );
+              } finally {
+                setBusy("");
+              }
+            }}
+          >
+            {busy === "models" ? "正在获取模型…" : "尝试获取模型列表"}
+          </button>
+          {models.length > 0 && (
+            <button
+              type="button"
+              className="text-action"
+              onClick={() => setManualModel(!manualModel)}
+            >
+              {manualModel ? "从列表选择模型" : "手动填写模型名"}
+            </button>
+          )}
+        </div>
         <label className="toggle connection-remember">
           <input
             type="checkbox"
@@ -246,7 +296,8 @@ export function ConnectionForm({
           默认刷新后需要重新填写密钥。勾选后会以未加密形式保存在当前浏览器，请只在自己的设备上使用；导出的备份不含密钥。
         </p>
         <p className="hint">
-          测试连接和生成内容会使用你的模型额度。密钥和生成所需的角色、剧情将发往你填写的服务，请使用可信的 HTTPS 接口；存档保存在当前浏览器。
+          测试连接和生成内容会使用你的模型额度。密钥和生成所需的角色、剧情将发往你填写的服务，请使用可信的
+          HTTPS 接口；存档保存在当前浏览器。
         </p>
         <details className="starter-details">
           <summary>

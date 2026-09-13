@@ -402,6 +402,38 @@
   font-size: 12px;
   margin: -6px 0 8px;
 }
+.connection-form .model-select-control {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+.connection-form .model-select-control select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  appearance: none;
+  padding-right: 42px;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.model-select-control > svg {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: #496a4d;
+}
+.connection-model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: -6px 0 8px;
+}
+.connection-model-actions .text-action {
+  margin: 0;
+  min-height: 36px;
+}
 .connection-form .connection-remember {
   display: flex;
   margin: 6px 0 4px;

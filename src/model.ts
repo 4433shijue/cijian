@@ -314,9 +314,25 @@ export async function modelList(p: Profile, key: string) {
     } else headers.Authorization = "Bearer " + key;
   }
   const r = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
-  if (!r.ok) throw Error("无法获取模型列表，可以直接手填模型名");
+  if (!r.ok)
+    throw Error(`接口 ${r.status} · 无法获取模型列表，可以直接手填模型名`);
   const data = await r.json();
-  return (data.data || data.models || []).map((x: any) =>
-    String(x.id || x.name?.replace(/^models\//, "")),
-  );
+  const entries = Array.isArray(data) ? data : data?.data || data?.models;
+  if (!Array.isArray(entries)) return [];
+  return [
+    ...new Set(
+      entries.flatMap((entry: any) => {
+        const value =
+          typeof entry === "string"
+            ? entry
+            : entry?.id ||
+              (typeof entry?.name === "string"
+                ? entry.name.replace(/^models\//, "")
+                : "");
+        if (typeof value !== "string") return [];
+        const id = value.trim();
+        return id ? [id] : [];
+      }),
+    ),
+  ];
 }
