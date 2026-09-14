@@ -2,7 +2,8 @@ import { withStoryLock } from "./locks";
 import { active, isBusy } from "./generation-state";
 export { isBusy, stop } from "./generation-state";
 import { z } from "zod";
-import { db, keyFor, reviseEvent } from "./db";
+import { db, keyFor, reviseEvent, refreshTimelineMemory } from "./db";
+import { fullAudience, sharedTimeline, usableEvent } from "./timeline";
 import {
   uid,
   type SceneEvent,
@@ -15,7 +16,7 @@ import {
 import { generate } from "./model";
 import { buildContext, assemble } from "./context";
 import { prompt } from "./prompts";
-import { parseJSON, draftText, checkQuotes } from "./output";
+import { parseJSON, draftText, missingQuotes } from "./output";
 export { parseJSON, draftText, checkQuotes } from "./output";
 const novelSchema = z.object({
   text: z.string().trim().min(1),
@@ -66,7 +67,7 @@ async function report(
   ).filter((e) => e.seq < until);
   const priorVersions = new Map(
     prior
-      .filter((e) => !e.deleted && e.status === "complete" && !e.review)
+      .filter((e) => usableEvent(e, s) && (kind !== "chat" || !e.chatPending))
       .map((e) => [e.id, e.versionId]),
   );
   return buildContext(
@@ -234,13 +235,20 @@ async function runUnlocked(
     if (kind === "novel") {
       let data: z.infer<typeof novelSchema>;
       try {
-        data = novelSchema.parse(parseJSON(result.text));
+        const parsed = z.object({ text: z.string().trim().min(1), facts: z.unknown().optional() }).parse(parseJSON(result.text));
+        const facts = novelSchema.shape.facts.safeParse(parsed.facts);
+        data = { text: parsed.text, facts: facts.success ? facts.data : [] };
+        if (!facts.success) event.warnings = ["事实摘录格式有误，已跳过摘录，正文已保存。"];
       } catch {
         throw Error(
           "模型返回的格式未通过检查，收到的文字已保留。可以检查并修改后，确认采用为正文。",
         );
       }
-      checkQuotes(input, data.text);
+      if (prefs.dialogueCheck) {
+        const missing = missingQuotes(input, data.text);
+        if (missing.length) event.warnings = [...(event.warnings || []),
+          "台词用字可能有调整，仅供参考：" + missing.map((q) => `「${q}」`).join("、")];
+      }
       texts = [data.text];
       event.facts = data.facts
         .filter((f) => data.text.includes(f.quote))
@@ -298,6 +306,7 @@ async function runUnlocked(
             request: event!.request,
             acceptedByAuthor: undefined,
             rewriteOf: undefined,
+            warnings: event!.warnings || [],
           });
           await db.events.delete(event!.id);
         }
@@ -390,7 +399,7 @@ async function extractFactsUnlocked(id: string) {
       }));
     if ((await db.events.get(id))?.versionId !== e.versionId)
       throw Error("原文已经改变，摘录未应用");
-    await reviseEvent(id, e.text, false, facts);
+    await reviseEvent(id, e.text, false, facts, e.versionId);
     return facts.length;
   } finally {
     active.delete(e.storyId);
@@ -420,19 +429,31 @@ async function organizeMemoryUnlocked(storyId: string) {
   try {
     const s = await db.stories.get(storyId);
     if (!s) throw Error("故事不存在");
-    const events = await db.events
+    const pending = await db.events
       .where("storyId")
       .equals(storyId)
       .filter(
         (e) =>
           e.seq > s.memoryCursor &&
-          e.status === "complete" &&
-          !e.deleted &&
-          !e.review,
+          usableEvent(e, s) && !e.chatPending,
       )
       .sortBy("seq");
-    if (!events.length) return;
+    if (!pending.length) return;
     const { p, prefs, key } = await settings();
+    // Process a bounded, contiguous prefix; each audience gets a separate request.
+    // An author-only secret must not contaminate a shared summary in the same call.
+    const events: SceneEvent[] = [];
+    for (const e of pending.slice(0, 20)) {
+      try {
+        assemble(prompt("memory", prefs), JSON.stringify([...events, e].map((x) => ({
+          id: x.id, text: x.text, knownBy: fullAudience(x, s),
+        }))), [], p.context, p.maxOutput);
+      } catch (error) {
+        if (!events.length) throw error;
+        break;
+      }
+      events.push(e);
+    }
     await db.stories.update(storyId, {
       memoryState: "running",
       memoryError: "",
@@ -447,31 +468,22 @@ async function organizeMemoryUnlocked(storyId: string) {
       created: Date.now(),
       error: "",
     });
-    const rows = events.map((e) => ({
-      id: e.id,
-      text: e.text,
-      knownBy: e.kind === "message" ? e.participants : [],
-      facts: e.facts,
-    }));
-    const r = assemble(
-      prompt("memory", prefs),
-      JSON.stringify(rows),
-      [],
-      p.context,
-      p.maxOutput,
-    );
-    const result = await generate(
-      p,
-      key,
-      r.system,
-      r.user,
-      controller.signal,
-      undefined,
-      fetch,
-      { kind: "memory" },
-    );
-    if (!result.complete) throw Error("整理未完整结束，进度未前移");
-    const parsed = memoriesSchema.parse(parseJSON(result.text));
+    const groups = new Map<string, SceneEvent[]>();
+    for (const e of events) {
+      const audience = JSON.stringify([...fullAudience(e, s)].sort());
+      groups.set(audience, [...(groups.get(audience) || []), e]);
+    }
+    const summaries: { memory: z.infer<typeof memoriesSchema>["memories"][number]; sources: SceneEvent[] }[] = [];
+    for (const group of groups.values()) {
+      const rows = group.map((e) => ({ id: e.id, text: e.text, knownBy: fullAudience(e, s) }));
+      const r = assemble(prompt("memory", prefs), JSON.stringify(rows), [], p.context, p.maxOutput);
+      const result = await generate(p, key, r.system, r.user, controller.signal, undefined, fetch, { kind: "memory" });
+      if (!result.complete) throw Error("整理未完整结束，进度未前移");
+      for (const m of memoriesSchema.parse(parseJSON(result.text)).memories) {
+        const sources = group.filter((e) => m.sourceIds.includes(e.id));
+        if (sources.length === new Set(m.sourceIds).size) summaries.push({ memory: m, sources });
+      }
+    }
     await db.transaction(
       "rw",
       [db.events, db.memories, db.stories, db.jobs],
@@ -479,24 +491,22 @@ async function organizeMemoryUnlocked(storyId: string) {
         for (const e of events)
           if ((await db.events.get(e.id))?.versionId !== e.versionId)
             throw Error("整理期间经历已修改，请重新整理");
-        for (const m of parsed.memories) {
-          const sources = events.filter((e) => m.sourceIds.includes(e.id));
-          if (sources.length !== new Set(m.sourceIds).size) continue;
+        if ((await db.stories.get(storyId))?.timelineMode !== s.timelineMode)
+          throw Error("整理期间故事互通设置已改变，请重新整理");
+        for (const { memory: m, sources } of summaries) {
           const audience = s.roles
             .map((r) => r.id)
             .filter((id) =>
-              sources.every((e) =>
-                e.kind === "message" ? e.participants.includes(id) : false,
-              ),
+              sources.every((e) => fullAudience(e, s).includes(id)),
             );
           await db.memories.add({
             id: uid(),
             storyId,
             text: m.text,
-            knownBy: m.knownBy.filter((id) => audience.includes(id)),
+            knownBy: sharedTimeline(s) ? audience : m.knownBy.filter((id) => audience.includes(id)),
             scope: m.scope,
             sources: sources.map((e) => ({ id: e.id, versionId: e.versionId })),
-            status: "candidate",
+            status: sharedTimeline(s) ? "accepted" : "candidate",
             created: Date.now(),
           });
         }
@@ -533,7 +543,8 @@ export async function run(
     runUnlocked(storyId, kind, input, rewriteId, options),
   );
   const s = await db.stories.get(storyId);
-  if (s && s.autoMemory && s.memoryState === "idle" && (await memoryDue(s)))
+  if (s && sharedTimeline(s)) await refreshTimelineMemory(storyId);
+  else if (s && s.autoMemory && s.memoryState === "idle" && (await memoryDue(s)))
     await organizeMemory(storyId).catch(() => {});
 }
 export async function organizeMemory(storyId: string) {
@@ -623,6 +634,7 @@ export async function adoptDraft(
           inspirationRevision: uid(),
           ...(story.draft === draft.input ? { draft: "" } : {}),
         });
+        await refreshTimelineMemory(story.id);
         return target.id;
       },
     ),

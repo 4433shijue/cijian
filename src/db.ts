@@ -1,4 +1,7 @@
 import Dexie, { type Table } from "dexie";
+import { fullAudience, historyExcerpt, sharedTimeline, usableEvent } from "./timeline";
+import { withStoryLock } from "./locks";
+import { isBusy } from "./generation-state";
 import {
   uid,
   paragraphs,
@@ -68,6 +71,7 @@ export function makeStory(
     length: "适中",
     style: "自然白描",
     psychology: false,
+    timelineMode: "shared",
     stylePresetId: "builtin-natural",
     autoMemory: true,
     chatThreshold: 20,
@@ -196,20 +200,26 @@ export async function reviseEvent(
   deleted = false,
   facts?: SceneEvent["facts"],
   expectedVersion?: string,
+  visibility?: SceneEvent["visibility"],
 ) {
-  await db.transaction("rw", [db.events, db.memories], async () => {
+  await db.transaction("rw", [db.events, db.memories, db.stories], async () => {
     const e = await db.events.get(id);
     if (!e) throw Error("这段内容已不存在");
     if (expectedVersion && expectedVersion !== e.versionId)
       throw Error("原文已修改，本次结果不会覆盖新版本");
     const versionId = uid(),
       nextFacts = facts ?? (text === e.text ? e.facts : []);
+    const story = await db.stories.get(e.storyId);
+    const contentChanged = text !== e.text || deleted !== e.deleted;
+    const nextVisibility = visibility ?? e.visibility;
     await db.events.put({
       ...e,
       text,
       deleted,
       facts: nextFacts,
       versionId,
+      visibility: nextVisibility,
+      warnings: contentChanged ? [] : e.warnings,
       versions: [
         ...e.versions,
         {
@@ -218,6 +228,7 @@ export async function reviseEvent(
           input: e.input,
           facts: nextFacts,
           deleted,
+          visibility: nextVisibility,
           created: Date.now(),
         },
       ],
@@ -226,10 +237,10 @@ export async function reviseEvent(
     const later = await db.events
       .where("storyId")
       .equals(e.storyId)
-      .filter((x) => x.seq > e.seq)
+      .filter((x) => contentChanged && x.seq > e.seq)
       .toArray();
     for (const x of later) await db.events.update(x.id, { review: true });
-    const affected = new Set([id, ...later.map((x) => x.id)]);
+    const affected = new Set([id, ...(story && sharedTimeline(story) ? [] : later.map((x) => x.id))]);
     for (const m of await db.memories
       .where("storyId")
       .equals(e.storyId)
@@ -241,6 +252,60 @@ export async function reviseEvent(
               ? "review"
               : "invalid",
         });
+    if (story && sharedTimeline(story)) await refreshTimelineMemory(e.storyId);
+  });
+}
+
+export async function refreshTimelineMemory(storyId: string) {
+  await db.transaction("rw", [db.stories, db.events, db.memories], async () => {
+    const s = await db.stories.get(storyId);
+    if (!s || !sharedTimeline(s) || !s.autoMemory) return;
+    const events = await db.events.where("storyId").equals(storyId).sortBy("seq");
+    const memories = await db.memories.where("storyId").equals(storyId).toArray();
+    for (const e of events) {
+      if (!usableEvent(e, s) || e.chatPending || !e.text.trim()) continue;
+      if (memories.some((m) => !m.automatic && ["accepted", "ignored"].includes(m.status) &&
+        m.sources.some((ref) => ref.id === e.id && ref.versionId === e.versionId))) continue;
+      const existing = memories.find((m) => m.automatic && m.sources.length === 1 && m.sources[0].id === e.id);
+      if (existing && ["accepted", "ignored"].includes(existing.status) && existing.sources[0].versionId === e.versionId &&
+        JSON.stringify(existing.knownBy) === JSON.stringify(fullAudience(e, s))) continue;
+      await db.memories.put({
+        id: existing?.id || uid(), storyId, text: historyExcerpt(e.text),
+        knownBy: fullAudience(e, s), scope: "story",
+        sources: [{ id: e.id, versionId: e.versionId }],
+        status: existing?.status === "ignored" ? "ignored" : "accepted",
+        created: e.created, automatic: true,
+      });
+    }
+  });
+}
+
+export async function setTimelineMode(storyId: string, mode: "shared" | "strict") {
+  return withStoryLock(storyId, async () => {
+    if (isBusy(storyId)) throw Error("请等待当前任务结束后再切换互通设置");
+    await db.transaction("rw", [db.stories, db.events, db.memories], async () => {
+      const s = await db.stories.get(storyId);
+      if (!s) throw Error("故事不存在");
+      if (s.timelineMode === mode) return;
+      // Preserve explicit restricted facts from old stories. Empty AI candidates
+      // are not author privacy settings and do not require per-event approval.
+      if (mode === "shared" && !sharedTimeline(s)) {
+        for (const e of await db.events.where("storyId").equals(storyId).toArray())
+          if (e.kind === "novel" && !e.visibility && (e.facts.some((f) => f.knownBy.length) ||
+            e.versions.some((v) => v.facts.some((f) => f.knownBy.length))))
+            await reviseEvent(e.id, e.text, e.deleted, e.facts, e.versionId, "facts");
+      }
+      await db.stories.update(storyId, { timelineMode: mode, updated: Date.now() });
+      // A summary generated from shared prose cannot enter strict character knowledge.
+      for (const m of await db.memories.where("storyId").equals(storyId).toArray())
+        if (m.automatic) await db.memories.update(m.id, { status: m.status === "ignored" ? "ignored" : "invalid" });
+        else if (mode === "strict" && m.status === "accepted") {
+          const sources = await db.events.bulkGet(m.sources.map((ref) => ref.id));
+          if (sources.some((e) => e?.kind === "novel"))
+            await db.memories.update(m.id, { status: "review" });
+        }
+      await refreshTimelineMemory(storyId);
+    });
   });
 }
 export async function deleteStory(id: string) {

@@ -38,6 +38,8 @@ beforeEach(async () => {
 });
 async function fixture() {
   const s = (await db.stories.toArray())[0];
+  s.timelineMode = "strict";
+  await db.stories.put(s);
   const e: SceneEvent = {
     id: uid(),
     storyId: s.id,

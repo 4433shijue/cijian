@@ -106,6 +106,7 @@ afterEach(async () => {
 });
 
 it("uses the most recent three full replies including folded text, story roles and applicable world entries", async () => {
+  story.timelineMode = "strict";
   const events = [
     event(1),
     event(2),
@@ -135,6 +136,8 @@ it("uses the most recent three full replies including folded text, story roles a
     "prose-4",
     "prose-5",
   ]);
+  expect(buildInspirationContext({ ...story, timelineMode: "shared" }, events, world, prefs, profile).sources.map((s) => s.id))
+    .toEqual(["prose-4", "prose-5", "prose-9"]);
   for (const text of [story.roles[0].persona, world[0].text, "正文内容标记_3"])
     expect(built.report.user).toContain(text);
   for (const text of [

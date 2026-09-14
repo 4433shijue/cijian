@@ -1678,6 +1678,23 @@ details pre {
   font-size: 13px;
   overflow-wrap: anywhere;
 }
+.timeline-upgrade {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 16px 0;
+  padding: 14px 18px;
+  border: 1px solid #dce5d3;
+  border-radius: 12px;
+  background: #f1f5eb;
+  font-size: 13px;
+}
+.timeline-upgrade p { margin: 4px 0 0; color: #6e806e; }
+.timeline-upgrade button { flex-shrink: 0; }
+.output-advice { margin: 12px 0; font-size: 13px; color: #6e806e; }
+@media (max-width: 700px) {
+  .timeline-upgrade { align-items: stretch; flex-direction: column; gap: 10px; }
+}
 .story-toolbar + .mode-bar {
   margin-top: 10px;
 }

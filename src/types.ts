@@ -67,6 +67,7 @@ export interface Story {
   style: string;
   stylePresetId?: string;
   psychology: boolean;
+  timelineMode?: "shared" | "strict";
   autoMemory: boolean;
   chatThreshold: number;
   novelThreshold: number;
@@ -90,6 +91,7 @@ export interface Version {
   created: number;
   facts: Fact[];
   deleted?: boolean;
+  visibility?: "inherit" | "author" | "facts";
 }
 export interface SceneEvent {
   id: string;
@@ -114,6 +116,8 @@ export interface SceneEvent {
   collapsed?: boolean;
   rewriteOf?: SourceRef;
   acceptedByAuthor?: boolean;
+  visibility?: "inherit" | "author" | "facts";
+  warnings?: string[];
   chatPending?: boolean;
   chatBatchId?: string;
 }
@@ -146,6 +150,7 @@ export interface Memory {
   sources: SourceRef[];
   status: "candidate" | "accepted" | "ignored" | "invalid" | "review";
   created: number;
+  automatic?: boolean;
 }
 export interface Profile {
   id: string;
@@ -171,6 +176,7 @@ export interface Preferences {
   id: "preferences";
   activeProfile: string;
   developer: boolean;
+  dialogueCheck?: boolean;
   inspirationParagraphs?: number;
   novelContextRounds?: number;
   stylePresets?: StylePreset[];
@@ -208,7 +214,7 @@ export interface ContextReport {
   estimate: number;
   limit: number;
   stablePrefix?: string;
-  history?: { limit: number; sources: SourceRef[] };
+  history?: { limit: number; sources: SourceRef[]; recalled?: SourceRef[] };
   usage?: ModelUsage;
   durationMs?: number;
 }

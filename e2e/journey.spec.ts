@@ -101,8 +101,8 @@ test("desktop full journey with controlled protocol fixture", async ({
   await page.getByRole("button", { name: "故事记忆" }).click();
   await page.getByRole("button", { name: "立即整理" }).click();
   await expect(page.getByText("处理进度 · 节点 4")).toBeVisible();
-  await expect(page.getByText("待确认", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "接受", exact: true }).click();
+  await expect(page.getByText("待确认", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "接受", exact: true }).last().click();
   await expect(page.getByText("已记住", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.reload();

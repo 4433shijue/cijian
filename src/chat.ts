@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { db, keyFor, reviseEvent } from "./db";
+import { db, keyFor, reviseEvent, refreshTimelineMemory } from "./db";
+import { sharedTimeline, usableEvent } from "./timeline";
 import { active } from "./generation-state";
 import { withStoryLock } from "./locks";
 import { buildContext } from "./context";
@@ -73,7 +74,7 @@ async function contextFor(s: Story, batch: ChatBatch) {
   const sourceIds = new Set(batch.sources.map((source) => source.id));
   const events = (await db.events.where("storyId").equals(s.id).sortBy("seq"))
     .filter((e) => e.seq < batch.cutoff && !sourceIds.has(e.id) && !e.chatPending);
-  const versions = new Map(events.filter((e) => !e.deleted && !e.review && e.status === "complete")
+  const versions = new Map(events.filter((e) => usableEvent(e, s))
     .map((e) => [e.id, e.versionId]));
   const memories = (await db.memories.where("storyId").equals(s.id).toArray())
     .filter((m) => m.sources.every((source) => versions.get(source.id) === source.versionId));
@@ -268,7 +269,8 @@ export async function replyChat(storyId: string, batchId?: string, legacyEventId
     } finally { active.delete(storyId); }
   });
   const s = await db.stories.get(storyId);
-  if (s && s.autoMemory && s.memoryState === "idle" && await memoryDue(s))
+  if (s && sharedTimeline(s)) await refreshTimelineMemory(storyId);
+  else if (s && s.autoMemory && s.memoryState === "idle" && await memoryDue(s))
     await organizeMemory(storyId).catch(() => {});
 }
 

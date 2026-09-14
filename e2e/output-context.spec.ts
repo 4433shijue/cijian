@@ -115,7 +115,7 @@ for (const mobile of [false, true])
     await expect(dialog.getByLabel("准备采用的正文")).toHaveValue(
       "莫先生站在门边。",
     );
-    await expect(dialog.getByText("「拿着」", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("「拿着」", { exact: true })).toHaveCount(0);
     await dialog.getByRole("button", { name: "先保留草稿" }).click();
     expect((await readStore(page, "events"))[0].status).toBe("draft");
     await page.getByRole("button", { name: "检查并采用", exact: true }).click();
@@ -161,7 +161,7 @@ for (const mobile of [false, true])
     expect(errors).toEqual([]);
   });
 
-test("dialogue validation can be accepted as-is and format controls persist", async ({
+test("dialogue changes save directly by default and format controls persist", async ({
   page,
 }) => {
   await seed(page);
@@ -200,12 +200,10 @@ test("dialogue validation can be accepted as-is and format controls persist", as
   });
   await page.goto("/#story/fixture-story");
   await page.getByRole("button", { name: "扩写这一刻", exact: true }).click();
-  await expect(page.locator(".prose-event .error")).toContainText(
-    "台词可能被改动或遗漏",
-  );
-  await page.getByRole("button", { name: "检查并采用", exact: true }).click();
-  await page.getByRole("button", { name: "我同意，采用为正文" }).click();
-  await expect(page.getByText("作者确认采用", { exact: true })).toBeVisible();
+  await expect(page.locator(".prose-event .event-text")).toHaveText("他说“收下吧”。");
+  await expect(page.getByRole("button", { name: "检查并采用", exact: true })).toHaveCount(0);
+  await expect(page.locator(".prose-event .error")).toHaveCount(0);
+  expect((await readStore(page, "events"))[0].status).toBe("complete");
   expect(calls).toBe(1);
 });
 

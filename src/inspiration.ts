@@ -4,6 +4,7 @@ import { assemble } from "./context";
 import { generate } from "./model";
 import { prompt } from "./prompts";
 import { styleInstruction } from "./style-presets";
+import { sharedTimeline } from "./timeline";
 import { parseJSON } from "./output";
 import {
   uid,
@@ -25,14 +26,14 @@ export const inspirationDirections = {
 export function inspirationCount(value?: number) {
   return Number.isInteger(value) && value! >= 1 && value! <= 20 ? value! : 3;
 }
-export function recentProse(events: SceneEvent[], count: number) {
+export function recentProse(events: SceneEvent[], count: number, story?: Story) {
   return events
     .filter(
       (e) =>
         e.kind === "novel" &&
         e.status === "complete" &&
         !e.deleted &&
-        !e.review,
+        (!e.review || (story && sharedTimeline(story))),
     )
     .sort((a, b) => a.seq - b.seq)
     .slice(-inspirationCount(count));
@@ -80,6 +81,7 @@ export function buildInspirationContext(
   const recent = recentProse(
     events,
     inspirationCount(prefs.inspirationParagraphs),
+    story,
   );
   const materials: Material[] = [];
   const add = (id: string, label: string, text: string, stable = false) => {

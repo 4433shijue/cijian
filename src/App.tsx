@@ -25,7 +25,8 @@ import {
   CheckCircle2,
   Copy,
 } from "lucide-react";
-import { db, makeStory, deleteStory, reviseEvent } from "./db";
+import { db, makeStory, deleteStory, reviseEvent, setTimelineMode, refreshTimelineMemory } from "./db";
+import { sharedTimeline, visibleText } from "./timeline";
 import { loadRoleDraft, saveRoleDraft, saveCreatedRole } from "./role-draft";
 import { InspirationAssistant } from "./InspirationAssistant";
 import { inspirationCount, chooseInspiration } from "./inspiration";
@@ -1107,7 +1108,8 @@ function DraftReview({
   const [text, setText] = useState(event.text || draftText(event.raw));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const missing = missingQuotes(event.input, text);
+  const prefs = useLiveQuery(() => db.preferences.get("preferences"), []);
+  const missing = prefs?.dialogueCheck ? missingQuotes(event.input, text) : [];
   return (
     <Modal
       title="检查草稿并采用"
@@ -1199,22 +1201,26 @@ function EventEditor({
 }) {
   const [text, setText] = useState(event.text),
     [facts, setFacts] = useState(structuredClone(event.facts));
+  const [visibility, setVisibility] = useState(event.visibility || "inherit");
+  const [error, setError] = useState("");
   return (
     <Modal title="修改这一刻" onClose={onClose}>
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          await reviseEvent(
+          try { await reviseEvent(
             event.id,
             text,
             false,
             facts.filter((f) => f.quote.trim() && text.includes(f.quote)),
+            event.versionId,
+            visibility,
           );
-          onClose();
+          onClose(); } catch (error) { setError(String(error)); }
         }}
       >
         <p className="hint">
-          旧版本与后文都会保留。相关记忆将暂停使用，等待复核。
+          旧版本与后文都会保留。只调整知情范围不会把后文全部标为待复核。
         </p>
         <Field label="正文 / 消息">
           <textarea
@@ -1226,9 +1232,19 @@ function EventEditor({
         </Field>
         {event.kind === "novel" && (
           <>
+            <Field label="本段如何进入手机聊天">
+              <select value={visibility} onChange={(e) => setVisibility(e.target.value as typeof visibility)}>
+                <option value="inherit">跟随故事设置{sharedTimeline(story) ? " · 自动互通" : " · 严格知情"}</option>
+                <option value="author">私密段落 · 仅作者可见</option>
+                <option value="facts">仅共享下方授权的事实</option>
+              </select>
+            </Field>
+            <p className="hint">普通正文在自动互通模式下会进入聊天参考。含秘密或内心独白的段落，可以整段设为私密，或只共享选中的事实。</p>
+            <details open={visibility === "facts" || (!sharedTimeline(story) && visibility === "inherit")}>
+              <summary>高级 · 角色可知的事实摘录</summary>
             <h3>角色可知的事实摘录</h3>
             <p className="hint">
-              只有在这里明确授权的摘录会进入角色聊天。心理与秘密请保持“仅作者”。摘录必须逐字来自正文。
+              选择“仅共享下方授权的事实”或使用严格知情模式时，以下授权才控制本段的聊天参考。摘录必须逐字来自正文。
             </p>
             {facts.map((f, i) => (
               <div className="paragraph" key={f.id}>
@@ -1285,8 +1301,10 @@ function EventEditor({
               <Plus size={16} />
               添加原文摘录
             </button>
+            </details>
           </>
         )}
+        {error && <p className="error">{error}</p>}
         <button className="primary" type="submit">
           保存新版本
         </button>
@@ -1363,11 +1381,11 @@ function Memories({
         <>
       <ContextTip id="memory" title="记住什么，由你决定">
         <p>
-          自动整理的内容会先成为候选。检查内容和知情角色，点击「接受」后才会作为长久记忆使用；写错的可以编辑，不需要的可以忽略。
+          {sharedTimeline(s) ? "普通经历自动生成摘记，较早内容会按相关性带入后续写作和聊天。摘记是有省略的原文，可以编辑或忽略；也可以点「AI 整理摘要」进一步提炼。" : "严格知情模式下，AI 整理的内容先成为候选。检查内容和知情角色，接受后才会使用。"}
         </p>
       </ContextTip>
       <p className="hint">
-        候选需要你点头。仅作者可见的记忆不会出现在角色聊天中。
+        仅作者可见的记忆不会出现在角色聊天中。记忆中心用于微调，自动互通的故事不需要逐条确认。
       </p>
       <div className="row">
         <button
@@ -1377,7 +1395,7 @@ function Memories({
             setBusy(true);
             try {
               await organizeMemory(s.id);
-              notify("整理完成，请审核候选");
+              notify(sharedTimeline(s) ? "这一批摘要已整理并生效，剩余内容可继续整理" : "整理完成，请审核候选");
             } catch (e) {
               notify(String(e));
             } finally {
@@ -1386,21 +1404,22 @@ function Memories({
           }}
         >
           <RefreshCw size={16} />
-          {busy ? "整理中…" : "立即整理"}
+          {busy ? "整理中…" : sharedTimeline(s) ? "AI 整理摘要" : "立即整理"}
         </button>
         <span className="hint">处理进度 · 节点 {s.memoryCursor}</span>
       </div>
       {s.memoryError && <p className="error">{s.memoryError}</p>}
       <details>
-        <summary>自动整理频率</summary>
+        <summary>{sharedTimeline(s) ? "自动摘记设置" : "自动整理频率"}</summary>
         <Toggle
-          label="自动整理（只在当前页面打开时运行）"
+          label={sharedTimeline(s) ? "自动保存经历摘记" : "自动整理（只在当前页面打开时运行）"}
           value={s.autoMemory}
           onChange={async (v) => {
             await db.stories.update(s.id, { autoMemory: v });
+            if (v) await refreshTimelineMemory(s.id);
           }}
         />
-        <div className="two-col">
+        {!sharedTimeline(s) && <div className="two-col">
           <Field label="每新增几条聊天气泡 · 0 关闭">
             <input
               type="number"
@@ -1425,7 +1444,7 @@ function Memories({
               }}
             />
           </Field>
-        </div>
+        </div>}
       </details>
       {items
         .filter((m) => m.status !== "ignored")
@@ -1442,6 +1461,7 @@ function Memories({
                 }[m.status]
               }
             </span>
+            {m.automatic && <span className="tag">自动摘记</span>}
             <p>{m.text}</p>
             <p className="hint">
               {m.knownBy.length
@@ -1546,8 +1566,9 @@ function Memories({
               await db.transaction("rw", db.memories, async () => {
                 await db.memories.put({
                   ...editing,
+                  automatic: false,
                   status:
-                    editing.status === "accepted" || mergedIds.length
+                    sharedTimeline(s) && editing.status === "accepted" && !mergedIds.length ? "accepted" : editing.status === "accepted" || mergedIds.length
                       ? "review"
                       : editing.status,
                 });
@@ -1566,7 +1587,7 @@ function Memories({
       ) : (
         <section className="fact-center">
           <p className="hint">
-            这里汇总正文中已经摘录的原文事实。只有明确授权给角色的事实，才会进入对应的手机聊天；心理活动和秘密默认仅作者可见。
+            这里用于严格知情模式和单段权限微调。自动互通模式下，普通正文无需逐条摘录或授权；私密段落可在原文编辑中单独设置。
           </p>
           {facts.map(({ event, fact }) => (
             <article className="memory-card" key={fact.id}>
@@ -1606,7 +1627,7 @@ function StoryHealth({
     !story.roles.length && "故事还没有角色",
     events.filter((event) => event.status === "draft" && !event.deleted).length > 0 &&
       `有 ${events.filter((event) => event.status === "draft" && !event.deleted).length} 条未完成草稿`,
-    events.filter((event) => event.review && !event.deleted).length > 0 &&
+    !sharedTimeline(story) && events.filter((event) => event.review && !event.deleted).length > 0 &&
       `有 ${events.filter((event) => event.review && !event.deleted).length} 段内容待复核`,
     memories.filter((memory) => memory.status === "review" || memory.status === "invalid").length > 0 &&
       `有 ${memories.filter((memory) => memory.status === "review" || memory.status === "invalid").length} 条记忆需要处理`,
@@ -1650,6 +1671,9 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
       [id],
     ) || [];
   const world = useLiveQuery(() => db.world.toArray(), []) || [];
+  useEffect(() => {
+    void refreshTimelineMemory(id).catch(() => notify("自动摘记没能保存，原文仍保留，可以刷新后重试。"));
+  }, [id, s?.timelineMode, s?.autoMemory, s?.roles.map((r) => r.id).join(","), events.length]);
   const [mode, setMode] = useState<"novel" | "chat">("novel"),
     [panel, setPanel] = useState(""),
     [busy, setBusy] = useState(false),
@@ -1916,9 +1940,18 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
       {mode === "chat" && (
         <ContextTip id="chat" title="选好身份，再开始聊天">
           <p>
-            「我扮演」是你发消息时的身份，「聊天对象」是回复你的角色。可以连续点击「发送消息」，说完后点「让 TA 回复」，对方会结合整组消息自然分条回复。私聊只对双方可知；正文里的事情，需要在段落「编辑」中指定谁知道，才会进入对应角色的聊天参考。
+            「我扮演」是你发消息时的身份，「聊天对象」是回复你的角色。连续发送消息，说完后点「让 TA 回复」，对方会结合整组消息自然分条回复。{sharedTimeline(s) ? "普通正文会自动接入聊天，聊天也会带回正文；私聊仍只对参与双方可知。" : "当前使用严格知情模式，正文按事实授权进入聊天。可以在故事设置中切换为自动互通。"}
           </p>
         </ContextTip>
+      )}
+      {s.timelineMode === undefined && (
+        <div className="timeline-upgrade">
+          <div><strong>让正文和手机聊天自动接上</strong><p>整本故事一次启用，普通正文无需逐段授权。已有的特定角色授权会保留，私密内容可在段落编辑中设置。</p></div>
+          <button disabled={generating} onClick={async () => {
+            try { await setTimelineMode(id, "shared"); notify("整本故事已启用自动互通"); }
+            catch (error) { notify(String(error)); }
+          }}>整本启用自动互通</button>
+        </div>
       )}
       {mode === "chat" && s.roles.length < 2 && (
         <div className="starter-reminder">
@@ -1990,13 +2023,9 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
                 书页之间 · 正文片段 {e.seq}
                 {e.review ? " · 待复核" : ""}
                 <details>
-                  <summary>查看双方可知的事实</summary>
-                  {e.facts
-                    .filter((f) => pair.every((id) => f.knownBy.includes(id)))
-                    .map((f) => (
-                      <p key={f.id}>{f.text}</p>
-                    ))}
-                  <small>全知正文不会直接提供给聊天角色。</small>
+                  <summary>{sharedTimeline(s) ? "查看聊天对象可参考的正文" : "查看双方可知的事实"}</summary>
+                  <p>{visibleText(e, s.partner, s) || "这段内容未向聊天对象共享。"}</p>
+                  <small>{sharedTimeline(s) ? "普通正文自动接入，单段权限可以在编辑中调整。" : "当前仅共享授权事实，可在故事设置中开启自动互通。"}</small>
                 </details>
               </div>
             );
@@ -2072,13 +2101,13 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
               )}
               {e.review && (
                 <div className="review">
-                  早期内容已修改，这一条可能受影响。
+                  {sharedTimeline(s) ? "早期内容已修改。这一条仍会接续使用，可按需调整。" : "早期内容已修改，这一条可能受影响。"}
                   <button
                     onClick={async () => {
                       await db.events.update(e.id, { review: false });
                     }}
                   >
-                    确认沿用
+                    {sharedTimeline(s) ? "收起提醒" : "确认沿用"}
                   </button>
                 </div>
               )}
@@ -2106,6 +2135,9 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
                       : "这次没有收到可显示的文字，可以取回输入后重试。")}
                 </p>
                 {e.acceptedByAuthor && <p className="hint">作者确认采用</p>}
+                {e.warnings?.length ? <details className="output-advice"><summary>可选检查提醒 · 正文已保存</summary>
+                  {e.warnings.map((warning, index) => <p className="hint" key={index}>{warning}</p>)}
+                </details> : null}
                 {e.chatPending && e.origin === "user" && (
                   <p className="chat-message-state">
                     {!e.chatBatchId ? "已发送 · 待回复" :
@@ -2388,6 +2420,16 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
       )}{" "}
       {panel === "settings" && (
         <Modal title="这本故事的设定" onClose={() => setPanel("")}>
+          <Field label="正文与手机聊天">
+            <select value={s.timelineMode || "strict"} disabled={generating} onChange={async (event) => {
+              try { await setTimelineMode(id, event.target.value as "shared" | "strict"); notify("故事互通设置已保存"); }
+              catch (error) { notify(String(error)); }
+            }}>
+              <option value="shared">自动互通（推荐）</option>
+              <option value="strict">严格知情（高级）</option>
+            </select>
+          </Field>
+          <p className="hint">自动互通会让普通正文和手机聊天按时间接续。私密段落、作者设定和其他人的私聊仍按各自权限处理。严格模式只把授权事实提供给聊天角色。</p>
           <Field label="故事名字">
             <input
               value={s.title}
@@ -2591,6 +2633,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
                       v.text,
                       v.deleted || false,
                       v.facts,
+                      versions.versionId,
                     );
                     setVersions(undefined);
                     notify("旧版已恢复为新的当前版本");
@@ -2973,6 +3016,9 @@ function SettingsPage({ notify }: { notify: Notice }) {
         </p>
         {prefs.developer && (
           <>
+            <Toggle label="台词检查（只提醒，不拦截）" value={!!prefs.dialogueCheck}
+              onChange={(value) => db.preferences.update("preferences", { dialogueCheck: value }).then(() => {})} />
+            <p className="hint">默认关闭。开启后只提示台词用字差异，完整正文仍会直接保存；标点变化也可能触发提醒。</p>
             <Field label="正文参考回合数">
               <input
                 type="number"
@@ -2996,7 +3042,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
             </Field>
             <p className="hint">
               默认读取最近 7 回合完整正文，可设为 1 到
-              50。待复核和未采用的草稿不计入，重写只参考原文之前的经历。材料超出容量时会提示调整，不会悄悄少带正文。关闭开发者模式后仍生效。
+              50。未采用草稿不计入；自动互通模式的修改提醒不阻断后文。相关旧原文会按需补充，重写只参考原文之前的经历。材料超出容量时会提示调整。关闭开发者模式后仍生效。
             </p>
             <Field label="灵感小助手参考正文段数">
               <input

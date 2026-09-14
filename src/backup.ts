@@ -29,6 +29,7 @@ const version = z.object({
   created: z.number(),
   facts: z.array(fact),
   deleted: z.boolean().optional(),
+  visibility: z.enum(["inherit", "author", "facts"]).optional(),
 });
 const story = z.object({
   id: str,
@@ -46,6 +47,7 @@ const story = z.object({
   style: str,
   stylePresetId: str.optional(),
   psychology: z.boolean(),
+  timelineMode: z.enum(["shared", "strict"]).optional(),
   autoMemory: z.boolean(),
   chatThreshold: z.number().nonnegative(),
   novelThreshold: z.number().nonnegative(),
@@ -89,6 +91,8 @@ const event = z.object({
   collapsed: z.boolean().optional(),
   rewriteOf: z.object({ id: str, versionId: str }).optional(),
   acceptedByAuthor: z.boolean().optional(),
+  visibility: z.enum(["inherit", "author", "facts"]).optional(),
+  warnings: ids.optional(),
   chatPending: z.boolean().optional(),
   chatBatchId: str.optional(),
 });
@@ -115,6 +119,7 @@ const memory = z.object({
   scope: z.enum(["story", "roles"]),
   sources: z.array(z.object({ id: str, versionId: str })),
   status: z.enum(["candidate", "accepted", "ignored", "invalid", "review"]),
+  automatic: z.boolean().optional(),
   created: z.number(),
 });
 const profile = z.object({
@@ -138,6 +143,7 @@ const prefs = z.object({
   id: z.literal("preferences"),
   activeProfile: str,
   developer: z.boolean(),
+  dialogueCheck: z.boolean().optional(),
   inspirationParagraphs: z.number().int().min(1).max(20).optional(),
   novelContextRounds: z.number().int().min(1).max(50).optional(),
   stylePresets: z

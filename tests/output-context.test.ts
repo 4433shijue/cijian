@@ -101,8 +101,8 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 async function story() {
   const s = (await db.stories.toArray())[0];
-  await db.stories.update(s.id, { autoMemory: false });
-  return { ...s, autoMemory: false };
+  await db.stories.update(s.id, { autoMemory: false, timelineMode: "strict" });
+  return { ...s, autoMemory: false, timelineMode: "strict" as const };
 }
 
 describe("recoverable model output", () => {
@@ -646,7 +646,7 @@ describe("author-confirmed adoption", () => {
     const original = event(s.id, 1);
     await db.events.add(original);
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      response('{"text":"改写后的文字。","facts":"错误类型"}'),
+      response("改写后的文字。"),
     );
     await expect(
       run(s.id, "novel", original.input, original.id),

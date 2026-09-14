@@ -1,6 +1,7 @@
 import { prompt } from "./prompts";
 import { quotedDialogue } from "./output";
 import { styleInstruction } from "./style-presets";
+import { fullAudience, historyExcerpt, relevance, sharedTimeline, usableEvent, visibleText } from "./timeline";
 import type {
   Story,
   SceneEvent,
@@ -69,16 +70,7 @@ export function assemble(
 export function proseCount(value?: number) {
   return Number.isInteger(value) && value! >= 1 && value! <= 50 ? value! : 7;
 }
-export function visibleEvent(e: SceneEvent, viewer?: string) {
-  if (e.deleted || e.status !== "complete") return "";
-  if (!viewer) return e.text;
-  if (e.kind === "message")
-    return e.participants.includes(viewer) ? e.text : "";
-  return e.facts
-    .filter((f) => f.knownBy.includes(viewer))
-    .map((f) => f.text)
-    .join("\n");
-}
+export const visibleEvent = visibleText;
 export function buildContext(
   kind: PromptKind,
   s: Story,
@@ -155,26 +147,53 @@ export function buildContext(
     (w) => !w.always && w.keywords.some((k) => k.trim() && input.includes(k)),
   ))
     add(w.id, "世界书 · " + w.title, w.text, true, 60);
-  for (const m of [...memories].sort(
-    (a, b) => a.created - b.created || a.id.localeCompare(b.id),
-  ))
-    if (m.status === "accepted" && (!viewer || m.knownBy.includes(viewer)))
-      add(m.id, "已确认的故事记忆", m.text, true, 90);
   const limit = proseCount(prefs.novelContextRounds);
+  const usable = (e: SceneEvent) => usableEvent(e, s) && (kind !== "chat" || !e.chatPending);
   const eligible = events
-    .filter((e) => !e.review && !e.deleted && e.status === "complete")
+    .filter((e) => usable(e) && visibleEvent(e, viewer, s))
     .sort((a, b) => a.seq - b.seq);
   const recent = eligible.filter((e) => e.kind === "novel").slice(-limit);
-  const history = [...eligible.filter((e) => e.kind === "message"), ...recent];
+  const recentChat = eligible.filter((e) => e.kind === "message").slice(-20);
+  const recentIds = new Set([...recent, ...recentChat].map((e) => e.id));
+  const older = eligible.filter((e) => !recentIds.has(e.id));
+  const scores = relevance(input, older.map((e) => visibleEvent(e, viewer, s)));
+  const recalled = older.map((e, i) => ({ e, score: scores[i] }))
+    .filter((x) => x.score >= 2).sort((a, b) => b.score - a.score || b.e.seq - a.e.seq)
+    .slice(0, 4).map((x) => x.e);
+  const recalledIds = new Set(recalled.map((e) => e.id));
+  const sourceMap = new Map(events.filter(usable).map((e) => [e.id, e]));
+  const validMemories = memories.filter((m) => m.status === "accepted" &&
+    (!viewer || m.knownBy.includes(viewer)) && m.sources.every((ref) => {
+      const e = sourceMap.get(ref.id);
+      return e?.versionId === ref.versionId && (!m.automatic || !viewer || fullAudience(e, s).includes(viewer));
+    }));
+  const summarized = new Set(validMemories.filter((m) => !m.automatic).flatMap((m) => m.sources.map((ref) => ref.id)));
+  const usableMemories = validMemories.filter((m) => !m.automatic || (sharedTimeline(s) && s.autoMemory &&
+    m.sources.some((ref) => !recentIds.has(ref.id) && !recalledIds.has(ref.id) && !summarized.has(ref.id))))
+    .sort((a, b) => Math.max(0, ...a.sources.map((ref) => sourceMap.get(ref.id)?.seq || 0)) -
+      Math.max(0, ...b.sources.map((ref) => sourceMap.get(ref.id)?.seq || 0)) || a.created - b.created || a.id.localeCompare(b.id));
+  const memoryScores = relevance(input, usableMemories.map((m) => m.text));
+  for (const [i, m] of usableMemories.entries())
+    add(m.id, m.automatic ? "早期经历摘记（有省略，可查原文）" : "已确认的故事记忆",
+      m.text, !m.automatic && !sharedTimeline(s), (m.automatic ? 60 : 90) + Math.min(25, memoryScores[i] * 3));
+  // Old/imported stories also have a bounded fallback before excerpts are persisted.
+  const covered = new Set(memories.filter((m) => ["accepted", "ignored"].includes(m.status) && m.sources.every((ref) =>
+    sourceMap.get(ref.id)?.versionId === ref.versionId)).flatMap((m) => m.sources.map((ref) => ref.id)));
+  if (sharedTimeline(s) && s.autoMemory)
+    for (const [i, e] of older.entries())
+      if (!recalledIds.has(e.id) && !covered.has(e.id))
+        add("excerpt:" + e.id, `早期经历 ${e.seq} 摘记（有省略）`, historyExcerpt(visibleEvent(e, viewer, s)),
+          false, 60 + Math.min(25, scores[i] * 3));
+  const history = [...recentChat, ...recent, ...recalled].sort((a, b) => a.seq - b.seq);
   for (const e of history) {
-    const text = visibleEvent(e, viewer);
+    const text = visibleEvent(e, viewer, s);
     if (text)
       add(
         e.id,
-        `经历 ${e.id} / 版本 ${e.versionId} / ${e.kind === "novel" ? "正文" : s.roles.find((r) => r.id === e.speaker)?.name + " 发言"}`,
+        `经历 ${e.seq} / ${e.id} / 版本 ${e.versionId} / ${e.kind === "novel" ? "正文" : s.roles.find((r) => r.id === e.speaker)?.name + " 发言"}${recalledIds.has(e.id) ? " / 相关旧原文" : ""}`,
         text,
-        e.kind === "novel",
-        100 + e.seq,
+        e.kind === "novel" && recentIds.has(e.id),
+        recalledIds.has(e.id) ? 110 : 120 + history.indexOf(e),
       );
   }
   let task = input;
@@ -186,13 +205,17 @@ export function buildContext(
     }`;
   if (kind === "chat")
     task = `${styleInstruction(s, prefs, "chat")}\n你扮演 ${s.roles.find((r) => r.id === s.partner)?.name}（${s.partner}），用户扮演 ${s.roles.find((r) => r.id === s.player)?.name}（${s.player}）。以下是本轮按发送顺序排列、尚未回复的用户消息。读完整组后统一回应；后面的补充与纠正应覆盖前面的旧意思。\n${JSON.stringify({ pending_user_messages: options.chatMessages || [input] })}`;
+  if (kind === "chat" && sharedTimeline(s))
+    task = "正文和手机聊天发生在同一条时间线上。所给正文是已经发生的共同经历，沿着最后的状态继续聊天；较晚的明确变化覆盖旧状态。早期摘记可能有省略，细节以相关原文为准。不要把旁白或别人的心理描写当成自己说过的话。\n" + task;
+  const report = assemble(prompt(kind, prefs), task, mats, p.context, p.maxOutput);
   return {
-    ...assemble(prompt(kind, prefs), task, mats, p.context, p.maxOutput),
+    ...report,
     history: {
       limit,
       sources: recent
-        .filter((e) => visibleEvent(e, viewer))
+        .filter((e) => visibleEvent(e, viewer, s))
         .map((e) => ({ id: e.id, versionId: e.versionId })),
+      recalled: recalled.filter((e) => report.included.some((m) => m.id === e.id)).map((e) => ({ id: e.id, versionId: e.versionId })),
     },
   };
 }
