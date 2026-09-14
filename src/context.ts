@@ -88,7 +88,7 @@ export function buildContext(
   prefs: Preferences,
   p: Profile,
   input: string,
-  options: { styleOnly?: boolean } = {},
+  options: { styleOnly?: boolean; chatMessages?: string[] } = {},
 ): ContextReport {
   const viewer = kind === "chat" ? s.partner : undefined;
   const mats: Material[] = [];
@@ -185,7 +185,7 @@ export function buildContext(
         .join("\n") || "本次没有识别到引用台词。"
     }`;
   if (kind === "chat")
-    task = `${styleInstruction(s, prefs, "chat")}\n你扮演 ${s.roles.find((r) => r.id === s.partner)?.name}（${s.partner}），用户扮演 ${s.roles.find((r) => r.id === s.player)?.name}（${s.player}）。以下是用户刚发来的消息，仅回应该消息\n${input}`;
+    task = `${styleInstruction(s, prefs, "chat")}\n你扮演 ${s.roles.find((r) => r.id === s.partner)?.name}（${s.partner}），用户扮演 ${s.roles.find((r) => r.id === s.player)?.name}（${s.player}）。以下是本轮按发送顺序排列、尚未回复的用户消息。读完整组后统一回应；后面的补充与纠正应覆盖前面的旧意思。\n${JSON.stringify({ pending_user_messages: options.chatMessages || [input] })}`;
   return {
     ...assemble(prompt(kind, prefs), task, mats, p.context, p.maxOutput),
     history: {

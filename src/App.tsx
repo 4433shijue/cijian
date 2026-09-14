@@ -30,6 +30,7 @@ import { loadRoleDraft, saveRoleDraft, saveCreatedRole } from "./role-draft";
 import { InspirationAssistant } from "./InspirationAssistant";
 import { inspirationCount, chooseInspiration } from "./inspiration";
 import { proseCount } from "./context";
+import { sendChatMessage, replyChat, previewChat, pendingChatMessages, dismissChatBatch } from "./chat";
 import { draftText, missingQuotes } from "./output";
 import {
   uid,
@@ -1592,11 +1593,13 @@ function StoryHealth({
   events,
   memories,
   readyModel,
+  failedChats,
 }: {
   story: Story;
   events: SceneEvent[];
   memories: Memory[];
   readyModel: boolean;
+  failedChats: number;
 }) {
   const issues = [
     !readyModel && "还没有选用可用的模型接口",
@@ -1608,6 +1611,7 @@ function StoryHealth({
     memories.filter((memory) => memory.status === "review" || memory.status === "invalid").length > 0 &&
       `有 ${memories.filter((memory) => memory.status === "review" || memory.status === "invalid").length} 条记忆需要处理`,
     story.memoryState === "failed" && "故事记忆上次整理失败",
+    failedChats > 0 && `有 ${failedChats} 组手机回复待重试`,
   ].filter(Boolean) as string[];
   return (
     <details className="story-health">
@@ -1627,6 +1631,10 @@ function StoryHealth({
 }
 function StoryPage({ id, notify }: { id: string; notify: Notice }) {
   const [localInputs, setLocalInputs] = useState<Record<string, string>>({});
+  const sendingMessage = useRef(false);
+  const [sending, setSending] = useState(false);
+  const chatEnd = useRef<HTMLDivElement>(null);
+  const composer = useRef<HTMLElement>(null);
   const s = useLiveQuery(() => db.stories.get(id), [id]);
   const events =
     useLiveQuery(
@@ -1634,6 +1642,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
       [id],
     ) || [];
   const prefs = useLiveQuery(() => db.preferences.get("preferences"), []);
+  const chatBatches = useLiveQuery(() => db.chatBatches.where("storyId").equals(id).sortBy("created"), [id]) || [];
   const profiles = useLiveQuery(() => db.profiles.toArray(), []) || [];
   const memories =
     useLiveQuery(
@@ -1651,6 +1660,17 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
     [reference, setReference] = useState<ContextReport>(),
     [referenceEvent, setReferenceEvent] = useState<string>(),
     [saveState, setSaveState] = useState("已保存到本机");
+  const chatUpdate = chatBatches.map((batch) => `${batch.id}:${batch.status}:${batch.updated}`).join("|");
+  useEffect(() => {
+    if (mode !== "chat") return;
+    const frame = requestAnimationFrame(() => {
+      if (!chatEnd.current || !composer.current) return;
+      const bottom = parseFloat(getComputedStyle(composer.current).bottom) || 0;
+      chatEnd.current.style.scrollMarginBottom = `${composer.current.offsetHeight + bottom + 24}px`;
+      chatEnd.current.scrollIntoView({ block: "end" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [id, mode, events.length, events.at(-1)?.versionId, s?.player, s?.partner, chatUpdate]);
   useEffect(() => {
     setPanel("");
     setEditing(undefined);
@@ -1681,12 +1701,18 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
     localInputs[inputKey] ?? (mode === "novel" ? s.draft : s.chatDraft);
   const stylePresets = allStylePresets(prefs);
   const selectedStylePreset = resolveStylePreset(s, prefs);
+  const pendingMessages = pendingChatMessages(events, s.player, s.partner);
+  const unfinishedBatches = chatBatches.filter((b) => b.player === s.player && b.partner === s.partner && b.status !== "complete");
+  const generating = busy || isBusy(id) || chatBatches.some((b) => b.status === "running");
   function changeInput(value: string) {
     setLocalInputs((current) => ({ ...current, [inputKey]: value }));
     return update(mode === "novel" ? { draft: value } : { chatDraft: value });
   }
   async function submit(rewrite?: SceneEvent, styleOnly = false) {
     if (!s) return;
+    if (rewrite?.kind === "message")
+      return requestChat(rewrite.chatBatchId, rewrite.chatBatchId ? undefined : rewrite.id);
+    if (!rewrite && mode === "chat") return sendMessage();
     setBusy(true);
     try {
       await run(
@@ -1711,14 +1737,42 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
       setBusy(false);
     }
   }
+  async function sendMessage() {
+    if (!s || sendingMessage.current) return;
+    sendingMessage.current = true;
+    setSending(true);
+    try {
+      await sendChatMessage(id, s.player, s.partner, input);
+      setLocalInputs((current) => {
+        if (current[inputKey] !== undefined && current[inputKey] !== input) return current;
+        return { ...current, [inputKey]: "" };
+      });
+      setSaveState("已保存到本机");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error));
+    } finally {
+      sendingMessage.current = false;
+      setSending(false);
+    }
+  }
+  async function requestChat(batchId?: string, legacyEventId?: string) {
+    setBusy(true);
+    try {
+      await replyChat(id, batchId, legacyEventId);
+      notify("这一组回复已保存");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error));
+    } finally { setBusy(false); }
+  }
   const actions = (e: SceneEvent) => (
     <div className="event-actions">
       <button disabled={busy || isBusy(id)} onClick={() => setEditing(e)}>
         编辑
       </button>
-      {(e.kind === "novel" || e.origin === "ai") && (
+      {(e.kind === "novel" || ((e.origin === "ai" || e.kind === "message" && e.origin !== "user") &&
+        (!e.chatBatchId || chatBatches.find((b) => b.id === e.chatBatchId)?.replyIds.find((id) => events.some((x) => x.id === id && !x.deleted)) === e.id))) && (
         <button disabled={busy || isBusy(id)} onClick={() => submit(e)}>
-          重写
+          {e.kind === "message" ? "重新生成本组" : "重写"}
         </button>
       )}
       {e.kind === "novel" && (
@@ -1802,7 +1856,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
           onClick={async () => {
             try {
               setReferenceEvent(undefined);
-              setReference(await preview(id, mode, input));
+              setReference(mode === "chat" ? await previewChat(id) : await preview(id, mode, input));
             } catch (e) {
               notify(String(e));
             }
@@ -1818,6 +1872,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
           story={s}
           events={events}
           memories={memories}
+          failedChats={chatBatches.filter((batch) => batch.status === "failed" || batch.status === "interrupted").length}
           readyModel={
             !!prefs?.activeProfile &&
             profiles.some((p) => p.id === prefs.activeProfile)
@@ -1861,7 +1916,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
       {mode === "chat" && (
         <ContextTip id="chat" title="选好身份，再开始聊天">
           <p>
-            「我扮演」是你发消息时的身份，「聊天对象」是回复你的角色。私聊只对双方可知；正文里的事情，需要在段落「编辑」中指定谁知道，才会进入对应角色的聊天参考。
+            「我扮演」是你发消息时的身份，「聊天对象」是回复你的角色。可以连续点击「发送消息」，说完后点「让 TA 回复」，对方会结合整组消息自然分条回复。私聊只对双方可知；正文里的事情，需要在段落「编辑」中指定谁知道，才会进入对应角色的聊天参考。
           </p>
         </ContextTip>
       )}
@@ -1879,7 +1934,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
             <select
               aria-label="我扮演"
               value={s.player}
-              disabled={busy}
+              disabled={generating || sending}
               onChange={(e) => update({ player: e.target.value })}
             >
               {s.roles.map((r) => (
@@ -1894,7 +1949,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
             <select
               aria-label="聊天对象"
               value={s.partner}
-              disabled={busy}
+              disabled={generating || sending}
               onChange={(e) => update({ partner: e.target.value })}
             >
               <option value="">选择角色</option>
@@ -2051,11 +2106,20 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
                       : "这次没有收到可显示的文字，可以取回输入后重试。")}
                 </p>
                 {e.acceptedByAuthor && <p className="hint">作者确认采用</p>}
+                {e.chatPending && e.origin === "user" && (
+                  <p className="chat-message-state">
+                    {!e.chatBatchId ? "已发送 · 待回复" :
+                      chatBatches.find((b) => b.id === e.chatBatchId)?.status === "running" ? "对方正在回复这组消息" : "本组待重试"}
+                  </p>
+                )}
                 {e.error && <p className="error">{e.error}</p>}
                 {e.status === "complete" ? (
                   actions(e)
                 ) : (
                   <div className="row">
+                    {e.kind === "message" && (
+                      <button disabled={generating} onClick={() => submit(e)}>重试本组</button>
+                    )}
                     {e.kind === "novel" && (e.text.trim() || e.raw.trim()) && (
                       <button
                         className="primary"
@@ -2104,6 +2168,26 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
             </article>
           );
         })}
+        {mode === "chat" && unfinishedBatches.map((batch) => (
+          <div className="chat-batch-status" key={batch.id}>
+            {batch.status === "running" ? (
+              <p role="status">对方正在输入… <span className="hint">正在回应 {batch.messages.length} 条消息</span></p>
+            ) : (
+              <>
+                <p className="error">{batch.error || "这组回复尚未完成，可以重试。"}</p>
+                <p className="hint">本组 {batch.messages.length} 条消息已保留。新发送的消息留待下一轮。</p>
+                <div className="row">
+                  <button disabled={generating} onClick={() => requestChat(batch.id)}>重试本组</button>
+                  <button disabled={generating} onClick={async () => {
+                    try { await dismissChatBatch(batch.id); }
+                    catch (error) { notify(String(error)); }
+                  }}>{batch.replyIds.length ? "保留原回复" : "返回待回复"}</button>
+                </div>
+                {batch.raw && <details><summary>查看模型原始输出</summary><pre>{batch.raw}</pre></details>}
+              </>
+            )}
+          </div>
+        ))}
         {!visible.length && (
           <Empty>
             {mode === "novel"
@@ -2111,6 +2195,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
               : "选好彼此的身份，发出第一条消息。"}
           </Empty>
         )}
+        {mode === "chat" && <div ref={chatEnd} aria-hidden="true" />}
       </section>
       {mode === "novel" && (
         <FirstSceneCoach
@@ -2127,7 +2212,8 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
         />
       )}
       <section
-        className="composer"
+        ref={composer}
+        className={mode === "chat" ? "composer chat-composer" : "composer"}
         id="story-composer"
         data-guide="novel-compose"
       >
@@ -2206,14 +2292,14 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
           placeholder={
             mode === "novel"
               ? "他把伞递给她，说“拿着”，但没有看她。\n写下发生的事，扩写会停在你给出的最后一刻。"
-              : "以你的角色身份，发一条消息……"
+              : "可以连续发送多条消息，说完后点「让 TA 回复」……"
           }
           onKeyDown={(e) => {
             if (
               (e.ctrlKey || e.metaKey) &&
               e.key === "Enter" &&
               !e.nativeEvent.isComposing &&
-              !busy
+              (mode === "chat" ? !sending : !generating)
             ) {
               e.preventDefault();
               submit();
@@ -2225,7 +2311,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
             onClick={async () => {
               try {
                 setReferenceEvent(undefined);
-                setReference(await preview(id, mode, input));
+                setReference(mode === "chat" ? await previewChat(id) : await preview(id, mode, input));
               } catch (e) {
                 notify(String(e));
               }
@@ -2244,7 +2330,11 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
             </button>
           )}
           <span className="hint">Ctrl / ⌘ + Enter</span>
-          {busy || isBusy(id) ? (
+          {mode === "chat" && (
+            <button className="chat-send" disabled={sending || !input.trim() || !s.partner || s.player === s.partner}
+              onClick={() => sendMessage()}><Send size={16} /> 发送消息</button>
+          )}
+          {generating ? (
             <button className="primary" onClick={() => stop(id)}>
               <Square size={15} />
               停止生成
@@ -2253,13 +2343,13 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
             <button
               className="primary"
               disabled={
-                !input.trim() ||
+                (mode === "novel" ? !input.trim() : !pendingMessages.length || unfinishedBatches.length > 0 || sending) ||
                 (mode === "chat" && (!s.partner || s.player === s.partner))
               }
-              onClick={() => submit()}
+              onClick={() => mode === "chat" ? requestChat() : submit()}
             >
               {mode === "novel" ? <Feather size={16} /> : <Send size={16} />}{" "}
-              {mode === "novel" ? "扩写这一刻" : "发送消息"}
+              {mode === "novel" ? "扩写这一刻" : `让 TA 回复（${pendingMessages.length}）`}
             </button>
           )}
         </footer>

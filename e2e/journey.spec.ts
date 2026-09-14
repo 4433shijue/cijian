@@ -95,6 +95,7 @@ test("desktop full journey with controlled protocol fixture", async ({
   await page.getByRole("button", { name: "手机聊天", exact: true }).click();
   await page.getByLabel("聊天消息").fill("伞我明天还你。");
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await page.getByRole("button", { name: "让 TA 回复（1）", exact: true }).click();
   await expect(page.locator(".message-event")).toHaveCount(3);
   await expect(page.getByText("伞先放你那里。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "故事记忆" }).click();

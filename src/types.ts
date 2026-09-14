@@ -114,6 +114,24 @@ export interface SceneEvent {
   collapsed?: boolean;
   rewriteOf?: SourceRef;
   acceptedByAuthor?: boolean;
+  chatPending?: boolean;
+  chatBatchId?: string;
+}
+export interface ChatBatch {
+  id: string;
+  storyId: string;
+  player: string;
+  partner: string;
+  sources: SourceRef[];
+  messages: string[];
+  replyIds: string[];
+  cutoff: number;
+  status: "running" | "complete" | "failed" | "interrupted";
+  created: number;
+  updated: number;
+  raw: string;
+  error: string;
+  request?: ContextReport;
 }
 export interface SourceRef {
   id: string;

@@ -89,6 +89,23 @@ const event = z.object({
   collapsed: z.boolean().optional(),
   rewriteOf: z.object({ id: str, versionId: str }).optional(),
   acceptedByAuthor: z.boolean().optional(),
+  chatPending: z.boolean().optional(),
+  chatBatchId: str.optional(),
+});
+const chatBatch = z.object({
+  id: str,
+  storyId: str,
+  player: str,
+  partner: str,
+  sources: z.array(z.object({ id: str, versionId: str })),
+  messages: z.array(str.min(1)).min(1),
+  replyIds: ids,
+  cutoff: z.number().finite(),
+  status: z.enum(["running", "complete", "failed", "interrupted"]),
+  created: z.number(),
+  updated: z.number(),
+  raw: str,
+  error: str,
 });
 const memory = z.object({
   id: str,
@@ -151,6 +168,7 @@ const schema = z.object({
   memories: z.array(memory),
   profiles: z.array(profile),
   preferences: z.array(prefs),
+  chatBatches: z.array(chatBatch).default([]),
 });
 export type Backup = z.infer<typeof schema>;
 export function validateBackup(raw: unknown) {
@@ -163,11 +181,40 @@ export function validateBackup(raw: unknown) {
     b.events,
     b.memories,
     b.profiles,
+    b.chatBatches,
   ])
     if (new Set(list.map((x) => x.id)).size !== list.length)
       throw Error("备份存在重复 ID");
   const stories = new Set(b.stories.map((x) => x.id));
   const events = new Map(b.events.map((x) => [x.id, x]));
+  const batches = new Map(b.chatBatches.map((x) => [x.id, x]));
+  for (const batch of b.chatBatches) {
+    const s = b.stories.find((s) => s.id === batch.storyId);
+    const matches = (id: string, speaker: string) => {
+      const e = events.get(id);
+      return e && e.storyId === batch.storyId && e.kind === "message" &&
+        e.speaker === speaker && e.participants.length === 2 &&
+        e.participants.includes(batch.player) && e.participants.includes(batch.partner) &&
+        e.chatBatchId === batch.id;
+    };
+    if (!s || batch.player === batch.partner ||
+      ![batch.player, batch.partner].every((id) => s.roles.some((r) => r.id === id)) ||
+      new Set(batch.sources.map((x) => x.id)).size !== batch.sources.length ||
+      new Set(batch.replyIds).size !== batch.replyIds.length ||
+      (batch.sources.length > 0 && batch.sources.length !== batch.messages.length) ||
+      batch.sources.some((ref) => !matches(ref.id, batch.player) ||
+        events.get(ref.id)?.origin !== "user" ||
+        !events.get(ref.id)?.versions.some((v) => v.id === ref.versionId)) ||
+      batch.replyIds.some((id) => !matches(id, batch.partner) || events.get(id)?.origin === "user"))
+      throw Error("备份聊天批次关联不完整");
+  }
+  for (const e of b.events) {
+    if (!e.chatBatchId) continue;
+    const batch = batches.get(e.chatBatchId);
+    if (!batch || batch.storyId !== e.storyId || e.kind !== "message" ||
+      (e.origin === "user" && !batch.sources.some((source) => source.id === e.id)))
+      throw Error("备份消息的回复批次无效");
+  }
   for (const e of b.events) {
     if (!e.rewriteOf) continue;
     const target = events.get(e.rewriteOf.id);
@@ -210,6 +257,7 @@ export async function exportBackup() {
       db.memories,
       db.profiles,
       db.preferences,
+      db.chatBatches,
     ],
     async () => ({
       format: "little-scene",
@@ -228,6 +276,7 @@ export async function exportBackup() {
         remember: false,
       })),
       preferences: await db.preferences.toArray(),
+      chatBatches: (await db.chatBatches.toArray()).map(({ request, ...batch }) => batch),
     }),
   );
 }
@@ -251,7 +300,8 @@ export async function importBackup(value: unknown, replace = false) {
     paragraphs: x.paragraphs.map((p) => ({ ...p, id: remap(p.id) })),
   });
   await db.transaction("rw", db.tables, async () => {
-    if (await db.jobs.where("status").equals("running").count())
+    if (await db.jobs.where("status").equals("running").count() ||
+      await db.chatBatches.where("status").equals("running").count())
       throw Error(
         "请先停止正在进行的生成或记忆整理，再导入备份。现有资料未改变。",
       );
@@ -290,6 +340,7 @@ export async function importBackup(value: unknown, replace = false) {
         speaker: remap(x.speaker),
         participants: x.participants.map(remap),
         versionId: remap(x.versionId),
+        chatBatchId: x.chatBatchId ? remap(x.chatBatchId) : undefined,
         rewriteOf: x.rewriteOf && {
           id: remap(x.rewriteOf.id),
           versionId: remap(x.rewriteOf.versionId),
@@ -302,6 +353,14 @@ export async function importBackup(value: unknown, replace = false) {
         })),
       })),
     );
+    await db.chatBatches.bulkAdd(b.chatBatches.map((x) => ({
+      ...x, id: remap(x.id), storyId: remap(x.storyId),
+      player: remap(x.player), partner: remap(x.partner),
+      sources: x.sources.map((ref) => ({ id: remap(ref.id), versionId: remap(ref.versionId) })),
+      replyIds: x.replyIds.map(remap),
+      status: x.status === "running" ? "interrupted" as const : x.status,
+      error: x.status === "running" ? "导入的回复尚未完成，可以重试本组。" : x.error,
+    })));
     await db.memories.bulkAdd(
       b.memories.map((x) => ({
         ...x,

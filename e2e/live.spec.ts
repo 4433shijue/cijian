@@ -42,6 +42,7 @@ test("real browser connection, expansion and chat", async ({ page }) => {
   await page.getByRole("button", { name: "手机聊天", exact: true }).click();
   await page.getByLabel("聊天消息").fill("刚才递给你的伞还好用吗？");
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await page.getByRole("button", { name: "让 TA 回复（1）", exact: true }).click();
   await expect(
     page.locator(".message-event.theirs .event-actions").first(),
   ).toBeVisible({ timeout: 120000 });

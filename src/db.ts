@@ -10,6 +10,7 @@ import {
   type Profile,
   type Preferences,
   type Job,
+  type ChatBatch,
 } from "./types";
 export class SceneDB extends Dexie {
   roles!: Table<Role, string>;
@@ -21,6 +22,7 @@ export class SceneDB extends Dexie {
   profiles!: Table<Profile, string>;
   preferences!: Table<Preferences, string>;
   jobs!: Table<Job, string>;
+  chatBatches!: Table<ChatBatch, string>;
   constructor(name = "little-scene-v1") {
     super(name);
     this.version(1).stores({
@@ -34,6 +36,7 @@ export class SceneDB extends Dexie {
       jobs: "id,storyId,status",
     });
     this.version(2).stores({ roleDrafts: "id" });
+    this.version(3).stores({ chatBatches: "id,storyId,status" });
   }
 }
 export const db = new SceneDB();
@@ -151,7 +154,13 @@ export async function initialize() {
       if (w.title === "临河旧书店") await db.world.delete(w.id);
   }
   const recover = async (id: string) => {
-    await db.transaction("rw", [db.jobs, db.stories], async () => {
+    await db.transaction("rw", [db.jobs, db.stories, db.chatBatches], async () => {
+      for (const batch of await db.chatBatches.where("storyId").equals(id).toArray())
+        if (batch.status === "running")
+          await db.chatBatches.update(batch.id, {
+            status: "interrupted",
+            error: "上次回复已中断，已发送的消息仍保留，可以重试本组。",
+          });
       for (const j of await db.jobs
         .where("storyId")
         .equals(id)
@@ -237,11 +246,12 @@ export async function reviseEvent(
 export async function deleteStory(id: string) {
   await db.transaction(
     "rw",
-    [db.stories, db.events, db.memories, db.jobs],
+    [db.stories, db.events, db.memories, db.jobs, db.chatBatches],
     async () => {
       await db.events.where("storyId").equals(id).delete();
       await db.memories.where("storyId").equals(id).delete();
       await db.jobs.where("storyId").equals(id).delete();
+      await db.chatBatches.where("storyId").equals(id).delete();
       await db.stories.delete(id);
     },
   );

@@ -1015,6 +1015,24 @@ details pre {
   background: #eef3e8;
   padding: 30px 5%;
 }
+.chat-message-state {
+  color: #687a60;
+  font-size: 11px;
+  text-align: right;
+  margin: 4px 2px;
+}
+.chat-batch-status {
+  background: #fffef8;
+  border: 1px solid #dce4d2;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.chat-batch-status p { margin: 4px 0 10px; }
+.chat-batch-status pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.composer footer > .chat-send { margin-left: auto; }
+.composer footer > .chat-send + .primary { margin-left: 0; }
 .message-event {
   max-width: 80%;
   margin: 15px 0 24px;
@@ -1393,6 +1411,13 @@ details pre {
   .composer footer > .hint {
     display: none;
   }
+  .chat-composer footer {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .chat-composer footer > button:first-child { grid-column: 1 / -1; justify-self: start; }
+  .chat-composer footer > .chat-send,
+  .chat-composer footer > .primary { margin-left: 0; font-size: 12px; justify-content: center; white-space: nowrap; }
   .composer textarea {
     min-height: 76px;
     font-size: 12px;

@@ -1,4 +1,6 @@
 import { withStoryLock } from "./locks";
+import { active, isBusy } from "./generation-state";
+export { isBusy, stop } from "./generation-state";
 import { z } from "zod";
 import { db, keyFor, reviseEvent } from "./db";
 import {
@@ -44,11 +46,6 @@ const memoriesSchema = z.object({
     }),
   ),
 });
-const active = new Map<string, AbortController>();
-export const isBusy = (id: string) => active.has(id);
-export function stop(id: string) {
-  active.get(id)?.abort();
-}
 async function settings() {
   const prefs = await db.preferences.get("preferences");
   const p = prefs && (await db.profiles.get(prefs.activeProfile));
