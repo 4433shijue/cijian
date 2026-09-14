@@ -1469,7 +1469,7 @@ details pre {
   margin-bottom: 8px;
 }
 .writing-preferences > summary {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
@@ -1483,6 +1483,27 @@ details pre {
 .writing-preferences > summary::before {
   content: "✦";
   color: #a08a4c;
+}
+.writing-preferences-label,
+.writing-preferences-length,
+.writing-preferences-chevron {
+  flex-shrink: 0;
+}
+.writing-preferences-style {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.writing-preferences-style::before,
+.writing-preferences-length::before {
+  content: "· ";
+}
+.writing-preferences-chevron {
+  margin-left: auto;
+}
+.writing-preferences[open] .writing-preferences-chevron {
+  transform: rotate(180deg);
 }
 .writing-preferences .composer-options {
   padding-top: 8px;

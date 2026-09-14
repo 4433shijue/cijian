@@ -2218,9 +2218,14 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
         data-guide="novel-compose"
       >
         {mode === "novel" && (
-          <details className="writing-preferences" open>
+          <details className="writing-preferences">
             <summary>
-              写作偏好 · {selectedStylePreset?.name || s.style || "自定义文风"}
+              <span className="writing-preferences-label">写作偏好</span>
+              <span className="writing-preferences-style" title={selectedStylePreset?.name || s.style || "自定义文风"}>
+                {selectedStylePreset?.name || s.style || "自定义文风"}
+              </span>
+              <span className="writing-preferences-length">{s.length}</span>
+              <ChevronDown className="writing-preferences-chevron" size={15} aria-hidden="true" />
             </summary>
             <div className="composer-options">
               <label className="field compact-field">
