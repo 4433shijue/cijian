@@ -175,6 +175,7 @@ test("dialogue validation can be accepted as-is and format controls persist", as
     .getByRole("combobox", { name: "显式缓存标记", exact: true })
     .selectOption("off");
   await page.getByRole("button", { name: "保存并选用", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "模型接口" })).toHaveCount(0);
   await page.reload();
   expect((await readStore(page, "profiles"))[0]).toMatchObject({
     outputMode: "json",

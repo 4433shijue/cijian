@@ -1,5 +1,6 @@
 import { prompt } from "./prompts";
 import { quotedDialogue } from "./output";
+import { styleInstruction } from "./style-presets";
 import type {
   Story,
   SceneEvent,
@@ -87,6 +88,7 @@ export function buildContext(
   prefs: Preferences,
   p: Profile,
   input: string,
+  options: { styleOnly?: boolean } = {},
 ): ContextReport {
   const viewer = kind === "chat" ? s.partner : undefined;
   const mats: Material[] = [];
@@ -177,13 +179,13 @@ export function buildContext(
   }
   let task = input;
   if (kind === "novel")
-    task = `篇幅参考 ${s.length}。文风 ${s.style}。${s.psychology ? "可以补充符合人设的心理细节，不能改变动机。" : "禁止增添心理独白或推断动机。"}\n作者指定的完整事件\n${input}\n\n需保留的引用台词\n${
+    task = `${styleInstruction(s, prefs, "novel")}\n篇幅参考 ${s.length}。${s.psychology ? "可以补充符合人设的心理细节，不能改变动机。" : "禁止增添心理独白或推断动机。"}${options.styleOnly ? "\n这是只换文风重写：严格保持原事件、人物关系、台词和停止位置，只调整表达方式。" : ""}\n作者指定的完整事件\n${input}\n\n需保留的引用台词\n${
       quotedDialogue(input)
         .map((q) => `「${q}」`)
         .join("\n") || "本次没有识别到引用台词。"
     }`;
   if (kind === "chat")
-    task = `你扮演 ${s.roles.find((r) => r.id === s.partner)?.name}（${s.partner}），用户扮演 ${s.roles.find((r) => r.id === s.player)?.name}（${s.player}）。以下是用户刚发来的消息，仅回应该消息\n${input}`;
+    task = `${styleInstruction(s, prefs, "chat")}\n你扮演 ${s.roles.find((r) => r.id === s.partner)?.name}（${s.partner}），用户扮演 ${s.roles.find((r) => r.id === s.player)?.name}（${s.player}）。以下是用户刚发来的消息，仅回应该消息\n${input}`;
   return {
     ...assemble(prompt(kind, prefs), task, mats, p.context, p.maxOutput),
     history: {

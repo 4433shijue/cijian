@@ -21,6 +21,9 @@ import {
   ChevronDown,
   ChevronUp,
   Lightbulb,
+  AlertTriangle,
+  CheckCircle2,
+  Copy,
 } from "lucide-react";
 import { db, makeStory, deleteStory, reviseEvent } from "./db";
 import { loadRoleDraft, saveRoleDraft, saveCreatedRole } from "./role-draft";
@@ -40,6 +43,7 @@ import {
   type Memory,
   type ContextReport,
   type PromptKind,
+  type StylePreset,
 } from "./types";
 import {
   run,
@@ -62,6 +66,11 @@ import {
 import { useStarter, openStarter } from "./onboarding-state";
 import brandMark from "./assets/cijian-avatar-v1.webp";
 import { defaults } from "./prompts";
+import {
+  allStylePresets,
+  builtInStylePresets,
+  resolveStylePreset,
+} from "./style-presets";
 import {
   download,
   exportBackup,
@@ -1305,8 +1314,12 @@ function Memories({
     ) || [];
   const [editing, setEditing] = useState<Memory>();
   const [mergedIds, setMergedIds] = useState<string[]>([]);
+  const [tab, setTab] = useState<"memory" | "facts">("memory");
   useEffect(() => setMergedIds([]), [editing?.id]);
   const [busy, setBusy] = useState(false);
+  const facts = events
+    .filter((event) => event.kind === "novel" && event.status === "complete" && !event.deleted)
+    .flatMap((event) => event.facts.map((fact) => ({ event, fact })));
   async function accept(m: Memory) {
     const valid = m.sources.every((src) => {
       const e = events.find((x) => x.id === src.id);
@@ -1324,7 +1337,29 @@ function Memories({
     notify("记忆已确认，将按知情范围带入后续生成");
   }
   return (
-    <Modal title="这本故事的记忆" onClose={onClose}>
+    <Modal title="记忆中心" onClose={onClose}>
+      <div className="memory-tabs" role="tablist" aria-label="记忆中心分类">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "memory"}
+          className={tab === "memory" ? "active" : ""}
+          onClick={() => setTab("memory")}
+        >
+          故事记忆 ({items.filter((item) => item.status !== "ignored").length})
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "facts"}
+          className={tab === "facts" ? "active" : ""}
+          onClick={() => setTab("facts")}
+        >
+          原文事实 ({facts.length})
+        </button>
+      </div>
+      {tab === "memory" ? (
+        <>
       <ContextTip id="memory" title="记住什么，由你决定">
         <p>
           自动整理的内容会先成为候选。检查内容和知情角色，点击「接受」后才会作为长久记忆使用；写错的可以编辑，不需要的可以忽略。
@@ -1526,7 +1561,68 @@ function Memories({
           <button onClick={() => setEditing(undefined)}>取消</button>
         </div>
       )}
+        </>
+      ) : (
+        <section className="fact-center">
+          <p className="hint">
+            这里汇总正文中已经摘录的原文事实。只有明确授权给角色的事实，才会进入对应的手机聊天；心理活动和秘密默认仅作者可见。
+          </p>
+          {facts.map(({ event, fact }) => (
+            <article className="memory-card" key={fact.id}>
+              <span className="tag">正文第 {event.seq} 段</span>
+              <p>{fact.quote}</p>
+              <p className="hint">
+                {fact.knownBy.length
+                  ? fact.knownBy
+                      .map((id) => s.roles.find((role) => role.id === id)?.name)
+                      .join("、") + " 可知"
+                  : "仅作者可见"}
+              </p>
+              <p className="hint">请在对应正文段落的「编辑」中修改摘录和知情范围。</p>
+            </article>
+          ))}
+          {!facts.length && <Empty>先写下一段正文，再从段落中摘录可核对的事实。</Empty>}
+        </section>
+      )}
     </Modal>
+  );
+}
+function StoryHealth({
+  story,
+  events,
+  memories,
+  readyModel,
+}: {
+  story: Story;
+  events: SceneEvent[];
+  memories: Memory[];
+  readyModel: boolean;
+}) {
+  const issues = [
+    !readyModel && "还没有选用可用的模型接口",
+    !story.roles.length && "故事还没有角色",
+    events.filter((event) => event.status === "draft" && !event.deleted).length > 0 &&
+      `有 ${events.filter((event) => event.status === "draft" && !event.deleted).length} 条未完成草稿`,
+    events.filter((event) => event.review && !event.deleted).length > 0 &&
+      `有 ${events.filter((event) => event.review && !event.deleted).length} 段内容待复核`,
+    memories.filter((memory) => memory.status === "review" || memory.status === "invalid").length > 0 &&
+      `有 ${memories.filter((memory) => memory.status === "review" || memory.status === "invalid").length} 条记忆需要处理`,
+    story.memoryState === "failed" && "故事记忆上次整理失败",
+  ].filter(Boolean) as string[];
+  return (
+    <details className="story-health">
+      <summary>
+        {issues.length ? <AlertTriangle size={15} /> : <CheckCircle2 size={15} />}
+        故事状态 {issues.length ? `· ${issues.length} 项待处理` : "· 当前正常"}
+      </summary>
+      {issues.length ? (
+        <ul>
+          {issues.map((issue) => <li key={issue}>{issue}</li>)}
+        </ul>
+      ) : (
+        <p className="hint">没有发现待复核草稿、失效记忆或连接问题。</p>
+      )}
+    </details>
   );
 }
 function StoryPage({ id, notify }: { id: string; notify: Notice }) {
@@ -1538,6 +1634,12 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
       [id],
     ) || [];
   const prefs = useLiveQuery(() => db.preferences.get("preferences"), []);
+  const profiles = useLiveQuery(() => db.profiles.toArray(), []) || [];
+  const memories =
+    useLiveQuery(
+      () => db.memories.where("storyId").equals(id).toArray(),
+      [id],
+    ) || [];
   const world = useLiveQuery(() => db.world.toArray(), []) || [];
   const [mode, setMode] = useState<"novel" | "chat">("novel"),
     [panel, setPanel] = useState(""),
@@ -1577,11 +1679,13 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
   const inputKey = id + ":" + mode;
   const input =
     localInputs[inputKey] ?? (mode === "novel" ? s.draft : s.chatDraft);
+  const stylePresets = allStylePresets(prefs);
+  const selectedStylePreset = resolveStylePreset(s, prefs);
   function changeInput(value: string) {
     setLocalInputs((current) => ({ ...current, [inputKey]: value }));
     return update(mode === "novel" ? { draft: value } : { chatDraft: value });
   }
-  async function submit(rewrite?: SceneEvent) {
+  async function submit(rewrite?: SceneEvent, styleOnly = false) {
     if (!s) return;
     setBusy(true);
     try {
@@ -1590,6 +1694,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
         rewrite?.kind === "novel" ? "novel" : rewrite ? "chat" : mode,
         rewrite?.input || input,
         rewrite?.id,
+        { styleOnly },
       );
       if (!rewrite)
         setLocalInputs((current) => {
@@ -1614,6 +1719,15 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
       {(e.kind === "novel" || e.origin === "ai") && (
         <button disabled={busy || isBusy(id)} onClick={() => submit(e)}>
           重写
+        </button>
+      )}
+      {e.kind === "novel" && (
+        <button
+          disabled={busy || isBusy(id)}
+          onClick={() => submit(e, true)}
+          title="保持事件、台词和停止位置，只使用当前文风预设重新表达"
+        >
+          仅换文风
         </button>
       )}
       <button onClick={() => setVersions(e)}>版本 {e.versions.length}</button>
@@ -1700,6 +1814,15 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
         <span className="toolbar-divider" />
         <span className="toolbar-label">当前页面操作</span>
         <span className="toolbar-hint">正文操作会显示在对应段落下方</span>
+        <StoryHealth
+          story={s}
+          events={events}
+          memories={memories}
+          readyModel={
+            !!prefs?.activeProfile &&
+            profiles.some((p) => p.id === prefs.activeProfile)
+          }
+        />
       </div>
       <div className="mode-bar">
         <div className="segmented">
@@ -2009,33 +2132,71 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
         data-guide="novel-compose"
       >
         {mode === "novel" && (
-          <div className="composer-options">
-            <select
-              aria-label="扩写篇幅"
-              value={s.length}
-              onChange={(e) => update({ length: e.target.value })}
-            >
-              {["简短", "适中", "细腻"].map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
-            <input
-              aria-label="文风"
-              list="styles"
-              value={s.style}
-              onChange={(e) => update({ style: e.target.value })}
-            />
-            <datalist id="styles">
-              {["自然白描", "清新细腻", "克制留白", "轻松日常"].map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </datalist>
-            <Toggle
-              label="心理描写"
-              value={s.psychology}
-              onChange={(v) => update({ psychology: v })}
-            />
-          </div>
+          <details className="writing-preferences" open>
+            <summary>
+              写作偏好 · {selectedStylePreset?.name || s.style || "自定义文风"}
+            </summary>
+            <div className="composer-options">
+              <label className="field compact-field">
+                <span>文风预设</span>
+                <select
+                  aria-label="文风预设"
+                  value={selectedStylePreset?.id || "__custom__"}
+                  onChange={(e) => {
+                    if (e.target.value === "__custom__")
+                      void update({ stylePresetId: undefined });
+                    else {
+                      const preset = stylePresets.find((x) => x.id === e.target.value);
+                      if (preset)
+                        void update({ stylePresetId: preset.id, style: preset.name });
+                    }
+                  }}
+                >
+                  <option value="__custom__">自定义文风</option>
+                  {stylePresets.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {!selectedStylePreset && (
+                <label className="field compact-field">
+                  <span>自定义文风</span>
+                  <input
+                    aria-label="自定义文风"
+                    value={s.style}
+                    onChange={(e) =>
+                      void update({ style: e.target.value, stylePresetId: undefined })
+                    }
+                    placeholder="例如：冷静、短句、少用比喻"
+                  />
+                </label>
+              )}
+              <label className="field compact-field">
+                <span>扩写篇幅</span>
+                <select
+                  aria-label="扩写篇幅"
+                  value={s.length}
+                  onChange={(e) => void update({ length: e.target.value })}
+                >
+                  {["简短", "适中", "细腻"].map((x) => (
+                    <option key={x}>{x}</option>
+                  ))}
+                </select>
+              </label>
+              <Toggle
+                label="心理描写"
+                value={s.psychology}
+                onChange={(v) => void update({ psychology: v })}
+              />
+            </div>
+            {selectedStylePreset && (
+              <p className="hint writing-preference-description">
+                {selectedStylePreset.description}
+              </p>
+            )}
+          </details>
         )}
         <textarea
           id="story-input"
@@ -2427,6 +2588,153 @@ function ProfileEditor({
     </Modal>
   );
 }
+function StylePresetSettings({
+  prefs,
+  notify,
+}: {
+  prefs: Preferences;
+  notify: Notice;
+}) {
+  const [editing, setEditing] = useState<StylePreset>();
+  const custom = prefs.stylePresets || [];
+  const begin = (preset: StylePreset) => setEditing(structuredClone(preset));
+  const save = async () => {
+    if (!editing?.name.trim() || !editing.prompt.trim()) return;
+    const next = [
+      ...custom.filter((preset) => preset.id !== editing.id),
+      {
+        ...editing,
+        name: editing.name.trim(),
+        prompt: editing.prompt.trim(),
+        builtIn: false,
+      },
+    ];
+    await db.preferences.update("preferences", { stylePresets: next });
+    setEditing(undefined);
+    notify("文风预设已保存");
+  };
+  return (
+    <section className="settings-card">
+      <div className="section-title">
+        <div>
+          <h2>文风预设</h2>
+          <p className="hint">正文和手机聊天共用。固定剧情边界仍由程序维护。</p>
+        </div>
+        <button
+          onClick={() =>
+            begin({
+              id: uid(),
+              name: "我的文风",
+              description: "自己定义的写作习惯",
+              prompt: "",
+              scope: "both",
+              builtIn: false,
+            })
+          }
+        >
+          <Plus size={16} />
+          新建预设
+        </button>
+      </div>
+      <div className="style-preset-grid">
+        {builtInStylePresets.map((preset) => (
+          <article className="style-preset-card" key={preset.id}>
+            <span className="tag">内置</span>
+            <strong>{preset.name}</strong>
+            <p>{preset.description}</p>
+            <button
+              onClick={() =>
+                begin({
+                  ...preset,
+                  id: uid(),
+                  name: preset.name + "（自定义）",
+                  builtIn: false,
+                })
+              }
+            >
+              <Copy size={15} />
+              复制后修改
+            </button>
+          </article>
+        ))}
+        {custom.map((preset) => (
+          <article className="style-preset-card custom" key={preset.id}>
+            <span className="tag">自定义</span>
+            <strong>{preset.name}</strong>
+            <p>{preset.description || "还没有写说明"}</p>
+            <div className="row">
+              <button onClick={() => begin(preset)}>编辑</button>
+              <button
+                onClick={async () => {
+                  await db.preferences.update("preferences", {
+                    stylePresets: custom.filter((item) => item.id !== preset.id),
+                  });
+                  notify("文风预设已删除");
+                }}
+              >
+                删除
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+      {editing && (
+        <div className="inline-editor style-preset-editor">
+          <h3>{editing.builtIn ? "复制文风预设" : "编辑文风预设"}</h3>
+          <Field label="名称">
+            <input
+              required
+              value={editing.name}
+              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+            />
+          </Field>
+          <Field label="说明">
+            <input
+              value={editing.description}
+              onChange={(e) =>
+                setEditing({ ...editing, description: e.target.value })
+              }
+            />
+          </Field>
+          <Field label="适用范围">
+            <select
+              value={editing.scope}
+              onChange={(e) =>
+                setEditing({
+                  ...editing,
+                  scope: e.target.value as StylePreset["scope"],
+                })
+              }
+            >
+              <option value="both">正文和手机聊天</option>
+              <option value="novel">仅正文</option>
+              <option value="chat">仅手机聊天</option>
+            </select>
+          </Field>
+          <Field label="风格要求">
+            <textarea
+              className="long-text"
+              required
+              value={editing.prompt}
+              onChange={(e) => setEditing({ ...editing, prompt: e.target.value })}
+              placeholder="例如：多用短句，减少情绪解释，让动作承担情绪。"
+            />
+          </Field>
+          <div className="row">
+            <button
+              className="primary"
+              disabled={!editing.name.trim() || !editing.prompt.trim()}
+              onClick={() => void save()}
+            >
+              保存预设
+            </button>
+            <button onClick={() => setEditing(undefined)}>取消</button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
 function SettingsPage({ notify }: { notify: Notice }) {
   const profiles = useLiveQuery(() => db.profiles.toArray(), []) || [],
     prefs = useLiveQuery(() => db.preferences.get("preferences"), []);
@@ -2690,6 +2998,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
           </>
         )}
       </section>
+      {prefs.developer && <StylePresetSettings prefs={prefs} notify={notify} />}
       {edit && (
         <ProfileEditor
           value={edit}

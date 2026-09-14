@@ -65,6 +65,7 @@ export function makeStory(
     length: "适中",
     style: "自然白描",
     psychology: false,
+    stylePresetId: "builtin-natural",
     autoMemory: true,
     chatThreshold: 20,
     novelThreshold: 5,

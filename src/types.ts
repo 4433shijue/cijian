@@ -1,5 +1,13 @@
 export type Protocol = "chat" | "responses" | "claude" | "gemini";
 export type PromptKind = "novel" | "chat" | "facts" | "memory" | "inspiration";
+export interface StylePreset {
+  id: string;
+  name: string;
+  description: string;
+  prompt: string;
+  scope: "novel" | "chat" | "both";
+  builtIn?: boolean;
+}
 export type InspirationDirection =
   "relationship" | "discovery" | "external" | "decision";
 export interface InspirationOption {
@@ -57,6 +65,7 @@ export interface Story {
   partner: string;
   length: string;
   style: string;
+  stylePresetId?: string;
   psychology: boolean;
   autoMemory: boolean;
   chatThreshold: number;
@@ -146,6 +155,7 @@ export interface Preferences {
   developer: boolean;
   inspirationParagraphs?: number;
   novelContextRounds?: number;
+  stylePresets?: StylePreset[];
   prompts: Partial<Record<PromptKind, { text: string; enabled: boolean }>>;
 }
 export interface Job {

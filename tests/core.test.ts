@@ -12,6 +12,7 @@ import { assemble, buildContext } from "../src/context";
 import { endpoint, generate, requestSpec } from "../src/model";
 import { exportBackup, importBackup, validateBackup } from "../src/backup";
 import { memoryDue, checkQuotes, run, organizeMemory } from "../src/engine";
+import { allStylePresets } from "../src/style-presets";
 const profile: Profile = {
   id: "p",
   name: "test",
@@ -153,6 +154,57 @@ describe("knowledge and context", () => {
     );
     expect(r.system).toContain("自定义白描");
     expect(r.system).toContain("不续写");
+  });
+  it("adds the selected style preset to prose and chat tasks", async () => {
+    const { s } = await fixture();
+    const custom = {
+      id: "custom-style",
+      name: "冷静短句",
+      description: "",
+      prompt: "多用短句，少解释情绪。",
+      scope: "both" as const,
+    };
+    const preferences = { ...prefs, stylePresets: [custom] };
+    s.stylePresetId = custom.id;
+    s.style = custom.name;
+    const prose = buildContext(
+      "novel",
+      s,
+      [],
+      [],
+      [],
+      preferences,
+      profile,
+      "递伞",
+    );
+    const chat = buildContext(
+      "chat",
+      s,
+      [],
+      [],
+      [],
+      preferences,
+      profile,
+      "伞呢",
+    );
+    expect(prose.user).toContain("多用短句，少解释情绪。");
+    expect(chat.user).toContain("多用短句，少解释情绪。");
+    expect(allStylePresets(preferences).map((preset) => preset.id)).toContain(
+      custom.id,
+    );
+    expect(
+      buildContext(
+        "novel",
+        s,
+        [],
+        [],
+        [],
+        preferences,
+        profile,
+        "递伞",
+        { styleOnly: true },
+      ).user,
+    ).toContain("这是只换文风重写");
   });
   it("does not use unaccepted or review memories", async () => {
     const { s } = await fixture();
@@ -650,6 +702,21 @@ describe("generation ownership and drafts", () => {
         .filter((e) => e.status === "draft")
         .count(),
     ).toBe(1);
+  });
+  it("marks style-only rewrites without changing the source input", async () => {
+    await configured();
+    const { s, e } = await fixture();
+    let requestBody: any;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url, init) => {
+        requestBody = JSON.parse(String(init?.body));
+        return response(JSON.stringify({ text: "换一种表达。", facts: [] }));
+      }),
+    );
+    await run(s.id, "novel", e.input, e.id, { styleOnly: true });
+    expect(requestBody.messages[1].content).toContain("这是只换文风重写");
+    expect((await db.events.get(e.id))?.versions.at(-1)?.input).toBe(e.input);
   });
 });
 

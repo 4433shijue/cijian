@@ -311,11 +311,21 @@ it("backs up folding and developer settings without treating ideas as saved stor
   });
   await db.preferences.update("preferences", {
     inspirationParagraphs: 5,
+    stylePresets: [
+      {
+        id: "custom-style",
+        name: "冷静短句",
+        description: "",
+        prompt: "多用短句，少解释情绪。",
+        scope: "both",
+      },
+    ],
     prompts: { inspiration: { text: "用动作写清人物的选择。", enabled: true } },
   });
   const backup = validateBackup(await exportBackup());
   expect(backup.events[0].collapsed).toBe(true);
   expect(backup.preferences[0].inspirationParagraphs).toBe(5);
+  expect(backup.preferences[0].stylePresets?.[0].name).toBe("冷静短句");
   expect(backup.preferences[0].prompts.inspiration?.enabled).toBe(true);
   expect(JSON.stringify(backup)).not.toContain(options()[0].text);
   await importBackup(backup, true);
@@ -323,4 +333,7 @@ it("backs up folding and developer settings without treating ideas as saved stor
   expect((await db.preferences.get("preferences"))?.inspirationParagraphs).toBe(
     5,
   );
+  expect(
+    (await db.preferences.get("preferences"))?.stylePresets?.[0].name,
+  ).toBe("冷静短句");
 });

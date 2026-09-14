@@ -44,6 +44,7 @@ const story = z.object({
   partner: str,
   length: str,
   style: str,
+  stylePresetId: str.optional(),
   psychology: z.boolean(),
   autoMemory: z.boolean(),
   chatThreshold: z.number().nonnegative(),
@@ -122,6 +123,18 @@ const prefs = z.object({
   developer: z.boolean(),
   inspirationParagraphs: z.number().int().min(1).max(20).optional(),
   novelContextRounds: z.number().int().min(1).max(50).optional(),
+  stylePresets: z
+    .array(
+      z.object({
+        id: str,
+        name: str,
+        description: str,
+        prompt: str,
+        scope: z.enum(["novel", "chat", "both"]),
+        builtIn: z.boolean().optional(),
+      }),
+    )
+    .optional(),
   prompts: z.record(
     z.enum(["novel", "chat", "facts", "memory", "inspiration"]),
     z.object({ text: str, enabled: z.boolean() }),
@@ -264,6 +277,7 @@ export async function importBackup(value: unknown, replace = false) {
         worldIds: x.worldIds.map(remap),
         player: remap(x.player),
         partner: remap(x.partner),
+        stylePresetId: x.stylePresetId,
         memoryState:
           x.memoryState === "running" ? "interrupted" : x.memoryState,
       })),
@@ -316,8 +330,24 @@ export async function importBackup(value: unknown, replace = false) {
           ? {
               ...existing,
               prompts: { ...existing.prompts, ...imported.prompts },
+              stylePresets: [
+                ...(existing.stylePresets || []),
+                ...(imported.stylePresets || [])
+                  .filter(
+                    (preset) =>
+                      !existing.stylePresets?.some((x) => x.id === preset.id),
+                  )
+                  .map((preset) => ({ ...preset, builtIn: false })),
+              ],
             }
-          : { ...imported, activeProfile: remap(imported.activeProfile) },
+          : {
+              ...imported,
+              activeProfile: remap(imported.activeProfile),
+              stylePresets: imported.stylePresets?.map((preset) => ({
+                ...preset,
+                builtIn: false,
+              })),
+            },
       );
   });
 }

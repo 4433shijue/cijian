@@ -62,6 +62,7 @@ async function report(
   kind: "novel" | "chat",
   input: string,
   until = Infinity,
+  options: { styleOnly?: boolean } = {},
 ) {
   const prior = (
     await db.events.where("storyId").equals(s.id).sortBy("seq")
@@ -84,6 +85,7 @@ async function report(
     prefs,
     p,
     input,
+    options,
   );
 }
 export async function preview(
@@ -129,6 +131,7 @@ async function runUnlocked(
   kind: "novel" | "chat",
   input: string,
   rewriteId?: string,
+  options: { styleOnly?: boolean } = {},
 ) {
   if (active.has(storyId)) throw Error("这个故事正在生成，请先停止或等待完成");
   if (!input.trim()) throw Error("先写下这一刻发生的事");
@@ -159,7 +162,7 @@ async function runUnlocked(
       s.player = old.participants.find((x) => x !== old.speaker) || s.player;
       s.partner = old.speaker;
     }
-    const context = await report(s, p, prefs, kind, input, old?.seq);
+    const context = await report(s, p, prefs, kind, input, old?.seq, options);
     let seq =
       (await db.events.where("storyId").equals(storyId).sortBy("seq")).at(-1)
         ?.seq || 0;
@@ -526,10 +529,11 @@ export async function run(
   kind: "novel" | "chat",
   input: string,
   rewriteId?: string,
+  options: { styleOnly?: boolean } = {},
 ) {
   if (active.has(storyId)) throw Error("这个故事正在生成，请先停止或等待完成");
   await withStoryLock(storyId, () =>
-    runUnlocked(storyId, kind, input, rewriteId),
+    runUnlocked(storyId, kind, input, rewriteId, options),
   );
   const s = await db.stories.get(storyId);
   if (s && s.autoMemory && s.memoryState === "idle" && (await memoryDue(s)))

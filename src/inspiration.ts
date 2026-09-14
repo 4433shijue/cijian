@@ -3,6 +3,7 @@ import { db, keyFor } from "./db";
 import { assemble } from "./context";
 import { generate } from "./model";
 import { prompt } from "./prompts";
+import { styleInstruction } from "./style-presets";
 import { parseJSON } from "./output";
 import {
   uid,
@@ -125,7 +126,7 @@ export function buildInspirationContext(
       "上一轮建议 · 请换四条新路",
       JSON.stringify(story.inspiration.options),
     );
-  const task = `依据所给的 ${recent.length} 段最近正文和人物、世界书，提出四种不同的后续事件。文风参考 ${story.style}。${recent.length ? "从最新一段停下的位置往前想。" : "故事还没有正式正文，可以从开场背景与人物处境中寻找开头。"}`;
+  const task = `依据所给的 ${recent.length} 段最近正文和人物、世界书，提出四种不同的后续事件。${styleInstruction(story, prefs, "novel")}。${recent.length ? "从最新一段停下的位置往前想。" : "故事还没有正式正文，可以从开场背景与人物处境中寻找开头。"}`;
   return {
     report: assemble(
       prompt("inspiration", prefs),
