@@ -167,6 +167,7 @@ export interface Profile {
   frequencyPenalty?: number | null;
   outputMode?: "auto" | "schema" | "json" | "compatible";
   cachePolicy?: "auto" | "off";
+  prefixReuse?: "auto" | "on" | "off";
   remember: boolean;
   key?: string;
   testedAt?: number;
@@ -199,11 +200,14 @@ export interface Material {
   mandatory: boolean;
   priority: number;
   stable?: boolean;
+  sources?: SourceRef[];
+  excerpt?: boolean;
 }
 export interface ModelUsage {
   input?: number;
   output?: number;
   cachedInput?: number;
+  uncachedInput?: number;
   cacheWriteInput?: number;
 }
 export interface ContextReport {
@@ -214,9 +218,31 @@ export interface ContextReport {
   estimate: number;
   limit: number;
   stablePrefix?: string;
+  task?: string;
+  messages?: PromptMessage[];
+  prefixReuse?: {
+    state: "first" | "continued" | "settings" | "history" | "capacity" | "rewrite";
+    retainedMessages: number;
+  };
   history?: { limit: number; sources: SourceRef[]; recalled?: SourceRef[] };
   usage?: ModelUsage;
   durationMs?: number;
+}
+export interface PromptMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+// Local transport history, deliberately excluded from story backups.
+export interface PromptSession {
+  id: string;
+  storyId: string;
+  config: string;
+  messages: PromptMessage[];
+  materials: Material[];
+  covered: SourceRef[];
+  events: Record<string, string>;
+  memories: Record<string, string>;
+  inputTokens?: number;
 }
 export interface ModelResult {
   text: string;

@@ -14,6 +14,7 @@ import {
   type Preferences,
   type Job,
   type ChatBatch,
+  type PromptSession,
 } from "./types";
 export class SceneDB extends Dexie {
   roles!: Table<Role, string>;
@@ -26,6 +27,7 @@ export class SceneDB extends Dexie {
   preferences!: Table<Preferences, string>;
   jobs!: Table<Job, string>;
   chatBatches!: Table<ChatBatch, string>;
+  promptSessions!: Table<PromptSession, string>;
   constructor(name = "little-scene-v1") {
     super(name);
     this.version(1).stores({
@@ -40,6 +42,7 @@ export class SceneDB extends Dexie {
     });
     this.version(2).stores({ roleDrafts: "id" });
     this.version(3).stores({ chatBatches: "id,storyId,status" });
+    this.version(4).stores({ promptSessions: "id,storyId" });
   }
 }
 export const db = new SceneDB();
@@ -311,12 +314,13 @@ export async function setTimelineMode(storyId: string, mode: "shared" | "strict"
 export async function deleteStory(id: string) {
   await db.transaction(
     "rw",
-    [db.stories, db.events, db.memories, db.jobs, db.chatBatches],
+    [db.stories, db.events, db.memories, db.jobs, db.chatBatches, db.promptSessions],
     async () => {
       await db.events.where("storyId").equals(id).delete();
       await db.memories.where("storyId").equals(id).delete();
       await db.jobs.where("storyId").equals(id).delete();
       await db.chatBatches.where("storyId").equals(id).delete();
+      await db.promptSessions.where("storyId").equals(id).delete();
       await db.stories.delete(id);
     },
   );

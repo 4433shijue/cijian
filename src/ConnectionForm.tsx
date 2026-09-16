@@ -436,7 +436,15 @@ export function ConnectionForm({
                   <option value="compatible">兼容模式</option>
                 </select>
               </label>
-              <label className="field">
+              {p.protocol === "chat" ? <label className="field">
+                <span>多轮前缀复用</span>
+                <select value={p.prefixReuse || "auto"}
+                  onChange={(e) => change({ prefixReuse: e.target.value as Profile["prefixReuse"] })}>
+                  <option value="auto">自动 · DeepSeek</option>
+                  <option value="on">开启</option>
+                  <option value="off">关闭</option>
+                </select>
+              </label> : <label className="field">
                 <span>显式缓存标记</span>
                 <select
                   value={p.cachePolicy || "auto"}
@@ -449,11 +457,14 @@ export function ConnectionForm({
                   <option value="auto">按协议自动使用</option>
                   <option value="off">关闭显式标记</option>
                 </select>
-              </label>
+              </label>}
             </div>
             <p className="hint">
               自动格式仅对已识别的官方模型使用严格结构；自定义接口可按服务说明选择。若接口拒绝格式或缓存参数，可改为兼容模式或关闭显式标记。服务自身的自动缓存仍由服务管理，命中统计可在开发者模式查看。
             </p>
+            {p.protocol === "chat" && <p className="hint">
+              DeepSeek 官方地址或模型名含 deepseek 时默认保留多轮前缀。中转站使用其他模型别名时可手动开启。正文与聊天分别保留历史，新内容追加在末尾，接近容量上限时自动整理。修改历史或知情范围会重新整理。此开关只控制请求组织，服务端缓存仍自动管理。
+            </p>}
             <div className="two-col">
               <label className="field">
                 <span>上下文容量 · token</span>

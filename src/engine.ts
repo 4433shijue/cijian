@@ -15,6 +15,7 @@ import {
 } from "./types";
 import { generate } from "./model";
 import { buildContext, assemble } from "./context";
+import { preparePrefix, commitPrefix } from "./prefix-cache";
 import { prompt } from "./prompts";
 import { parseJSON, draftText, missingQuotes } from "./output";
 export { parseJSON, draftText, checkQuotes } from "./output";
@@ -70,21 +71,21 @@ async function report(
       .filter((e) => usableEvent(e, s) && (kind !== "chat" || !e.chatPending))
       .map((e) => [e.id, e.versionId]),
   );
-  return buildContext(
+  const memories = (await db.memories.where("storyId").equals(s.id).toArray()).filter((m) =>
+    m.sources.every((source) => priorVersions.get(source.id) === source.versionId));
+  const world = await db.world.toArray();
+  const baseline = buildContext(
     kind,
     s,
     prior,
-    (await db.memories.where("storyId").equals(s.id).toArray()).filter((m) =>
-      m.sources.every(
-        (source) => priorVersions.get(source.id) === source.versionId,
-      ),
-    ),
-    await db.world.toArray(),
+    memories,
+    world,
     prefs,
     p,
     input,
     options,
   );
+  return preparePrefix(baseline, s, p, prefs, kind, prior, memories, world, Number.isFinite(until));
 }
 export async function preview(
   storyId: string,
@@ -94,7 +95,7 @@ export async function preview(
   const s = await db.stories.get(storyId);
   if (!s) throw Error("故事不存在");
   const { p, prefs } = await settings();
-  return report(s, p, prefs, kind, input);
+  return (await report(s, p, prefs, kind, input)).report;
 }
 function blankEvent(
   s: Story,
@@ -160,7 +161,8 @@ async function runUnlocked(
       s.player = old.participants.find((x) => x !== old.speaker) || s.player;
       s.partner = old.speaker;
     }
-    const context = await report(s, p, prefs, kind, input, old?.seq, options);
+    const prepared = await report(s, p, prefs, kind, input, old?.seq, options);
+    const context = prepared.report;
     let seq =
       (await db.events.where("storyId").equals(storyId).sortBy("seq")).at(-1)
         ?.seq || 0;
@@ -219,7 +221,7 @@ async function runUnlocked(
         }
       },
       fetch,
-      { kind, stablePrefix: context.stablePrefix },
+      { kind, stablePrefix: context.stablePrefix, messages: context.messages },
     );
     await saving;
     if (storageError) throw storageError;
@@ -286,11 +288,15 @@ async function runUnlocked(
     ];
     await db.transaction(
       "rw",
-      [db.events, db.stories, db.memories, db.jobs],
+      [db.events, db.stories, db.memories, db.jobs, db.promptSessions],
       async () => {
         if (!(await db.stories.get(storyId)))
           throw Error("故事已删除，未写入结果");
-        if (!old) await db.events.put(event!);
+        const adopted: SceneEvent[] = userEvent ? [userEvent] : [];
+        if (!old) {
+          await db.events.put(event!);
+          adopted.push(event!);
+        }
         else {
           await reviseEvent(
             old.id,
@@ -319,6 +325,7 @@ async function runUnlocked(
               { id: e.versionId, text, input, facts: [], created: Date.now() },
             ];
             await db.events.add(e);
+            adopted.push(e);
           }
         const latest = await db.stories.get(storyId);
         await db.stories.update(storyId, {
@@ -341,6 +348,7 @@ async function runUnlocked(
           status: "complete",
           eventId: old?.id || event!.id,
         });
+        await commitPrefix(prepared, s, result.text, adopted, result.usage);
       },
     );
     event = undefined;

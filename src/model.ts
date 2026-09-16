@@ -1,9 +1,10 @@
-import type { Profile, ModelResult, PromptKind, ModelUsage } from "./types";
+import type { Profile, ModelResult, PromptKind, ModelUsage, PromptMessage } from "./types";
 import { samplingParameters } from "./sampling";
 import { outputSchemas } from "./output";
 export interface GenerationOptions {
   kind?: PromptKind;
   stablePrefix?: string;
+  messages?: PromptMessage[];
 }
 function nativeSchema(p: Profile) {
   const host = new URL(p.url).hostname;
@@ -102,7 +103,7 @@ export function requestSpec(
       p.protocol === "chat"
         ? {
             model: p.model,
-            messages: [
+            messages: options.messages || [
               { role: "system", content: system },
               { role: "user", content: user },
             ],
@@ -205,7 +206,7 @@ export function requestSpec(
   if (
     p.protocol === "chat" &&
     p.stream &&
-    new URL(p.url).hostname === "api.openai.com"
+    ["api.openai.com", "api.deepseek.com"].includes(new URL(p.url).hostname)
   )
     body.stream_options = { include_usage: true };
   return { url: endpoint(p), headers, body };
@@ -340,15 +341,19 @@ export async function generate(
           reason = c.finish_reason;
           complete = reason === "stop";
         }
-        if (d.usage)
+        if (d.usage) {
+          const hit = d.usage.prompt_cache_hit_tokens;
+          const miss = d.usage.prompt_cache_miss_tokens;
+          const hasCounts = [hit, miss].every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0);
           mergeUsage({
-            input: d.usage.prompt_tokens,
+            input: d.usage.prompt_tokens ?? (hasCounts ? hit + miss : undefined),
             output: d.usage.completion_tokens,
             cachedInput:
-              d.usage.prompt_tokens_details?.cached_tokens ??
-              d.usage.prompt_cache_hit_tokens,
+              hit ?? d.usage.prompt_tokens_details?.cached_tokens,
+            uncachedInput: miss,
             cacheWriteInput: d.usage.prompt_tokens_details?.cache_write_tokens,
           });
+        }
       }
       if (p.protocol === "responses") {
         if (stream && d.type === "response.output_text.delta")

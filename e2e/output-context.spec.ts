@@ -172,14 +172,14 @@ test("dialogue changes save directly by default and format controls persist", as
     .getByRole("combobox", { name: "输出格式", exact: true })
     .selectOption("json");
   await page
-    .getByRole("combobox", { name: "显式缓存标记", exact: true })
+    .getByRole("combobox", { name: "多轮前缀复用", exact: true })
     .selectOption("off");
   await page.getByRole("button", { name: "保存并选用", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "模型接口" })).toHaveCount(0);
   await page.reload();
   expect((await readStore(page, "profiles"))[0]).toMatchObject({
     outputMode: "json",
-    cachePolicy: "off",
+    prefixReuse: "off",
   });
   let calls = 0;
   await page.route("https://output.fixture.test/**", async (route) => {
@@ -242,10 +242,10 @@ test("an open reference window receives final usage after generation completes",
     .getByRole("button", { name: "参考内容", exact: true })
     .click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("缓存读取 服务未返回");
+  await expect(dialog).toContainText("缓存命中 服务未返回");
   release();
-  await expect(dialog).toContainText("缓存读取 60 token");
-  await expect(dialog).toContainText("占输入 60.0%");
+  await expect(dialog).toContainText("缓存命中 60 token");
+  await expect(dialog).toContainText("命中率 60.0%");
   expect((await readStore(page, "events"))[0].status).toBe("complete");
 });
 
@@ -308,7 +308,7 @@ test("seven-round default and configurable history remain independent of inspira
   await latest.getByRole("button", { name: "参考内容", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("正文窗口 2 / 2 回合");
-  await expect(dialog).toContainText("缓存读取 100 token");
-  await expect(dialog).toContainText("占输入 50.0%");
+  await expect(dialog).toContainText("缓存命中 100 token");
+  await expect(dialog).toContainText("命中率 50.0%");
   await expect(dialog).toContainText("缓存写入 服务未返回");
 });

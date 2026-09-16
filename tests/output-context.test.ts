@@ -266,7 +266,7 @@ describe("native output formats and actual usage", () => {
           }),
         ),
     );
-    expect(result.usage).toEqual({ input: 100, output: 10, cachedInput: 60 });
+    expect(result.usage).toEqual({ input: 100, output: 10, cachedInput: 60, uncachedInput: 40 });
   });
   it("keeps unknown compatible services free of unrequested schema fields", () => {
     expect(

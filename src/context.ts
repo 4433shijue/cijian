@@ -12,6 +12,7 @@ import type {
   PromptKind,
   Material,
   ContextReport,
+  SourceRef,
 } from "./types";
 export const estimate = (text: string) =>
   Math.ceil(
@@ -59,6 +60,7 @@ export function assemble(
   }
   return {
     system,
+    task: input,
     user: included.map(section).join("") + "【当前任务】\n" + input,
     stablePrefix,
     included,
@@ -91,8 +93,10 @@ export function buildContext(
     mandatory = false,
     priority = 0,
     stable = false,
+    sources?: SourceRef[],
+    excerpt = false,
   ) => {
-    if (text) mats.push({ id, label, text, mandatory, priority, stable });
+    if (text) mats.push({ id, label, text, mandatory, priority, stable, sources, excerpt });
   };
   const present = viewer ? [s.player, s.partner] : s.roles.map((r) => r.id);
   const loadedWorld = s.worldIds.flatMap((id) => {
@@ -175,7 +179,7 @@ export function buildContext(
   const memoryScores = relevance(input, usableMemories.map((m) => m.text));
   for (const [i, m] of usableMemories.entries())
     add(m.id, m.automatic ? "早期经历摘记（有省略，可查原文）" : "已确认的故事记忆",
-      m.text, !m.automatic && !sharedTimeline(s), (m.automatic ? 60 : 90) + Math.min(25, memoryScores[i] * 3));
+      m.text, !m.automatic && !sharedTimeline(s), (m.automatic ? 60 : 90) + Math.min(25, memoryScores[i] * 3), false, m.sources, !!m.automatic);
   // Old/imported stories also have a bounded fallback before excerpts are persisted.
   const covered = new Set(memories.filter((m) => ["accepted", "ignored"].includes(m.status) && m.sources.every((ref) =>
     sourceMap.get(ref.id)?.versionId === ref.versionId)).flatMap((m) => m.sources.map((ref) => ref.id)));
@@ -183,7 +187,7 @@ export function buildContext(
     for (const [i, e] of older.entries())
       if (!recalledIds.has(e.id) && !covered.has(e.id))
         add("excerpt:" + e.id, `早期经历 ${e.seq} 摘记（有省略）`, historyExcerpt(visibleEvent(e, viewer, s)),
-          false, 60 + Math.min(25, scores[i] * 3));
+          false, 60 + Math.min(25, scores[i] * 3), false, [{ id: e.id, versionId: e.versionId }], true);
   const history = [...recentChat, ...recent, ...recalled].sort((a, b) => a.seq - b.seq);
   for (const e of history) {
     const text = visibleEvent(e, viewer, s);
@@ -194,6 +198,8 @@ export function buildContext(
         text,
         e.kind === "novel" && recentIds.has(e.id),
         recalledIds.has(e.id) ? 110 : 120 + history.indexOf(e),
+        false,
+        [{ id: e.id, versionId: e.versionId }],
       );
   }
   let task = input;

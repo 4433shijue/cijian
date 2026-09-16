@@ -31,6 +31,7 @@ import { loadRoleDraft, saveRoleDraft, saveCreatedRole } from "./role-draft";
 import { InspirationAssistant } from "./InspirationAssistant";
 import { inspirationCount, chooseInspiration } from "./inspiration";
 import { proseCount } from "./context";
+import { cacheHitPercent } from "./prefix-cache";
 import { sendChatMessage, replyChat, previewChat, pendingChatMessages, dismissChatBatch } from "./chat";
 import { draftText, missingQuotes } from "./output";
 import {
@@ -1028,6 +1029,15 @@ function Reference({
   report: ContextReport;
   developer?: boolean;
 }) {
+  const hitPercent = cacheHitPercent(report.usage);
+  const reuseLabels = {
+    first: "本次建立多轮前缀",
+    continued: "已原样保留前轮请求与回复，新内容追加在末尾",
+    settings: "设定或模型配置改变，已重新整理前缀",
+    history: "历史内容或知情范围改变，已重新整理前缀",
+    capacity: "已接近上下文容量，重新整理了历史",
+    rewrite: "本次是重写或重试，已按原时间点重新整理",
+  };
   return (
     <div>
       <p className="hint">
@@ -1039,21 +1049,23 @@ function Reference({
       {report.history && (
         <p className="hint">
           正文窗口 {report.history.sources.length} / {report.history.limit}{" "}
-          回合，按发生顺序排列。
+          回合，按发生顺序排列。{report.prefixReuse && "前缀复用期间还会保留之前已带入的经历；容量不足时重新整理。"}
         </p>
       )}
       {developer && (
         <div className="reference-metrics">
           <p>
-            缓存读取{" "}
+            缓存命中{" "}
             {report.usage?.cachedInput === undefined
               ? "服务未返回"
               : `${report.usage.cachedInput.toLocaleString()} token`}
-            {report.usage?.cachedInput !== undefined &&
-            report.usage.input &&
-            report.usage.cachedInput <= report.usage.input
-              ? ` · 占输入 ${((report.usage.cachedInput / report.usage.input) * 100).toFixed(1)}%`
-              : ""}
+            {hitPercent === undefined ? "" : ` · 命中率 ${hitPercent}%`}
+          </p>
+          <p>
+            缓存未命中{" "}
+            {report.usage?.uncachedInput === undefined
+              ? "服务未返回"
+              : `${report.usage.uncachedInput.toLocaleString()} token`}
           </p>
           <p>
             缓存写入{" "}
@@ -1065,8 +1077,10 @@ function Reference({
               ? "暂无记录"
               : `${(report.durationMs / 1000).toFixed(1)} 秒`}
           </p>
+          {report.prefixReuse && <p>{reuseLabels[report.prefixReuse.state]}
+            {report.prefixReuse.retainedMessages > 0 && `（${report.prefixReuse.retainedMessages} 条请求消息）`}。</p>}
           <p className="hint">
-            统计来自本次接口响应。固定前缀有助于复用缓存，实际命中还取决于模型、服务、前缀长度与有效期。
+            命中统计来自本次接口响应。DeepSeek 命中率按命中 /（命中 + 未命中）计算；未命中不代表缓存写入。保留前缀不等于服务已命中，缓存建立与过期由服务管理。
           </p>
         </div>
       )}
@@ -1090,7 +1104,7 @@ function Reference({
       {developer && (
         <details>
           <summary>最终请求文本（不含密钥）</summary>
-          <pre>{report.system + "\n\n" + report.user}</pre>
+          <pre>{report.messages ? JSON.stringify(report.messages, null, 2) : report.system + "\n\n" + report.user}</pre>
         </details>
       )}
     </div>
@@ -3042,7 +3056,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
             </Field>
             <p className="hint">
               默认读取最近 7 回合完整正文，可设为 1 到
-              50。未采用草稿不计入；自动互通模式的修改提醒不阻断后文。相关旧原文会按需补充，重写只参考原文之前的经历。材料超出容量时会提示调整。关闭开发者模式后仍生效。
+              50。未采用草稿不计入；自动互通模式的修改提醒不阻断后文。相关旧原文会按需补充，重写只参考原文之前的经历。启用多轮前缀复用时会保留已带入的历史，容量不足时按此窗口重新整理。必读材料超出容量时会提示调整。关闭开发者模式后仍生效。
             </p>
             <Field label="灵感小助手参考正文段数">
               <input

@@ -4,6 +4,7 @@ import { sharedTimeline, usableEvent } from "./timeline";
 import { active } from "./generation-state";
 import { withStoryLock } from "./locks";
 import { buildContext } from "./context";
+import { preparePrefix, commitPrefix } from "./prefix-cache";
 import { generate } from "./model";
 import { parseJSON } from "./output";
 import { memoryDue, organizeMemory } from "./engine";
@@ -69,8 +70,8 @@ async function settings() {
   return { prefs, p, key: keyFor(p) };
 }
 
-async function contextFor(s: Story, batch: ChatBatch) {
-  const { prefs, p } = await settings();
+async function contextFor(s: Story, batch: ChatBatch, rewrite = false, connection?: Awaited<ReturnType<typeof settings>>) {
+  const { prefs, p } = connection || await settings();
   const sourceIds = new Set(batch.sources.map((source) => source.id));
   const events = (await db.events.where("storyId").equals(s.id).sortBy("seq"))
     .filter((e) => e.seq < batch.cutoff && !sourceIds.has(e.id) && !e.chatPending);
@@ -78,9 +79,12 @@ async function contextFor(s: Story, batch: ChatBatch) {
     .map((e) => [e.id, e.versionId]));
   const memories = (await db.memories.where("storyId").equals(s.id).toArray())
     .filter((m) => m.sources.every((source) => versions.get(source.id) === source.versionId));
-  return buildContext("chat", { ...s, player: batch.player, partner: batch.partner },
-    events, memories, await db.world.toArray(), prefs, p, batch.messages.join("\n"),
+  const pair = { ...s, player: batch.player, partner: batch.partner };
+  const world = await db.world.toArray();
+  const baseline = buildContext("chat", pair,
+    events, memories, world, prefs, p, batch.messages.join("\n"),
     { chatMessages: batch.messages });
+  return preparePrefix(baseline, pair, p, prefs, "chat", events, memories, world, rewrite);
 }
 
 export async function previewChat(storyId: string) {
@@ -89,7 +93,7 @@ export async function previewChat(storyId: string) {
   const events = await db.events.where("storyId").equals(storyId).sortBy("seq");
   const pending = pendingChatMessages(events, s.player, s.partner);
   if (!pending.length) throw Error("先发送消息，再查看本次参考内容");
-  return contextFor(s, newBatch(s, pending, (events.at(-1)?.seq || 0) + 1));
+  return (await contextFor(s, newBatch(s, pending, (events.at(-1)?.seq || 0) + 1))).report;
 }
 
 function newBatch(s: Story, sources: SceneEvent[], cutoff: number): ChatBatch {
@@ -144,7 +148,8 @@ export async function replyChat(storyId: string, batchId?: string, legacyEventId
     const jobId = uid();
     let raw = "", saving = Promise.resolve(), storageError: unknown;
     try {
-      const { p, key } = await settings();
+      const connection = await settings();
+      const { p, key } = connection;
       if (!key.trim()) throw Error("请先到设置填写 API Key，当前没有发送请求");
       if (legacyEventId) batchId = await adoptLegacyReply(storyId, legacyEventId);
       const snapshot = await db.transaction("rw", [db.stories, db.events, db.chatBatches, db.jobs], async () => {
@@ -185,7 +190,8 @@ export async function replyChat(storyId: string, batchId?: string, legacyEventId
           replies: events.filter((e) => selected.replyIds.includes(e.id)) };
       });
       batch = snapshot.batch;
-      const context = await contextFor(snapshot.s, batch);
+      const prepared = await contextFor(snapshot.s, batch, !!batchId || !!legacyEventId, connection);
+      const context = prepared.report;
       await db.chatBatches.update(batch.id, { request: context });
       let lastSave = 0;
       const result = await generate(p, key, context.system, context.user, control.signal,
@@ -195,7 +201,7 @@ export async function replyChat(storyId: string, batchId?: string, legacyEventId
           lastSave = Date.now();
           saving = saving.then(() => db.chatBatches.update(batch!.id, { raw: text }))
             .then(() => {}).catch((error) => { storageError ??= error; });
-        }, fetch, { kind: "chat", stablePrefix: context.stablePrefix });
+        }, fetch, { kind: "chat", stablePrefix: context.stablePrefix, messages: context.messages });
       raw = result.text;
       await saving;
       if (storageError) throw storageError;
@@ -205,7 +211,7 @@ export async function replyChat(storyId: string, batchId?: string, legacyEventId
       try { texts = repliesSchema.parse(parseJSON(raw)).messages; }
       catch { throw Error("回复格式未通过检查，原始内容已保留。请重试本组。"); }
       const request = { ...context, usage: result.usage, durationMs: result.durationMs };
-      await db.transaction("rw", [db.events, db.stories, db.chatBatches, db.memories, db.jobs], async () => {
+      await db.transaction("rw", [db.events, db.stories, db.chatBatches, db.memories, db.jobs, db.promptSessions], async () => {
         if (!await db.stories.get(storyId)) throw Error("故事已删除，未写入回复");
         if (control.signal.aborted) throw Error("回复已停止");
         for (const source of batch!.sources) {
@@ -257,6 +263,8 @@ export async function replyChat(storyId: string, batchId?: string, legacyEventId
           error: "", updated: Date.now() });
         await db.stories.update(storyId, { updated: Date.now() });
         await db.jobs.update(jobId, { status: "complete" });
+        const adopted = await db.events.bulkGet([...batch!.sources.map((source) => source.id), ...replyIds]);
+        await commitPrefix(prepared, snapshot.s, raw, adopted.filter((e): e is SceneEvent => !!e), result.usage);
       });
     } catch (error) {
       await saving;

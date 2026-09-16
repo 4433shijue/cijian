@@ -136,6 +136,7 @@ const profile = z.object({
   frequencyPenalty: z.number().finite().min(0).max(2).nullable().optional(),
   outputMode: z.enum(["auto", "schema", "json", "compatible"]).optional(),
   cachePolicy: z.enum(["auto", "off"]).optional(),
+  prefixReuse: z.enum(["auto", "on", "off"]).optional(),
   remember: z.boolean(),
   key: str.optional(),
 });

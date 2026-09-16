@@ -1,8 +1,8 @@
 # 此间 · 角色小剧场
 
-当前版本：**1.3.0**
+当前版本：**1.4.0**
 
-这一版让正文和手机聊天默认自动接续，台词差异不再拦截完整正文。旧故事可以整本启用互通，较早经历自动保存为可编辑摘记，并按关键词召回相关原文。保留折叠的「写作偏好」、文风 DIY 和连续多条消息、整组回复。
+这一版按 DeepSeek 的多轮对话与上下文缓存机制调整请求：原样保留前轮请求和 AI 回复，新内容追加在末尾，接近容量上限时重新整理历史；补齐命中与未命中统计。正文聊天自动互通、折叠的「写作偏好」、文风 DIY 和连续消息、整组回复继续可用。
 
 由你决定剧情进度的本地优先网页。小说只扩写指定瞬间；手机聊天与正文共享故事经历，按角色知情范围读取资料。
 
@@ -35,9 +35,13 @@ API 设置的「生成偏好」可调整温度，留空使用模型默认值。C
 
 本地摘记是每段原文的短摘录，较长内容保留开头与结尾并标注省略，不等于完整语义摘要。关键词召回能补充相关旧原文，但不能保证无限长故事的每个细节都被模型读到。AI 摘要每批最多处理 20 个节点，并受模型容量限制；不同知情范围分别请求，正文摘要的知情范围继承来源，私密内容不会混入公共摘要。摘要失败不影响已经保存的正文、聊天和本地摘记。
 
-正文窗口滑动时，常驻世界书和人设所在的前缀保持原顺序、原文字；修改这些设定会改变前缀。API 高级设置提供「输出格式」与「显式缓存标记」。自动格式只为已识别的官方模型启用原生结构约束，自定义接口默认兼容，也可手动选择严格结构或 JSON 模式。Claude 在固定材料末尾设置短期缓存标记；已识别的官方 GPT-5.6 Responses 请求使用显式缓存边界；其他协议依赖服务的自动缓存。关闭显式标记不会关闭服务自身的自动缓存。接口拒绝参数时会提示调整，不会自动发送额外请求。
+API 高级设置的「多轮前缀复用」默认对 DeepSeek 官方 Chat 接口或模型名含 deepseek 的兼容接口启用；中转站使用其他别名时可手动开启，也可关闭回到逐轮整理。程序原样保留成功请求中的 system / user 消息和服务返回的 assistant 正文，下一轮只追加新材料与当前任务。不会将回复重新拼成另一份聊天文本，也不会额外调用模型预热。正文、不同聊天对象和不同接口分别保留请求；在两种模式间切换仍按时间线带入新增经历，作者资料不会进入聊天请求。
 
-开发者模式下，段落「参考内容」显示本次服务返回的缓存读取、写入、输入占比与请求耗时。没有返回的统计标为「服务未返回」。实际缓存受服务、模型、前缀长度、有效期等因素影响，不能保证命中。协议实现依据 [OpenAI Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)、[OpenAI Structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs)、[Claude Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)、[Claude Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)、[Gemini Caching](https://ai.google.dev/gemini-api/docs/generate-content/caching) 与 [Gemini Structured outputs](https://ai.google.dev/gemini-api/docs/structured-output)。
+复用期间会保留超出最近正文窗口、但已发给模型的历史。接近输入预算时，按当前知情范围、最近正文窗口、旧经历摘记和相关原文重新组织；首次组织及重整时给后续追加预留空间，必读材料仍全部保留。修改已带入的正文、知情范围、记忆、人设、世界书、文风或模型配置时重新组织；重写只读目标之前的经历，失败或中断的输出不进入复用历史。请求历史保存在当前浏览器，刷新后可继续使用；导出备份不包含它，删除故事时一并清理。
+
+开发者模式的「参考内容」显示服务返回的缓存命中、未命中、命中率与耗时，也说明本次是在延续前缀还是重新整理。DeepSeek 的命中率按 `prompt_cache_hit_tokens / (prompt_cache_hit_tokens + prompt_cache_miss_tokens)` 计算，未命中不当作缓存写入；官方流式请求会要求返回 usage。其他接口缺少统计时显示「服务未返回」，不把未知显示成零。最终请求可查看实际发送的 messages。DeepSeek 的缓存自动开启，完整相同前缀有助于复用，但建立需要时间，也会过期或被清理，不能保证命中。参考 [DeepSeek 上下文硬盘缓存](https://api-docs.deepseek.com/zh-cn/guides/kv_cache/) 与 [多轮对话](https://api-docs.deepseek.com/zh-cn/guides/multi_round_chat/)。
+
+输出格式仍可选择自动、严格结构、JSON 或兼容模式。其他协议原有缓存参数保持不变：Claude 使用固定材料末尾的短期缓存标记，已识别的官方 GPT-5.6 Responses 使用显式缓存边界，可在高级设置关闭显式标记。服务自身的自动缓存由服务管理；接口拒绝参数时提示调整，不自动重试。参考 [OpenAI Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)、[Claude Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)、[Gemini Caching](https://ai.google.dev/gemini-api/docs/generate-content/caching)。
 
 卡壳时点击正文输入框旁的「灵感小助手」。它使用当前故事的人物副本、已绑定且启用并适用的世界书，以及最近 3 段完整正文，生成四种不同方向；严格知情模式排除待复核段落。选择只会把建议放进输入框，已有文字会保留，可以调整后再扩写；关闭窗口也可以自己写。这轮建议按故事保存，重开或刷新不会重新请求。「你再想想」会调用当前模型重新生成四项。下一段正文或正文重写成功后清空旧建议，未完成草稿和手机聊天不会清空；过期请求的迟到结果也不会恢复旧建议。
 
@@ -86,6 +90,7 @@ npm run preview
 - `src/db.ts`：Dexie 数据库、故事角色副本、版本与记忆失效。
 - `src/model.ts`：四协议、SSE 分片、取消、超时和完成标记。
 - `src/context.ts`：知情过滤、固定前缀、正文滑动窗口、预算和参考报告。
+- `src/prefix-cache.ts`：多轮请求复用、历史与知情范围变更失效、容量重整和命中率计算。
 - `src/style-presets.ts`：内置文风、开发者自定义预设与故事文风解析。
 - `src/output.ts`：结构约束、JSON 提取、可读草稿恢复与台词检查。
 - `src/engine.ts`：故事互斥任务、草稿、事实摘录和记忆进度。
