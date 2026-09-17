@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   BookOpen,
@@ -7,6 +7,10 @@ import {
   Settings,
   Plus,
   ArrowLeft,
+  ArrowUpToLine,
+  ArrowDownToLine,
+  Maximize2,
+  Minimize2,
   Send,
   Square,
   Feather,
@@ -32,6 +36,7 @@ import { InspirationAssistant } from "./InspirationAssistant";
 import { inspirationCount, chooseInspiration } from "./inspiration";
 import { proseCount } from "./context";
 import { cacheHitPercent } from "./prefix-cache";
+import { useReadingLayout } from "./reading-layout";
 import { sendChatMessage, replyChat, previewChat, pendingChatMessages, dismissChatBatch } from "./chat";
 import { draftText, missingQuotes } from "./output";
 import {
@@ -253,8 +258,10 @@ export default function App() {
   const [route, setRoute] = useState(location.hash.slice(1) || "stories");
   const [notice, setNotice] = useState("");
   const [fatal, setFatal] = useState("");
+  const [readingStory, setReadingStory] = useState("");
+  const reading = !!readingStory && route === "story/" + readingStory;
   useEffect(() => {
-    const fn = () => setRoute(location.hash.slice(1) || "stories");
+    const fn = () => { setRoute(location.hash.slice(1) || "stories"); setReadingStory(""); };
     addEventListener("hashchange", fn);
     return () => removeEventListener("hashchange", fn);
   }, []);
@@ -282,7 +289,7 @@ export default function App() {
     ["settings", "设置", Settings],
   ] as const;
   return (
-    <div className="app">
+    <div className={"app" + (reading ? " is-reading" : "")}>
       <aside className="sidebar" data-guide="sidebar">
         <a className="brand" href="#stories">
           <img
@@ -331,7 +338,8 @@ export default function App() {
         {route === "start" ? (
           <StarterPage notify={setNotice} />
         ) : route.startsWith("story/") ? (
-          <StoryPage id={route.slice(6)} notify={setNotice} />
+          <StoryPage key={route.slice(6)} id={route.slice(6)} notify={setNotice}
+            reading={reading} onReadingChange={(value) => setReadingStory(value ? route.slice(6) : "")} />
         ) : section === "roles" ? (
           <RolesPage notify={setNotice} />
         ) : section === "world" ? (
@@ -1664,12 +1672,18 @@ function StoryHealth({
     </details>
   );
 }
-function StoryPage({ id, notify }: { id: string; notify: Notice }) {
+function StoryPage({ id, notify, reading, onReadingChange }: {
+  id: string; notify: Notice; reading: boolean; onReadingChange: (value: boolean) => void;
+}) {
   const [localInputs, setLocalInputs] = useState<Record<string, string>>({});
   const sendingMessage = useRef(false);
   const [sending, setSending] = useState(false);
   const chatEnd = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLElement>(null);
+  const storyPage = useRef<HTMLDivElement>(null);
+  const storyTop = useRef<HTMLDivElement>(null);
+  const readerToggle = useRef<HTMLButtonElement>(null);
+  const [layout, changeLayout] = useReadingLayout(id);
   const s = useLiveQuery(() => db.stories.get(id), [id]);
   const events =
     useLiveQuery(
@@ -1699,12 +1713,51 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
     [referenceEvent, setReferenceEvent] = useState<string>(),
     [saveState, setSaveState] = useState("已保存到本机");
   const chatUpdate = chatBatches.map((batch) => `${batch.id}:${batch.status}:${batch.updated}`).join("|");
+  useLayoutEffect(() => {
+    const page = storyPage.current, editor = composer.current;
+    if (!page || !editor) return;
+    const measure = () => {
+      const space = reading ? 12 : editor.offsetHeight + (parseFloat(getComputedStyle(editor).bottom) || 0) + 12;
+      page.style.setProperty("--reader-bottom", `${space}px`);
+      if (chatEnd.current) chatEnd.current.style.scrollMarginBottom = `${space + 60}px`;
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(editor);
+    window.addEventListener("resize", measure);
+    return () => { observer.disconnect(); window.removeEventListener("resize", measure); };
+  }, [reading, layout.composerCollapsed, mode, !!s]);
+  function toggleReading(value: boolean) {
+    const anchor = [...(storyPage.current?.querySelectorAll<HTMLElement>("[data-reading-anchor]") || [])]
+      .find((element) => element.getBoundingClientRect().bottom > 0);
+    const top = anchor?.getBoundingClientRect().top;
+    onReadingChange(value);
+    requestAnimationFrame(() => {
+      if (anchor && top !== undefined) window.scrollBy({ top: anchor.getBoundingClientRect().top - top, behavior: "instant" });
+      readerToggle.current?.focus({ preventScroll: true });
+    });
+  }
   useEffect(() => {
-    if (mode !== "chat") return;
+    if (!reading) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !document.querySelector('[role="dialog"]')) toggleReading(false);
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [reading]);
+  function jumpTo(end: boolean) {
+    const target = end ? chatEnd.current : storyTop.current;
+    target?.scrollIntoView({ block: end ? "end" : "start",
+      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+  }
+  function openComposer() {
+    changeLayout({ composerCollapsed: false });
+    requestAnimationFrame(() => document.getElementById("story-input")?.focus());
+  }
+  useEffect(() => {
+    if (mode !== "chat" || reading) return;
     const frame = requestAnimationFrame(() => {
       if (!chatEnd.current || !composer.current) return;
-      const bottom = parseFloat(getComputedStyle(composer.current).bottom) || 0;
-      chatEnd.current.style.scrollMarginBottom = `${composer.current.offsetHeight + bottom + 24}px`;
       chatEnd.current.scrollIntoView({ block: "end" });
     });
     return () => cancelAnimationFrame(frame);
@@ -1865,7 +1918,17 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
   const visible = events.filter((e) => !e.deleted);
   const pair = [s.player, s.partner];
   return (
-    <div className="story-page">
+    <div ref={storyPage} className={"story-page" + (reading ? " story-reading" : "")}>
+      <div ref={storyTop} className="story-top" aria-hidden="true" />
+      <div className="story-tools-toggle">
+        <button aria-controls="story-tools" aria-expanded={!layout.toolbarCollapsed}
+          onClick={() => changeLayout({ toolbarCollapsed: !layout.toolbarCollapsed })}>
+          {layout.toolbarCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+          {layout.toolbarCollapsed ? "展开功能栏" : "收起功能栏"}
+        </button>
+        {layout.toolbarCollapsed && <span className="hint">{s.title} · {mode === "novel" ? "正文" : "手机聊天"}</span>}
+      </div>
+      <div id="story-tools" hidden={layout.toolbarCollapsed || reading}>
       <header className="story-heading">
         <div className="row">
           <a className="icon-button" href="#stories" aria-label="返回故事列表">
@@ -1936,7 +1999,8 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
         </div>
         <span className="hint">同一本故事，同一条时间线</span>
       </div>
-      {events.some(
+      </div>
+      {!reading && events.some(
         (event) =>
           event.kind === "novel" &&
           event.status === "complete" &&
@@ -1946,19 +2010,19 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
           story={s}
           onContinue={() => {
             setMode("novel");
-            document.getElementById("story-input")?.focus();
+            openComposer();
           }}
           onChat={() => setMode("chat")}
         />
       )}
-      {mode === "chat" && (
+      {!reading && !layout.toolbarCollapsed && mode === "chat" && (
         <ContextTip id="chat" title="选好身份，再开始聊天">
           <p>
             「我扮演」是你发消息时的身份，「聊天对象」是回复你的角色。连续发送消息，说完后点「让 TA 回复」，对方会结合整组消息自然分条回复。{sharedTimeline(s) ? "普通正文会自动接入聊天，聊天也会带回正文；私聊仍只对参与双方可知。" : "当前使用严格知情模式，正文按事实授权进入聊天。可以在故事设置中切换为自动互通。"}
           </p>
         </ContextTip>
       )}
-      {s.timelineMode === undefined && (
+      {!reading && !layout.toolbarCollapsed && s.timelineMode === undefined && (
         <div className="timeline-upgrade">
           <div><strong>让正文和手机聊天自动接上</strong><p>整本故事一次启用，普通正文无需逐段授权。已有的特定角色授权会保留，私密内容可在段落编辑中设置。</p></div>
           <button disabled={generating} onClick={async () => {
@@ -1967,7 +2031,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
           }}>整本启用自动互通</button>
         </div>
       )}
-      {mode === "chat" && s.roles.length < 2 && (
+      {!reading && !layout.toolbarCollapsed && mode === "chat" && s.roles.length < 2 && (
         <div className="starter-reminder">
           <span>
             聊天需要至少两位角色。先在角色库添加一位，再到故事设置中带入。
@@ -1975,7 +2039,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
           <button onClick={() => setPanel("settings")}>打开故事设置</button>
         </div>
       )}
-      {mode === "chat" && (
+      {!reading && !layout.toolbarCollapsed && mode === "chat" && (
         <div className="chat-identity">
           <Field label="我扮演">
             <select
@@ -2019,7 +2083,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
         aria-live="polite"
       >
         {mode === "novel" && (
-          <div className="opening">
+          <div className="opening" data-reading-anchor>
             <span className="eyebrow">PROLOGUE / 故事的起点</span>
             <p>{s.background || "故事还没开始，你可以先写一个瞬间。"}</p>
           </div>
@@ -2068,6 +2132,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
           return (
             <article
               key={e.id}
+              data-reading-anchor
               className={
                 e.kind === "novel"
                   ? "prose-event"
@@ -2080,7 +2145,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
                   <span className="event-number">
                     {String(i + 1).padStart(2, "0")} / 这一刻
                   </span>
-                  {e.status === "complete" && (
+                  {e.status === "complete" && !reading && (
                     <button
                       className="prose-collapse"
                       aria-expanded={!e.collapsed}
@@ -2132,13 +2197,13 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
                     : "未完成草稿 · 不进入正式经历"}
                 </div>
               )}
-              {e.kind === "novel" && e.status === "complete" && e.collapsed && (
+              {e.kind === "novel" && e.status === "complete" && e.collapsed && !reading && (
                 <p className="prose-preview">{e.text.slice(0, 100)}</p>
               )}
               <div
                 id={"prose-body-" + e.id}
                 hidden={
-                  e.kind === "novel" && e.status === "complete" && e.collapsed
+                  !reading && e.kind === "novel" && e.status === "complete" && e.collapsed
                 }
               >
                 <p className="event-text">
@@ -2179,6 +2244,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
                       disabled={busy}
                       onClick={() => {
                         changeInput(e.input);
+                        openComposer();
                         notify("原输入已放回输入框；草稿仍保留");
                       }}
                     >
@@ -2241,16 +2307,16 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
               : "选好彼此的身份，发出第一条消息。"}
           </Empty>
         )}
-        {mode === "chat" && <div ref={chatEnd} aria-hidden="true" />}
+        <div ref={chatEnd} className="story-end" aria-hidden="true" />
       </section>
-      {mode === "novel" && (
+      {!reading && !layout.composerCollapsed && mode === "novel" && (
         <FirstSceneCoach
           story={s}
           events={events}
           onExample={(text) => {
             if (!input.trim()) {
               changeInput(text);
-              document.getElementById("story-input")?.focus();
+              openComposer();
             } else {
               notify("输入框已经有内容，可以参考示例自行调整。");
             }
@@ -2259,10 +2325,22 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
       )}
       <section
         ref={composer}
-        className={mode === "chat" ? "composer chat-composer" : "composer"}
+        className={"composer" + (mode === "chat" ? " chat-composer" : "") + (layout.composerCollapsed ? " composer-collapsed" : "")}
         id="story-composer"
         data-guide="novel-compose"
+        hidden={reading}
       >
+        <div className="composer-heading">
+          <span className="hint">{mode === "novel" ? "写下这一刻" : "手机消息"}
+            {layout.composerCollapsed && (generating ? " · 正在生成…" : input.trim() ? " · 有未发送的输入" : mode === "chat" && pendingMessages.length ? ` · ${pendingMessages.length} 条待回复` : "")}</span>
+          <button aria-expanded={!layout.composerCollapsed} aria-controls="story-composer-fields"
+            onClick={() => layout.composerCollapsed ? openComposer() : changeLayout({ composerCollapsed: true })}>
+            {layout.composerCollapsed ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+            {layout.composerCollapsed ? "展开输入框" : "收起输入框"}
+          </button>
+          {layout.composerCollapsed && generating && <button onClick={() => stop(id)}><Square size={14} />停止生成</button>}
+        </div>
+        <div id="story-composer-fields" hidden={layout.composerCollapsed}>
         {mode === "novel" && (
           <details className="writing-preferences">
             <summary>
@@ -2404,7 +2482,18 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
             </button>
           )}
         </footer>
+        </div>
       </section>
+      <nav className="story-reader-controls" aria-label="故事阅读控制">
+        <button title="回到故事顶部" aria-label="回到故事顶部" onClick={() => jumpTo(false)}><ArrowUpToLine size={18} /></button>
+        <button title="回到故事底部" aria-label="回到故事底部" onClick={() => jumpTo(true)}><ArrowDownToLine size={18} /></button>
+        <button ref={readerToggle} title={reading ? "退出沉浸阅读" : "沉浸阅读"} aria-pressed={reading}
+          onClick={() => toggleReading(!reading)}>
+          {reading ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          {reading ? "退出阅读" : "沉浸阅读"}
+        </button>
+        {reading && generating && <button onClick={() => stop(id)} aria-label="停止生成"><Square size={16} /></button>}
+      </nav>
       {panel === "inspiration" && (
         <Modal title="灵感小助手" onClose={() => setPanel("")}>
           <InspirationAssistant
@@ -2420,7 +2509,7 @@ function StoryPage({ id, notify }: { id: string; notify: Notice }) {
                 }));
                 setSaveState("已保存到本机");
                 setPanel("");
-                document.getElementById("story-input")?.focus();
+                openComposer();
                 notify("灵感已放进输入框，可以调整后再扩写。");
               } catch {
                 notify("输入没能保存，灵感仍保留在窗口里，请重试。");

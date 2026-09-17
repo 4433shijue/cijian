@@ -259,6 +259,13 @@ export async function reviseEvent(
   });
 }
 
+// Display-only updates must not revise event versions or invalidate memories/cache.
+export async function collapseEarlierProse(storyId: string, before: number) {
+  await db.events.where("storyId").equals(storyId)
+    .filter((e) => e.kind === "novel" && e.status === "complete" && !e.deleted && e.seq < before && !e.collapsed)
+    .modify({ collapsed: true });
+}
+
 export async function refreshTimelineMemory(storyId: string) {
   await db.transaction("rw", [db.stories, db.events, db.memories], async () => {
     const s = await db.stories.get(storyId);

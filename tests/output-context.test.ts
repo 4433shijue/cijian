@@ -616,6 +616,17 @@ describe("author-confirmed adoption", () => {
       adoptDraft(draft.id, "重复采用", draft.versionId, draft.raw),
     ).rejects.toThrow("已改变");
   });
+  it("folds earlier completed prose on draft adoption without changing its version or hiding later prose", async () => {
+    const s = await story();
+    const earlier = event(s.id, 1);
+    const draft = event(s.id, 2, { status: "draft", raw: "草稿正文", text: "草稿正文", versions: [] });
+    const later = event(s.id, 3);
+    await db.events.bulkAdd([earlier, draft, later]);
+    await adoptDraft(draft.id, "采用后的正文", draft.versionId, draft.raw);
+    expect(await db.events.get(earlier.id)).toMatchObject({ collapsed: true, versionId: earlier.versionId, text: earlier.text });
+    expect(await db.events.get(draft.id)).toMatchObject({ status: "complete", collapsed: false });
+    expect((await db.events.get(later.id))?.collapsed).not.toBe(true);
+  });
   it("preserves a new composer draft and invalidates dependent later events and memories", async () => {
     const s = await story();
     const draft = event(s.id, 1, {

@@ -2,7 +2,7 @@ import { withStoryLock } from "./locks";
 import { active, isBusy } from "./generation-state";
 export { isBusy, stop } from "./generation-state";
 import { z } from "zod";
-import { db, keyFor, reviseEvent, refreshTimelineMemory } from "./db";
+import { db, keyFor, reviseEvent, refreshTimelineMemory, collapseEarlierProse } from "./db";
 import { fullAudience, sharedTimeline, usableEvent } from "./timeline";
 import {
   uid,
@@ -296,6 +296,7 @@ async function runUnlocked(
         if (!old) {
           await db.events.put(event!);
           adopted.push(event!);
+          if (kind === "novel") await collapseEarlierProse(storyId, event!.seq);
         }
         else {
           await reviseEvent(
@@ -313,6 +314,7 @@ async function runUnlocked(
             acceptedByAuthor: undefined,
             rewriteOf: undefined,
             warnings: event!.warnings || [],
+            collapsed: false,
           });
           await db.events.delete(event!.id);
         }
@@ -623,7 +625,9 @@ export async function adoptDraft(
           raw: draft.raw,
           request: draft.request,
           rewriteOf: undefined,
+          collapsed: false,
         });
+        if (!draft.rewriteOf) await collapseEarlierProse(story.id, target.seq);
         if (target.id !== draft.id) await db.events.delete(draft.id);
         for (const job of await db.jobs
           .where("storyId")
