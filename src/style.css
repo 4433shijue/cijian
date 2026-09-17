@@ -1055,6 +1055,25 @@ details pre {
   gap: 12px;
   margin: 20px 0 12px;
 }
+.inspiration-stale {
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: #f4efdb;
+  color: #77643c;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.inspiration-feedback {
+  display: grid;
+  gap: 8px;
+  margin-top: 20px;
+  font-size: 13px;
+  color: #647e60;
+}
+.inspiration-feedback textarea {
+  min-height: 76px;
+  resize: vertical;
+}
 @media (max-width: 600px) {
   .inspiration-grid {
     grid-template-columns: 1fr;

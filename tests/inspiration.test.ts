@@ -6,7 +6,10 @@ import {
   parseInspiration,
   requestInspiration,
   chooseInspiration,
+  inspirationState,
 } from "../src/inspiration";
+import { authorIdea } from "../src/inspiration-context";
+import { outputSchemas } from "../src/output";
 import { run } from "../src/engine";
 import { exportBackup, validateBackup, importBackup } from "../src/backup";
 import type {
@@ -15,6 +18,7 @@ import type {
   Profile,
   SceneEvent,
   Story,
+  Memory,
 } from "../src/types";
 
 const prefs: Preferences = {
@@ -36,13 +40,10 @@ const profile: Profile = {
   remember: false,
 };
 const options = (round = 1): InspirationOption[] =>
-  (["relationship", "discovery", "external", "decision"] as const).map(
-    (direction, i) => ({
-      direction,
-      title: `方向${round}-${i}`,
-      text: `第${round}轮的第${i}种事件，人物做出不同的选择。`,
-    }),
-  );
+  Array.from({ length: 4 }, (_, i) => ({
+    title: `方向${round}-${i}`,
+    text: `第${round}轮的第${i}种事件，人物做出不同的选择。`,
+  }));
 const response = (data: unknown, finish_reason = "stop") =>
   new Response(
     JSON.stringify({
@@ -113,7 +114,11 @@ it("uses the most recent three full replies including folded text, story roles a
     event(3, { collapsed: true }),
     event(4),
     event(5),
-    event(6, { kind: "message", text: "私聊不在参考窗口" }),
+    event(6, {
+      kind: "message",
+      text: "刚刚在私聊里约好了明天见面",
+      participants: [story.roles[0].id],
+    }),
     event(7, { status: "draft" }),
     event(8, { deleted: true }),
     event(9, { review: true }),
@@ -135,16 +140,28 @@ it("uses the most recent three full replies including folded text, story roles a
     "prose-3",
     "prose-4",
     "prose-5",
+    "prose-6",
   ]);
-  expect(buildInspirationContext({ ...story, timelineMode: "shared" }, events, world, prefs, profile).sources.map((s) => s.id))
-    .toEqual(["prose-4", "prose-5", "prose-9"]);
-  for (const text of [story.roles[0].persona, world[0].text, "正文内容标记_3"])
+  expect(
+    buildInspirationContext(
+      { ...story, timelineMode: "shared" },
+      events,
+      world,
+      prefs,
+      profile,
+    ).sources.map((s) => s.id),
+  ).toEqual(["prose-4", "prose-5", "prose-6", "prose-9"]);
+  for (const text of [
+    ...story.roles[0].paragraphs.map((p) => p.text),
+    world[0].text,
+    "正文内容标记_3",
+    "刚刚在私聊里约好了明天见面",
+  ])
     expect(built.report.user).toContain(text);
   for (const text of [
     "正文内容标记_1",
     "正文内容标记_2",
     "正文内容标记_7",
-    "私聊不在参考窗口",
     "未加载世界书",
     "关闭的世界书",
   ])
@@ -157,7 +174,7 @@ it("uses the most recent three full replies including folded text, story roles a
       { ...prefs, inspirationParagraphs: 5 },
       profile,
     ).sources,
-  ).toHaveLength(5);
+  ).toHaveLength(6);
   expect(() =>
     buildInspirationContext(story, events, world, prefs, {
       ...profile,
@@ -166,21 +183,26 @@ it("uses the most recent three full replies including folded text, story roles a
   ).toThrow();
 });
 
-it("rejects incomplete, duplicate and recycled option sets", () => {
+it("accepts unclassified cards and old category fields, validating only complete card structure", () => {
   expect(parseInspiration(JSON.stringify({ options: options() }))).toHaveLength(
     4,
   );
   for (const invalid of [
     options().slice(0, 3),
-    options().map((o) => ({ ...o, direction: "relationship" })),
-    options().map((o) => ({ ...o, text: "同一件事。" })),
+    options().map((o) => ({ ...o, text: "  " })),
+    options().map((o) => ({ ...o, title: 42 })),
   ])
     expect(() =>
       parseInspiration(JSON.stringify({ options: invalid })),
     ).toThrow();
-  expect(() =>
-    parseInspiration(JSON.stringify({ options: options() }), options()),
-  ).toThrow("沿用");
+  expect(
+    parseInspiration(
+      JSON.stringify({
+        options: options().map((o) => ({ ...o, direction: "relationship" })),
+      }),
+    ),
+  ).toEqual(options());
+  expect(JSON.stringify(outputSchemas.inspiration)).not.toContain("direction");
 });
 
 it("deduplicates concurrent opens, caches only options, and retains them when a reroll fails", async () => {
@@ -270,20 +292,30 @@ it("does not restore suggestions to a deleted story", async () => {
 });
 
 it("switches the chosen idea across rounds while preserving the author's writing", async () => {
-  await db.stories.update(story.id, {
-    inspiration: { options: options(), sources: [], created: 1 },
-  });
+  await db.stories.update(story.id, { draft: "作者自己的开头。" });
+  const fetcher = vi
+    .fn()
+    .mockResolvedValueOnce(response({ options: options() }))
+    .mockResolvedValueOnce(response({ options: options(2) }));
+  vi.stubGlobal("fetch", fetcher);
+  await requestInspiration(story.id);
   const chosen = await chooseInspiration(
     story.id,
     options()[0].text,
     "作者自己的开头。",
   );
   expect(chosen).toBe("作者自己的开头。\n\n" + options()[0].text);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockResolvedValue(response({ options: options(2) })),
+  expect((await inspirationState(story.id))?.stale).toBe(false);
+  expect(authorIdea((await db.stories.get(story.id))!)).toBe(
+    "作者自己的开头。",
   );
   await requestInspiration(story.id);
+  const body = JSON.parse(fetcher.mock.calls[1][1].body);
+  const draftSection = body.messages[1].content
+    .split("【作者尚未采用的想法")[1]
+    .split("【上一轮建议")[0];
+  expect(draftSection).toContain("没有发生");
+  expect(draftSection).not.toContain(options()[0].text);
   expect(await chooseInspiration(story.id, options(2)[1].text, chosen)).toBe(
     "作者自己的开头。\n\n" + options(2)[1].text,
   );
@@ -339,4 +371,319 @@ it("backs up folding and developer settings without treating ideas as saved stor
   expect(
     (await db.preferences.get("preferences"))?.stylePresets?.[0].name,
   ).toBe("冷静短句");
+});
+
+it("grounds suggestions in chronological chat and current accepted memories, with private knowledge labelled", async () => {
+  const [a, b] = story.roles;
+  const events = [
+    event(1, { text: "她明确说现在不想拥抱。" }),
+    event(2),
+    event(3),
+    event(4),
+    event(5, {
+      kind: "message",
+      speaker: b.id,
+      participants: [a.id, b.id],
+      chatPending: true,
+      text: "今晚不去见面，明天在书店碰头。",
+    }),
+  ];
+  const memory: Memory = {
+    id: "promise",
+    storyId: story.id,
+    text: "她拒绝了拥抱，对方答应保持距离。",
+    knownBy: [a.id, b.id],
+    scope: "story",
+    sources: [{ id: "prose-1", versionId: "version-1" }],
+    status: "accepted",
+    created: 1,
+  };
+  const world = await db.world.toArray();
+  const secret = {
+    ...world[0],
+    id: "secret",
+    text: "作者秘密标记",
+    audience: "author" as const,
+  };
+  story.worldIds.push(secret.id);
+  const memories: Memory[] = [
+    memory,
+    { ...memory, id: "candidate", status: "candidate", text: "未确认的猜测" },
+    {
+      ...memory,
+      id: "stale",
+      sources: [{ id: "prose-1", versionId: "old" }],
+      text: "旧版本记忆",
+    },
+    {
+      ...memory,
+      id: "other-story",
+      storyId: "elsewhere",
+      text: "别本故事的记忆",
+    },
+  ];
+  const { report, sources } = buildInspirationContext(
+    story,
+    events,
+    [...world, secret],
+    prefs,
+    profile,
+    memories,
+    "他不会主动靠近。",
+  );
+  expect(report.user).toContain(memory.text);
+  expect(report.user).toContain(events.at(-1)!.text);
+  expect(report.user.indexOf(memory.text)).toBeLessThan(
+    report.user.indexOf(events[1].text),
+  );
+  expect(report.user.indexOf(events[3].text)).toBeLessThan(
+    report.user.indexOf(events[4].text),
+  );
+  expect(report.included.find((m) => m.id === "promise")?.text).toContain(
+    `${a.name}（${a.id}）`,
+  );
+  expect(report.included.find((m) => m.id === "secret")?.text).toContain(
+    "未授权给任何角色",
+  );
+  expect(report.included.find((m) => m.id === "prose-5")?.label).toContain(
+    "尚待回复",
+  );
+  expect(
+    report.included.find((m) => m.id === "author-feedback")?.label,
+  ).toContain("不代表已发生");
+  expect(report.system).toContain("刚明确拒绝的事不能无缘由地突然接受");
+  expect(report.system).not.toContain("各出现一次");
+  for (const forbidden of ["未确认的猜测", "旧版本记忆", "别本故事的记忆"])
+    expect(report.user).not.toContain(forbidden);
+  expect(sources.map((ref) => ref.id)).toEqual(events.map((e) => e.id));
+});
+
+it("bounds recent messages, resolves world triggers and limits memory knowledge to source permissions", async () => {
+  const [a, b] = story.roles;
+  const events = Array.from({ length: 24 }, (_, i) =>
+    event(i + 1, {
+      kind: "message",
+      speaker: a.id,
+      participants: [a.id],
+      text: `私聊第${i + 1}条，约好在灯塔碰面。`,
+    }),
+  );
+  const world = await db.world.toArray();
+  world.push(
+    {
+      ...world[0],
+      id: "lighthouse",
+      always: false,
+      keywords: ["灯塔"],
+      text: "灯塔周围没有咖啡馆。",
+    },
+    {
+      ...world[0],
+      id: "irrelevant",
+      always: false,
+      keywords: ["机场"],
+      text: "未触发地点",
+    },
+  );
+  story.worldIds.push("lighthouse", "irrelevant");
+  const memory: Memory = {
+    id: "private-memory",
+    storyId: story.id,
+    text: "私聊约定",
+    knownBy: [a.id, b.id],
+    scope: "story",
+    sources: [{ id: "prose-1", versionId: "version-1" }],
+    status: "accepted",
+    created: 1,
+  };
+  const { report } = buildInspirationContext(
+    story,
+    events,
+    world,
+    prefs,
+    profile,
+    [memory],
+  );
+  expect(report.included.filter((m) => m.id.startsWith("prose-"))).toHaveLength(
+    20,
+  );
+  expect(report.user).not.toContain("私聊第4条");
+  expect(report.user).toContain("私聊第24条");
+  expect(report.user).toContain("灯塔周围没有咖啡馆");
+  expect(report.user).not.toContain("未触发地点");
+  expect(
+    report.included.find((m) => m.id === "private-memory")?.text,
+  ).not.toContain(b.name);
+});
+
+it.each([
+  "prose",
+  "chat",
+  "persona",
+  "world",
+  "memory",
+  "audience",
+  "rules",
+  "author-draft",
+])(
+  "marks saved ideas stale after changing %s, without calling the model or allowing adoption",
+  async (change) => {
+    await db.events.put(event(1));
+    const fetcher = vi.fn().mockResolvedValue(response({ options: options() }));
+    vi.stubGlobal("fetch", fetcher);
+    await requestInspiration(story.id);
+    expect((await inspirationState(story.id))?.stale).toBe(false);
+    if (change === "prose")
+      await db.events.update("prose-1", {
+        text: "新的明确拒绝",
+        versionId: "edited",
+      });
+    if (change === "chat")
+      await db.events.put(
+        event(2, {
+          kind: "message",
+          text: "新聊天约定",
+          participants: story.roles.map((r) => r.id),
+        }),
+      );
+    if (change === "persona")
+      await db.stories.update(story.id, {
+        roles: story.roles.map((r) => ({
+          ...r,
+          persona: "人设已修改",
+          paragraphs: [],
+        })),
+      });
+    if (change === "world")
+      await db.world.update(story.worldIds[0], { text: "世界规则已修改" });
+    if (change === "memory")
+      await db.memories.put({
+        id: "new-memory",
+        storyId: story.id,
+        text: "已确认的新约定",
+        sources: [{ id: "prose-1", versionId: "version-1" }],
+        knownBy: [],
+        scope: "story",
+        status: "accepted",
+        created: 1,
+      });
+    if (change === "audience")
+      await db.events.update("prose-1", { visibility: "author" });
+    if (change === "rules")
+      await db.preferences.update("preferences", {
+        prompts: { inspiration: { text: "保持距离", enabled: true } },
+      });
+    if (change === "author-draft")
+      await db.stories.update(story.id, { draft: "我修改了尚未采用的打算。" });
+    expect((await inspirationState(story.id))?.stale).toBe(true);
+    await expect(
+      chooseInspiration(
+        story.id,
+        options()[0].text,
+        (await db.stories.get(story.id))!.draft,
+      ),
+    ).rejects.toThrow("参考内容已经变化");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect((await db.stories.get(story.id))?.inspiration?.options).toEqual(
+      options(),
+    );
+  },
+);
+
+it("keeps a round current through folding, visual changes, unsent chat and unrelated data", async () => {
+  await db.events.put(event(1));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(response({ options: options() })),
+  );
+  await requestInspiration(story.id);
+  await db.events.update("prose-1", { collapsed: true });
+  await db.stories.update(story.id, {
+    updated: Date.now(),
+    title: "改了书名",
+    chatDraft: "还没发的消息",
+  });
+  await db.events.put(event(2, { storyId: "other-story" }));
+  await db.memories.put({
+    id: "candidate",
+    storyId: story.id,
+    text: "待确认",
+    knownBy: [],
+    scope: "story",
+    sources: [],
+    status: "candidate",
+    created: 1,
+  });
+  expect((await inspirationState(story.id))?.stale).toBe(false);
+  await expect(
+    chooseInspiration(story.id, options()[0].text, ""),
+  ).resolves.toBe(options()[0].text);
+});
+
+it("discards a late response after an in-flight persona edit and saves only an explicitly requested fresh round", async () => {
+  let finish!: (r: Response) => void;
+  const fetcher = vi
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    )
+    .mockResolvedValueOnce(response({ options: options(2) }));
+  vi.stubGlobal("fetch", fetcher);
+  const pending = requestInspiration(story.id);
+  await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+  await db.stories.update(story.id, {
+    roles: story.roles.map((r) => ({
+      ...r,
+      persona: "先保持距离，不主动靠近。",
+      paragraphs: [],
+    })),
+  });
+  finish(response({ options: options() }));
+  expect(await pending).toBe("stale");
+  expect((await db.stories.get(story.id))?.inspiration).toBeUndefined();
+  expect((await db.stories.get(story.id))?.inspirationRequest).toBeUndefined();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  await requestInspiration(story.id, "留在当前场景。");
+  const sent = JSON.parse(fetcher.mock.calls[1][1].body).messages[1].content;
+  expect(sent).toContain("先保持距离，不主动靠近。");
+  expect(sent).toContain("留在当前场景。");
+  expect((await inspirationState(story.id))?.stale).toBe(false);
+});
+
+it("retains legacy rounds for viewing but requires a refresh before selecting them", async () => {
+  await db.stories.update(story.id, {
+    inspiration: { options: options(), sources: [], created: 1 },
+  });
+  expect((await inspirationState(story.id))?.stale).toBe(true);
+  await expect(
+    chooseInspiration(story.id, options()[0].text, ""),
+  ).rejects.toThrow("参考内容已经变化");
+});
+
+it("never lets a superseded request replace a newer round or clear its request marker", async () => {
+  let finishOld!: (r: Response) => void;
+  const fetcher = vi
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          finishOld = resolve;
+        }),
+    )
+    .mockResolvedValueOnce(response({ options: options(2) }));
+  vi.stubGlobal("fetch", fetcher);
+  const old = requestInspiration(story.id);
+  await vi.waitFor(() => expect(finishOld).toBeTypeOf("function"));
+  await db.stories.update(story.id, { background: "新的开场条件" });
+  expect(await requestInspiration(story.id)).toBe("saved");
+  finishOld(response({ options: options() }));
+  expect(await old).toBe("stale");
+  expect((await db.stories.get(story.id))?.inspiration?.options).toEqual(
+    options(2),
+  );
+  expect((await inspirationState(story.id))?.stale).toBe(false);
+  expect(fetcher).toHaveBeenCalledTimes(2);
 });

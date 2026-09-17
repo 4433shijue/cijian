@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Lightbulb, RefreshCw } from "lucide-react";
-import { inspirationDirections, requestInspiration } from "./inspiration";
+import { useLiveQuery } from "dexie-react-hooks";
+import {
+  inspirationState,
+  pendingInspiration,
+  requestInspiration,
+} from "./inspiration";
 import type { Story } from "./types";
 
 export function InspirationAssistant({
@@ -16,16 +21,22 @@ export function InspirationAssistant({
 }) {
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState("");
+  const [feedback, setFeedback] = useState(story.inspiration?.feedback || "");
   const mounted = useRef(false);
   const busy = useRef(false);
-  const options = story.inspiration?.options || [];
-  async function ask() {
+  const state = useLiveQuery(() => inspirationState(story.id), [story.id]);
+  const options = state?.round?.options || story.inspiration?.options || [];
+  async function ask(pending?: ReturnType<typeof pendingInspiration>) {
     if (busy.current || blocked) return;
     busy.current = true;
     setThinking(true);
     setError("");
     try {
-      await requestInspiration(story.id);
+      const outcome = await (pending || requestInspiration(story.id, feedback));
+      if (mounted.current && outcome === "stale")
+        setError(
+          "生成期间参考内容发生了变化，这次结果没有替换当前建议。请点「你再想想」。",
+        );
     } catch (cause) {
       if (mounted.current)
         setError(
@@ -40,8 +51,10 @@ export function InspirationAssistant({
   }
   useEffect(() => {
     mounted.current = true;
-    // Opening a saved round is free; clearing it after new prose never sends a request.
-    if (!story.inspiration && !blocked) void ask();
+    // Join work already requested by the author. Stale saved rounds never auto-reroll.
+    const pending = pendingInspiration(story.id);
+    if (pending) void ask(pending);
+    else if (!story.inspiration && !blocked) void ask();
     return () => {
       mounted.current = false;
     };
@@ -49,12 +62,12 @@ export function InspirationAssistant({
   return (
     <div className="inspiration-assistant">
       <p className="inspiration-intro">
-        给接下来的故事找四条路。选一个放进输入框，改到合你心意再扩写。
+        顺着前文和人物当前的处境，想四种接得上的下一步。选一个放进输入框，再按你的想法调整。
       </p>
       {thinking && (
         <p className="inspiration-thinking" role="status">
           <Lightbulb size={18} />
-          正在想四个不同的方向，可以先关掉窗口。
+          正在想四个合乎情境的下一步，可以先关掉窗口。
         </p>
       )}
       {error && (
@@ -62,17 +75,21 @@ export function InspirationAssistant({
           {error}
         </p>
       )}
+      {state?.stale && (
+        <p className="inspiration-stale" role="status">
+          这轮灵感需要更新：前文、人设或参考内容已变化，或来自旧版小助手。旧建议仍保留供你查看，点「你再想想」后会按当前内容生成。
+        </p>
+      )}
       <div className="inspiration-grid">
         {options.map((option, index) => (
           <button
             className="inspiration-option"
-            key={option.direction}
-            disabled={thinking || blocked}
+            key={index}
+            disabled={thinking || blocked || !state || state.stale}
             onClick={() => onChoose(option.text)}
           >
             <span className="inspiration-direction">
-              {String.fromCharCode(65 + index)} ·{" "}
-              {inspirationDirections[option.direction]}
+              {String.fromCharCode(65 + index)} · 候选
             </span>
             <strong>{option.title}</strong>
             <span className="inspiration-text">{option.text}</span>
@@ -85,6 +102,16 @@ export function InspirationAssistant({
           这一轮已经清空。想找新的方向时，让小助手再想一轮就好。
         </p>
       )}
+      <label className="inspiration-feedback">
+        这次希望怎么调整？（可选）
+        <textarea
+          value={feedback}
+          rows={2}
+          disabled={thinking}
+          placeholder="比如：他不会主动靠近；留在当前场景，别突然变亲密。"
+          onChange={(event) => setFeedback(event.target.value)}
+        />
+      </label>
       <div className="inspiration-actions">
         <button onClick={onClose}>我自己写</button>
         <button
@@ -97,7 +124,7 @@ export function InspirationAssistant({
         </button>
       </div>
       <p className="hint">
-        这轮灵感会保留到下一段正文生成成功，关闭后可以再来看看。重新想一轮会再次调用你配置的模型。
+        关闭后可以再看这一轮；参考内容变化时会提示更新，不会自动重新调用模型。点击「你再想想」会再次调用你配置的模型。
       </p>
     </div>
   );

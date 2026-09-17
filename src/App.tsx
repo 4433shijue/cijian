@@ -3172,7 +3172,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
             </Field>
             <p className="hint">
               默认参考最近 3 段完整正文，可设为 1 到 20
-              段。新一轮灵感会使用新段数，关闭开发者模式后设置仍生效。
+              段，另参考最近 20 条已发送聊天和相关的已确认记忆，并区分人物知情范围。新一轮灵感会使用新段数，关闭开发者模式后设置仍生效。
             </p>
             <Field label="编辑提示词">
               <select

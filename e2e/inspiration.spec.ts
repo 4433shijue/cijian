@@ -1,7 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readStore, seedJourney } from "./fixtures";
 
-const directions = ["relationship", "discovery", "external", "decision"];
 const titles = [
   "把伞留给对方",
   "翻到一张旧纸条",
@@ -15,8 +14,7 @@ const texts = [
   "许知决定不再绕着话题走，她收起画稿，问周屿明天是否还会来书店。",
 ];
 const round = (number: number) => ({
-  options: directions.map((direction, i) => ({
-    direction,
+  options: titles.map((_, i) => ({
     title: `${titles[i]} ${number}`,
     text: `${texts[i]}（方案${number}）`,
   })),
@@ -342,4 +340,237 @@ test("closing a pending request allows reopening without a second call and stale
   expect(stored.sources.at(-1).id).toBe(
     events.find((event) => event.text.includes("我自己写完了新一段")).id,
   );
+});
+
+for (const mobile of [false, true])
+  test(`${mobile ? "mobile" : "desktop"} inspiration uses shared history, accepts feedback and requires an explicit refresh after edits`, async ({
+    page,
+  }) => {
+    if (mobile) await page.setViewportSize({ width: 390, height: 844 });
+    const errors: string[] = [],
+      requests: any[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.route("https://ideas.fixture.test/**", async (route) => {
+      requests.push(route.request().postDataJSON());
+      await route.fulfill({ json: reply(round(requests.length)) });
+    });
+    await seed(page);
+    await page.evaluate(async () => {
+      const open = indexedDB.open("little-scene-v1");
+      const db = await new Promise<IDBDatabase>((resolve) => {
+        open.onsuccess = () => resolve(open.result);
+      });
+      const tx = db.transaction(["stories", "events", "memories"], "readwrite");
+      const s = tx.objectStore("stories").get("fixture-story");
+      s.onsuccess = () =>
+        tx.objectStore("stories").put({ ...s.result, timelineMode: "shared" });
+      const e = tx.objectStore("events").get("fixture-prose-5");
+      e.onsuccess = () =>
+        tx.objectStore("events").put({
+          ...e.result,
+          id: "fixture-chat",
+          seq: 6,
+          kind: "message",
+          speaker: "fixture-role-b",
+          participants: ["fixture-role-a", "fixture-role-b"],
+          text: "今天不见面，明天只在书店取书。",
+          versionId: "chat-version",
+          chatPending: true,
+        });
+      tx.objectStore("memories").put({
+        id: "fixture-memory",
+        storyId: "fixture-story",
+        text: "许知明确拒绝拥抱，周屿答应先保持距离。",
+        knownBy: ["fixture-role-a", "fixture-role-b"],
+        scope: "story",
+        sources: [{ id: "fixture-prose-1", versionId: "fixture-version-1" }],
+        status: "accepted",
+        created: 1,
+      });
+      await new Promise<void>((resolve) => {
+        tx.oncomplete = () => resolve();
+      });
+      db.close();
+    });
+    await openAssistant(page);
+    const dialog = assistant(page);
+    await expect(dialog.locator(".inspiration-option")).toHaveCount(4);
+    await expect(dialog.locator(".inspiration-option").first()).toBeEnabled();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].messages[1].content).toContain("许知明确拒绝拥抱");
+    expect(requests[0].messages[1].content).toContain(
+      "今天不见面，明天只在书店取书",
+    );
+    expect(requests[0].messages[0].content).not.toContain("各出现一次");
+    await dialog
+      .getByLabel("这次希望怎么调整？（可选）")
+      .fill("他不会主动靠近，别突然变亲密。");
+    await dialog.getByRole("button", { name: "你再想想" }).click();
+    await expect(dialog.locator(".inspiration-option").first()).toContainText(
+      titles[0] + " 2",
+    );
+    expect(requests).toHaveLength(2);
+    expect(requests[1].messages[1].content).toContain(
+      "他不会主动靠近，别突然变亲密。",
+    );
+    expect(requests[1].messages[1].content).toContain(
+      "全部仍是候选，不能当作前文",
+    );
+    // Use the app in a second tab so edits emit the same database notifications
+    // as real author actions, rather than bypassing Dexie with a raw IDB write.
+    const editor = await page.context().newPage();
+    await editor.goto("/#story/fixture-story");
+    await editor.getByRole("button", { name: "手机聊天", exact: true }).click();
+    await editor
+      .locator(".message-event")
+      .getByRole("button", { name: "编辑", exact: true })
+      .click();
+    await editor
+      .getByLabel("正文 / 消息")
+      .fill("我改变主意，明天也不去书店了。");
+    await editor
+      .getByRole("button", { name: "保存新版本", exact: true })
+      .click();
+    await expect(
+      editor.getByRole("dialog", { name: "修改这一刻" }),
+    ).toHaveCount(0);
+    await editor.close();
+    await expect(dialog.getByRole("status")).toContainText("这轮灵感需要更新");
+    for (const option of await dialog.locator(".inspiration-option").all())
+      await expect(option).toBeDisabled();
+    expect(requests).toHaveLength(2);
+    await dialog.getByRole("button", { name: "我自己写" }).click();
+    await page.reload();
+    await openAssistant(page);
+    await expect(dialog.getByRole("status")).toContainText("这轮灵感需要更新");
+    await expect(dialog.getByLabel("这次希望怎么调整？（可选）")).toHaveValue(
+      "他不会主动靠近，别突然变亲密。",
+    );
+    expect(requests).toHaveLength(2);
+    await dialog.getByRole("button", { name: "你再想想" }).click();
+    await expect(dialog.locator(".inspiration-option").first()).toContainText(
+      titles[0] + " 3",
+    );
+    await expect(dialog.locator(".inspiration-option").first()).toBeEnabled();
+    await expect(dialog.locator(".inspiration-stale")).toHaveCount(0);
+    expect(requests).toHaveLength(3);
+    expect(requests[2].messages[1].content).toContain(
+      "我改变主意，明天也不去书店了",
+    );
+    expect(requests[2].messages[1].content).not.toContain(
+      "今天不见面，明天只在书店取书",
+    );
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: `work/inspiration-consistency-${mobile ? "mobile" : "desktop"}.png`,
+    });
+    await dialog.locator(".inspiration-option").first().click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByLabel("本段动作或台词")).toHaveValue(
+      round(3).options[0].text,
+    );
+    expect(errors).toEqual([]);
+  });
+
+test("late suggestions after a persona edit stay out of the modal until the author requests another round", async ({
+  page,
+}) => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const requests: any[] = [];
+  await page.route("https://ideas.fixture.test/**", async (route) => {
+    requests.push(route.request().postDataJSON());
+    if (requests.length === 1) await held;
+    await route.fulfill({ json: reply(round(requests.length)) });
+  });
+  await seed(page);
+  await openAssistant(page);
+  await expect.poll(() => requests.length).toBe(1);
+  await page.evaluate(async () => {
+    const open = indexedDB.open("little-scene-v1");
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      open.onsuccess = () => resolve(open.result);
+    });
+    const tx = db.transaction("stories", "readwrite");
+    const s = tx.objectStore("stories").get("fixture-story");
+    s.onsuccess = () =>
+      tx.objectStore("stories").put({
+        ...s.result,
+        roles: s.result.roles.map((r: any) => ({
+          ...r,
+          persona: "性格慢热，从不主动靠近。",
+          paragraphs: [],
+        })),
+      });
+    await new Promise<void>((resolve) => {
+      tx.oncomplete = () => resolve();
+    });
+    db.close();
+  });
+  release();
+  await expect(assistant(page).getByRole("alert")).toContainText(
+    "生成期间参考内容发生了变化",
+  );
+  await expect(assistant(page).locator(".inspiration-option")).toHaveCount(0);
+  expect(requests).toHaveLength(1);
+  await assistant(page).getByRole("button", { name: "你再想想" }).click();
+  await expect(assistant(page).locator(".inspiration-option")).toHaveCount(4);
+  expect(requests).toHaveLength(2);
+  expect(requests[1].messages[1].content).toContain("性格慢热，从不主动靠近。");
+});
+
+test("old-version saved suggestions remain readable and never regenerate on open", async ({
+  page,
+}) => {
+  let calls = 0;
+  await page.route("https://ideas.fixture.test/**", async (route) => {
+    calls++;
+    await route.fulfill({ json: reply(round(2)) });
+  });
+  await seed(page);
+  await page.evaluate(async (options) => {
+    const open = indexedDB.open("little-scene-v1");
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      open.onsuccess = () => resolve(open.result);
+    });
+    const tx = db.transaction("stories", "readwrite");
+    const s = tx.objectStore("stories").get("fixture-story");
+    s.onsuccess = () =>
+      tx
+        .objectStore("stories")
+        .put({
+          ...s.result,
+          inspiration: { options, sources: [], created: 1 },
+        });
+    await new Promise<void>((resolve) => {
+      tx.oncomplete = () => resolve();
+    });
+    db.close();
+  }, round(1).options);
+  await page.reload();
+  await openAssistant(page);
+  await expect(assistant(page).getByRole("status")).toContainText(
+    "这轮灵感需要更新",
+  );
+  await expect(
+    assistant(page).locator(".inspiration-option").first(),
+  ).toContainText(titles[0] + " 1");
+  await expect(
+    assistant(page).locator(".inspiration-option").first(),
+  ).toBeDisabled();
+  expect(calls).toBe(0);
+  await assistant(page).getByRole("button", { name: "你再想想" }).click();
+  await expect(
+    assistant(page).locator(".inspiration-option").first(),
+  ).toContainText(titles[0] + " 2");
+  await expect(
+    assistant(page).locator(".inspiration-option").first(),
+  ).toBeEnabled();
+  expect(calls).toBe(1);
 });

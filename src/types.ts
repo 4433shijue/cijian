@@ -11,7 +11,8 @@ export interface StylePreset {
 export type InspirationDirection =
   "relationship" | "discovery" | "external" | "decision";
 export interface InspirationOption {
-  direction: InspirationDirection;
+  // Kept optional for rounds saved by versions before 1.6.
+  direction?: InspirationDirection;
   title: string;
   text: string;
 }
@@ -20,6 +21,8 @@ export interface Inspiration {
   sources: SourceRef[];
   created: number;
   selectedText?: string;
+  contextKey?: string;
+  feedback?: string;
 }
 export interface Paragraph {
   id: string;

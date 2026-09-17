@@ -1,160 +1,120 @@
 import { z } from "zod";
 import { db, keyFor } from "./db";
-import { assemble } from "./context";
 import { generate } from "./model";
-import { prompt } from "./prompts";
-import { styleInstruction } from "./style-presets";
-import { sharedTimeline } from "./timeline";
 import { parseJSON } from "./output";
 import {
-  uid,
-  type InspirationOption,
-  type Material,
-  type Preferences,
-  type Profile,
-  type SceneEvent,
-  type Story,
-  type WorldEntry,
-} from "./types";
+  buildInspirationContext,
+  inspirationSourceText,
+  type InspirationInputs,
+} from "./inspiration-context";
+import { uid, type InspirationOption } from "./types";
+export {
+  buildInspirationContext,
+  inspirationCount,
+  recentProse,
+} from "./inspiration-context";
 
-export const inspirationDirections = {
-  relationship: "关系变化",
-  discovery: "信息发现",
-  external: "外部变化",
-  decision: "主动选择",
-} as const;
-export function inspirationCount(value?: number) {
-  return Number.isInteger(value) && value! >= 1 && value! <= 20 ? value! : 3;
-}
-export function recentProse(events: SceneEvent[], count: number, story?: Story) {
-  return events
-    .filter(
-      (e) =>
-        e.kind === "novel" &&
-        e.status === "complete" &&
-        !e.deleted &&
-        (!e.review || (story && sharedTimeline(story))),
-    )
-    .sort((a, b) => a.seq - b.seq)
-    .slice(-inspirationCount(count));
-}
 const optionSchema = z.object({
-  direction: z.enum(["relationship", "discovery", "external", "decision"]),
   title: z.string().trim().min(1).max(40),
   text: z.string().trim().min(1).max(400),
 });
-const normalized = (text: string) =>
-  text.replace(/[\s\p{P}]/gu, "").toLowerCase();
-export function parseInspiration(
-  raw: string,
-  previous: InspirationOption[] = [],
-) {
-  let options: InspirationOption[];
+export function parseInspiration(raw: string): InspirationOption[] {
   try {
-    const data = parseJSON(raw);
-    options = z
+    // JSON validates the cards' shape only. No category quotas or semantic veto.
+    return z
       .object({ options: z.array(optionSchema).length(4) })
-      .parse(data).options;
+      .parse(parseJSON(raw)).options;
   } catch {
     throw Error("小助手没有给出完整的四个选项，请点「你再想想」重试。");
   }
-  if (
-    new Set(options.map((o) => o.direction)).size !== 4 ||
-    new Set(options.map((o) => normalized(o.text))).size !== 4
-  )
-    throw Error("这四个方向有重复，请让小助手再想一轮。");
-  if (
-    options.some((o) =>
-      previous.some((p) => normalized(p.text) === normalized(o.text)),
-    )
-  )
-    throw Error("这一轮沿用了之前的建议，旧选项仍保留，可以再想一轮。");
-  return options;
-}
-export function buildInspirationContext(
-  story: Story,
-  events: SceneEvent[],
-  world: WorldEntry[],
-  prefs: Preferences,
-  profile: Profile,
-) {
-  const recent = recentProse(
-    events,
-    inspirationCount(prefs.inspirationParagraphs),
-    story,
-  );
-  const materials: Material[] = [];
-  const add = (id: string, label: string, text: string, stable = false) => {
-    if (text)
-      materials.push({ id, label, text, mandatory: true, priority: 0, stable });
-  };
-  const present = story.roles.map((r) => r.id);
-  for (const entry of story.worldIds.flatMap((id) =>
-    world.filter((w) => w.id === id),
-  )) {
-    if (
-      !story.worldIds.includes(entry.id) ||
-      !entry.enabled ||
-      (entry.storyIds.length && !entry.storyIds.includes(story.id)) ||
-      (entry.roleIds.length &&
-        !(entry.match === "all"
-          ? entry.roleIds.every((id) => present.includes(id))
-          : entry.roleIds.some((id) => present.includes(id))))
-    )
-      continue;
-    add(entry.id, "世界书 · " + entry.title, entry.text, true);
-  }
-  for (const role of story.roles)
-    add(
-      role.id,
-      "当前故事人物 · " + role.name,
-      [
-        role.bio,
-        role.persona || role.paragraphs.map((p) => p.text).join("\n\n"),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-      true,
-    );
-  add("background", "故事开场背景", story.background, true);
-  recent.forEach((event, i) =>
-    add(event.id, `最近正文 ${i + 1} / 版本 ${event.versionId}`, event.text),
-  );
-  if (story.draft.trim())
-    add("author-draft", "作者尚未扩写的想法", story.draft);
-  if (story.inspiration)
-    add(
-      "previous-options",
-      "上一轮建议 · 请换四条新路",
-      JSON.stringify(story.inspiration.options),
-    );
-  const task = `依据所给的 ${recent.length} 段最近正文和人物、世界书，提出四种不同的后续事件。${styleInstruction(story, prefs, "novel")}。${recent.length ? "从最新一段停下的位置往前想。" : "故事还没有正式正文，可以从开场背景与人物处境中寻找开头。"}`;
-  return {
-    report: assemble(
-      prompt("inspiration", prefs),
-      task,
-      materials,
-      profile.context,
-      profile.maxOutput,
-    ),
-    sources: recent.map((e) => ({ id: e.id, versionId: e.versionId })),
-  };
 }
 
+const sourceTables = [
+  db.stories,
+  db.events,
+  db.memories,
+  db.world,
+  db.preferences,
+];
+async function readInputs(
+  storyId: string,
+): Promise<InspirationInputs | undefined> {
+  return db.transaction("r", sourceTables, async () => {
+    const [story, events, memories, world, prefs] = await Promise.all([
+      db.stories.get(storyId),
+      db.events.where("storyId").equals(storyId).toArray(),
+      db.memories.where("storyId").equals(storyId).toArray(),
+      db.world.toArray(),
+      db.preferences.get("preferences"),
+    ]);
+    return story
+      ? {
+          story,
+          events,
+          memories,
+          world,
+          prefs: prefs || {
+            id: "preferences",
+            activeProfile: "",
+            developer: false,
+            prompts: {},
+          },
+        }
+      : undefined;
+  });
+}
+async function contextKey(source: string) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(source),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+export async function inspirationState(storyId: string) {
+  const inputs = await readInputs(storyId);
+  if (!inputs) return undefined;
+  const key = await contextKey(inspirationSourceText(inputs));
+  const round = inputs.story.inspiration;
+  return { round, stale: !!round && round.contextKey !== key };
+}
+
+type Outcome = "saved" | "stale";
 const active = new Map<
   string,
-  { revision: string; control: AbortController; work: Promise<void> }
+  {
+    key: string;
+    feedback: string;
+    control: AbortController;
+    work: Promise<Outcome>;
+  }
 >();
-export function chooseInspiration(
+export const pendingInspiration = (storyId: string) =>
+  active.get(storyId)?.work;
+
+export async function chooseInspiration(
   storyId: string,
   text: string,
   input: string,
 ) {
-  return db.transaction("rw", db.stories, async () => {
-    const story = await db.stories.get(storyId);
-    const round = story?.inspiration;
+  const initial = await readInputs(storyId);
+  if (!initial) throw Error("故事已不存在");
+  const source = inspirationSourceText(initial);
+  const key = await contextKey(source);
+  return db.transaction("rw", sourceTables, async () => {
+    const latest = await readInputs(storyId);
+    const round = latest?.story.inspiration;
     if (!round?.options.some((option) => option.text === text))
       throw Error("这轮灵感已更新，请重新打开窗口再选。");
+    if (
+      !latest ||
+      inspirationSourceText(latest) !== source ||
+      round.contextKey !== key
+    )
+      throw Error("前文、人设或参考内容已经变化，请让小助手重新想一轮。");
+    if (input !== latest.story.draft)
+      throw Error("输入内容刚刚发生变化，请稍后重新选择。");
     const previous = round.selectedText;
     const ownText =
       previous && input.endsWith(previous)
@@ -168,39 +128,47 @@ export function chooseInspiration(
     return draft;
   });
 }
-export async function requestInspiration(storyId: string): Promise<void> {
-  const story = await db.stories.get(storyId);
-  if (!story) throw Error("故事已不存在");
-  const revision = story.inspirationRevision || "";
+
+export async function requestInspiration(
+  storyId: string,
+  feedback = "",
+): Promise<Outcome> {
+  const inputs = await readInputs(storyId);
+  if (!inputs) throw Error("故事已不存在");
+  const { story, events, memories, world, prefs } = inputs;
+  const source = inspirationSourceText(inputs);
+  const key = await contextKey(source);
+  feedback = feedback.trim();
   const existing = active.get(storyId);
-  if (existing?.revision === revision) return existing.work;
+  if (existing?.key === key && existing.feedback === feedback)
+    return existing.work;
   existing?.control.abort();
   const control = new AbortController();
   const requestId = uid();
-  const work = (async () => {
-    const prefs = await db.preferences.get("preferences");
-    const profile = prefs && (await db.profiles.get(prefs.activeProfile));
-    if (!prefs || !profile)
-      throw Error("先到设置添加并选中一个模型接口，再来找灵感。");
+  const work = (async (): Promise<Outcome> => {
+    const profile = await db.profiles.get(prefs.activeProfile);
+    if (!profile) throw Error("先到设置添加并选中一个模型接口，再来找灵感。");
     const { report, sources } = buildInspirationContext(
       story,
-      await db.events.where("storyId").equals(storyId).toArray(),
-      await db.world.toArray(),
+      events,
+      world,
       prefs,
       profile,
+      memories,
+      feedback,
     );
-    const ready = await db.transaction("rw", db.stories, async () => {
-      const latest = await db.stories.get(storyId);
+    const ready = await db.transaction("rw", sourceTables, async () => {
+      const latest = await readInputs(storyId);
       if (
         !latest ||
-        (latest.inspirationRevision || "") !== revision ||
+        inspirationSourceText(latest) !== source ||
         control.signal.aborted
       )
         return false;
       await db.stories.update(storyId, { inspirationRequest: requestId });
       return true;
     });
-    if (!ready) return;
+    if (!ready) return "stale";
     const result = await generate(
       profile,
       keyFor(profile),
@@ -211,35 +179,43 @@ export async function requestInspiration(storyId: string): Promise<void> {
       fetch,
       { kind: "inspiration", stablePrefix: report.stablePrefix },
     );
-    if (control.signal.aborted) return;
+    if (control.signal.aborted) return "stale";
     if (!result.complete)
       throw Error("这一轮灵感还没完整生成，请点「你再想想」重试。");
-    const options = parseInspiration(result.text, story.inspiration?.options);
-    await db.transaction("rw", db.stories, async () => {
-      const latest = await db.stories.get(storyId);
+    const options = parseInspiration(result.text);
+    return db.transaction("rw", sourceTables, async () => {
+      const latest = await readInputs(storyId);
       if (
         !latest ||
-        latest.inspirationRequest !== requestId ||
-        (latest.inspirationRevision || "") !== revision ||
+        latest.story.inspirationRequest !== requestId ||
+        inspirationSourceText(latest) !== source ||
         control.signal.aborted
       )
-        return;
+        return "stale";
       await db.stories.update(storyId, {
         inspiration: {
           options,
           sources,
+          contextKey: key,
+          feedback,
           created: Date.now(),
-          selectedText: latest.inspiration?.selectedText,
+          selectedText: latest.story.inspiration?.selectedText,
         },
         inspirationRequest: undefined,
       });
+      return "saved";
     });
   })();
-  const task = { revision, control, work };
+  const task = { key, feedback, control, work };
   active.set(storyId, task);
   try {
-    await work;
+    return await work;
   } finally {
     if (active.get(storyId) === task) active.delete(storyId);
+    await db.transaction("rw", db.stories, async () => {
+      const latest = await db.stories.get(storyId);
+      if (latest?.inspirationRequest === requestId)
+        await db.stories.update(storyId, { inspirationRequest: undefined });
+    });
   }
 }

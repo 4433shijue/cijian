@@ -148,10 +148,6 @@ export const outputSchemas: Record<PromptKind, ReturnType<typeof object>> = {
   inspiration: object({
     options: array(
       object({
-        direction: {
-          type: "string",
-          enum: ["relationship", "discovery", "external", "decision"],
-        },
         title: string,
         text: string,
       }),
