@@ -15,13 +15,11 @@ import {
   Square,
   Feather,
   MessageCircle,
-  Download,
   Trash2,
   SlidersHorizontal,
   Check,
   RefreshCw,
   BookMarked,
-  X,
   ChevronDown,
   ChevronUp,
   Lightbulb,
@@ -79,13 +77,8 @@ import {
   builtInStylePresets,
   resolveStylePreset,
 } from "./style-presets";
-import {
-  download,
-  exportBackup,
-  importBackup,
-  validateBackup,
-  type Backup,
-} from "./backup";
+import { Modal } from "./Modal";
+import { BackupSettings, StoryTransfer } from "./TransferPanels";
 type Notice = (message: string) => void;
 const date = (n: number) =>
   new Date(n).toLocaleString("zh-CN", {
@@ -106,78 +99,6 @@ function Avatar({ role, size = 44 }: { role?: Role; size?: number }) {
     <span className="avatar" style={{ width: size, height: size }}>
       {role?.name.slice(0, 1) || "叶"}
     </span>
-  );
-}
-function Modal({
-  title,
-  children,
-  onClose,
-}: {
-  title: string;
-  children: ReactNode;
-  onClose: () => void;
-}) {
-  const modalRef = useRef<HTMLElement>(null);
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement;
-    const focusables = () =>
-      Array.from(
-        modalRef.current?.querySelectorAll<HTMLElement>(
-          "button:not(:disabled),input:not(:disabled),textarea,select,a[href],summary",
-        ) || [],
-      ).filter((e) => e.offsetParent !== null);
-    if (!modalRef.current?.contains(document.activeElement))
-      focusables()[0]?.focus();
-    const close = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeRef.current();
-      if (e.key === "Tab") {
-        const items = focusables();
-        if (!items.length) return;
-        const first = items[0],
-          last = items.at(-1)!;
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    document.addEventListener("keydown", close);
-    const old = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", close);
-      document.body.style.overflow = old;
-      previous?.focus();
-    };
-  }, []);
-  return (
-    <div
-      className="veil"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <section
-        ref={modalRef}
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-      >
-        <header>
-          <h2>{title}</h2>
-          <button aria-label="关闭" onClick={onClose}>
-            <X size={20} />
-          </button>
-        </header>
-        {children}
-      </section>
-    </div>
   );
 }
 function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -2609,51 +2530,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
               />
             ))}
           </Field>
-          <div className="row">
-            <button
-              onClick={() =>
-                download(
-                  s.title + ".txt",
-                  s.title +
-                    "\n\n" +
-                    events
-                      .filter((e) => e.status === "complete" && !e.deleted)
-                      .map((e) =>
-                        e.kind === "novel"
-                          ? e.text
-                          : `[手机聊天 / ${s.roles.find((r) => r.id === e.speaker)?.name}] ${e.text}`,
-                      )
-                      .join("\n\n"),
-                  "text/plain",
-                )
-              }
-            >
-              <Download size={16} />
-              导出全文与聊天
-            </button>
-            <button
-              onClick={() =>
-                download(
-                  s.title + "-聊天.txt",
-                  events
-                    .filter(
-                      (e) =>
-                        e.kind === "message" &&
-                        e.status === "complete" &&
-                        !e.deleted,
-                    )
-                    .map(
-                      (e) =>
-                        `${s.roles.find((r) => r.id === e.speaker)?.name}：${e.text}`,
-                    )
-                    .join("\n\n"),
-                  "text/plain",
-                )
-              }
-            >
-              单独导出聊天
-            </button>
-          </div>
+          <StoryTransfer story={s} notify={notify} />
           <details>
             <summary>已删除的内容（可恢复）</summary>
             {events
@@ -2980,12 +2857,10 @@ function SettingsPage({ notify }: { notify: Notice }) {
   const profiles = useLiveQuery(() => db.profiles.toArray(), []) || [],
     prefs = useLiveQuery(() => db.preferences.get("preferences"), []);
   const [edit, setEdit] = useState<Profile>(),
-    [backup, setBackup] = useState<Backup>(),
     [kind, setKind] = useState<PromptKind>("novel"),
     [inspirationWindow, setInspirationWindow] = useState("3"),
     [novelWindow, setNovelWindow] = useState("7"),
-    [custom, setCustom] = useState(""),
-    [importing, setImporting] = useState(false);
+    [custom, setCustom] = useState("");
   useEffect(() => {
     setCustom(prefs?.prompts[kind]?.text ?? defaults[kind]);
   }, [kind, prefs?.prompts[kind]?.text]);
@@ -3067,44 +2942,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
           <p className="hint">还没有接口。添加一个，就可以开始扩写和聊天。</p>
         )}
       </section>
-      <section className="settings-card">
-        <h2>保存与迁移</h2>
-        <p>
-          角色、人设、头像、故事版本与记忆都保存在这台设备的浏览器中。清理浏览器数据会移除它们，请定期导出。
-        </p>
-        <div className="row">
-          <button
-            onClick={async () =>
-              download(
-                "此间-完整备份-" +
-                  new Date().toISOString().slice(0, 10) +
-                  ".json",
-                JSON.stringify(await exportBackup(), null, 2),
-              )
-            }
-          >
-            <Download size={16} />
-            导出完整备份（不含 Key）
-          </button>
-          <label className="file-button">
-            导入备份
-            <input
-              type="file"
-              accept=".json,application/json"
-              onChange={async (e) => {
-                const f = e.target.files?.[0];
-                if (!f) return;
-                try {
-                  setBackup(validateBackup(JSON.parse(await f.text())));
-                } catch {
-                  notify("备份格式或关联不完整，没有修改现有资料");
-                }
-                e.target.value = "";
-              }}
-            />
-          </label>
-        </div>
-      </section>
+      <BackupSettings notify={notify} />
       <section className="settings-card">
         <h2>开发者模式</h2>
         <Toggle
@@ -3249,62 +3087,6 @@ function SettingsPage({ notify }: { notify: Notice }) {
           notify={notify}
           onClose={() => setEdit(undefined)}
         />
-      )}{" "}
-      {backup && (
-        <Modal title="导入预览" onClose={() => setBackup(undefined)}>
-          <p>
-            这份备份来自 {backup.created.slice(0, 10)}，包含{" "}
-            {backup.roles.length} 位角色、{backup.stories.length} 本故事、
-            {backup.events.length} 条经历、{backup.memories.length} 条记忆。
-          </p>
-          <p className="hint">
-            默认作为副本合并，自动重建关联。自定义提示词按备份中的版本合并。接口密钥需要重新填写。
-          </p>
-          <div className="row">
-            <button
-              className="primary"
-              disabled={importing}
-              onClick={async () => {
-                setImporting(true);
-                try {
-                  await importBackup(backup);
-                  setBackup(undefined);
-                  notify("已作为副本导入，原资料完整保留");
-                } catch (e) {
-                  notify("导入失败，原数据未改变 · " + String(e));
-                } finally {
-                  setImporting(false);
-                }
-              }}
-            >
-              作为副本合并
-            </button>
-            <button
-              className="danger"
-              disabled={importing}
-              onClick={async () => {
-                if (
-                  !confirm(
-                    "替换将移除当前全部故事和角色。确定已经保存备份，并用这份文件替换全部资料吗？",
-                  )
-                )
-                  return;
-                setImporting(true);
-                try {
-                  await importBackup(backup, true);
-                  setBackup(undefined);
-                  notify("已完整替换资料");
-                } catch (e) {
-                  notify("替换失败，原数据未改变 · " + String(e));
-                } finally {
-                  setImporting(false);
-                }
-              }}
-            >
-              替换全部资料
-            </button>
-          </div>
-        </Modal>
       )}
     </div>
   );

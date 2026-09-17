@@ -164,6 +164,7 @@ const prefs = z.object({
     z.object({ text: str, enabled: z.boolean() }),
   ),
 });
+export const recordSchemas = { roles: role, stories: story, world, events: event, memories: memory, profiles: profile, preferences: prefs, chatBatches: chatBatch, roleDrafts: z.object({ id: str, role }) };
 const schema = z.object({
   format: z.literal("little-scene"),
   version: z.literal(1),
@@ -176,6 +177,9 @@ const schema = z.object({
   profiles: z.array(profile),
   preferences: z.array(prefs),
   chatBatches: z.array(chatBatch).default([]),
+  roleDrafts: z.array(recordSchemas.roleDrafts).default([]),
+  scope: z.enum(["library", "story"]).optional(),
+  title: str.optional(),
 });
 export type Backup = z.infer<typeof schema>;
 export function validateBackup(raw: unknown) {

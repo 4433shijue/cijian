@@ -3,7 +3,9 @@ import { createRoot } from "react-dom/client";
 import { initialize } from "./db";
 import App from "./App";
 import "./style.css";
+import { cleanupTransfers } from "./transfer-store";
 initialize()
+  .then(() => cleanupTransfers().catch(() => {}))
   .then(() =>
     createRoot(document.getElementById("root")!).render(
       <React.StrictMode>

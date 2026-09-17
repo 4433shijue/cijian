@@ -2,6 +2,7 @@ import Dexie, { type Table } from "dexie";
 import { fullAudience, historyExcerpt, sharedTimeline, usableEvent } from "./timeline";
 import { withStoryLock } from "./locks";
 import { isBusy } from "./generation-state";
+import type { TransferRecord, TransferSession, TransferChunk } from "./transfer-types";
 import {
   uid,
   paragraphs,
@@ -28,6 +29,9 @@ export class SceneDB extends Dexie {
   jobs!: Table<Job, string>;
   chatBatches!: Table<ChatBatch, string>;
   promptSessions!: Table<PromptSession, string>;
+  transferRecords!: Table<TransferRecord, [string, string, string]>;
+  transferSessions!: Table<TransferSession, string>;
+  transferChunks!: Table<TransferChunk, [string, number]>;
   constructor(name = "little-scene-v1") {
     super(name);
     this.version(1).stores({
@@ -43,6 +47,12 @@ export class SceneDB extends Dexie {
     this.version(2).stores({ roleDrafts: "id" });
     this.version(3).stores({ chatBatches: "id,storyId,status" });
     this.version(4).stores({ promptSessions: "id,storyId" });
+    this.version(5).stores({
+      events: "id,storyId,[storyId+seq],[storyId+seq+id]",
+      transferRecords: "[session+table+id],session,[session+table+order]",
+      transferSessions: "id",
+      transferChunks: "[session+index],session",
+    });
   }
 }
 export const db = new SceneDB();
