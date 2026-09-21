@@ -1,13 +1,13 @@
 import { z } from "zod";
-import { db, keyFor, reviseEvent, refreshTimelineMemory } from "./db";
-import { sharedTimeline, usableEvent } from "./timeline";
+import { db, keyFor, reviseEvent, ensureStoryRounds, consumeMemorySelection } from "./db";
+import { usableEvent } from "./timeline";
 import { active } from "./generation-state";
 import { withStoryLock } from "./locks";
 import { buildContext } from "./context";
 import { preparePrefix, commitPrefix } from "./prefix-cache";
 import { generate } from "./model";
 import { parseJSON } from "./output";
-import { memoryDue, organizeMemory } from "./engine";
+import { maybeOrganizeMemory } from "./round-memory";
 import { uid, type ChatBatch, type SceneEvent, type Story } from "./types";
 
 const repliesSchema = z.object({
@@ -72,6 +72,8 @@ async function settings() {
 
 async function contextFor(s: Story, batch: ChatBatch, rewrite = false, connection?: Awaited<ReturnType<typeof settings>>) {
   const { prefs, p } = connection || await settings();
+  const normalized = await ensureStoryRounds(s.id);
+  s = { ...s, nextRound: normalized.nextRound, contextWindowStart: normalized.contextWindowStart };
   const sourceIds = new Set(batch.sources.map((source) => source.id));
   const events = (await db.events.where("storyId").equals(s.id).sortBy("seq"))
     .filter((e) => e.seq < batch.cutoff && !sourceIds.has(e.id) && !e.chatPending);
@@ -83,7 +85,7 @@ async function contextFor(s: Story, batch: ChatBatch, rewrite = false, connectio
   const world = await db.world.toArray();
   const baseline = buildContext("chat", pair,
     events, memories, world, prefs, p, batch.messages.join("\n"),
-    { chatMessages: batch.messages });
+    { chatMessages: batch.messages, rewrite });
   return preparePrefix(baseline, pair, p, prefs, "chat", events, memories, world, rewrite);
 }
 
@@ -263,8 +265,10 @@ export async function replyChat(storyId: string, batchId?: string, legacyEventId
           error: "", updated: Date.now() });
         await db.stories.update(storyId, { updated: Date.now() });
         await db.jobs.update(jobId, { status: "complete" });
+        await ensureStoryRounds(storyId);
         const adopted = await db.events.bulkGet([...batch!.sources.map((source) => source.id), ...replyIds]);
         await commitPrefix(prepared, snapshot.s, raw, adopted.filter((e): e is SceneEvent => !!e), result.usage);
+        await consumeMemorySelection(storyId, context.memoryContext?.selectionToken);
       });
     } catch (error) {
       await saving;
@@ -276,10 +280,7 @@ export async function replyChat(storyId: string, batchId?: string, legacyEventId
       throw Error(message);
     } finally { active.delete(storyId); }
   });
-  const s = await db.stories.get(storyId);
-  if (s && sharedTimeline(s)) await refreshTimelineMemory(storyId);
-  else if (s && s.autoMemory && s.memoryState === "idle" && await memoryDue(s))
-    await organizeMemory(storyId).catch(() => {});
+  await maybeOrganizeMemory(storyId);
 }
 
 export async function dismissChatBatch(id: string) {

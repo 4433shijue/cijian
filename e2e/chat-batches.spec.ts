@@ -41,6 +41,7 @@ test("three sends survive refresh, call once, and allow the next batch while rec
       messages: first ? ["今天可以。", "六点去接你？"] : ["好，那就在书店等你。"],
     })) });
   });
+  try {
   await configure(page);
   for (const text of ["明天一起吃饭吗", "啊不对，是今天", "我六点下班"]) await send(page, text);
   expect(requests).toHaveLength(0);
@@ -63,6 +64,7 @@ test("three sends survive refresh, call once, and allow the next batch while rec
   expect(requests).toHaveLength(2);
   expect(requests[1]).toContain('"pending_user_messages":["下一轮补充：在书店碰面"]');
   expect(errors).toEqual([]);
+  } finally { release(); }
 });
 
 test("failed batch survives reload and group regeneration changes bubble count without duplicates", async ({ page }) => {

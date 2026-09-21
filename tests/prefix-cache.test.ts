@@ -88,6 +88,7 @@ beforeEach(async () => {
   await db.open();
   await initialize();
   story = (await db.stories.toArray())[0];
+  await db.stories.update(story.id, { autoMemory: false });
   await db.profiles.put(profile);
   await db.preferences.update("preferences", {
     activeProfile: profile.id,
@@ -157,7 +158,7 @@ it.each(["edit", "delete", "privacy", "facts"])(
   },
 );
 
-it.each(["model", "style", "prompt", "world", "mode", "window"])(
+it.each(["model", "style", "prompt", "world", "mode"])(
   "rebuilds when %s configuration changes",
   async (change) => {
     const fetcher = mockNovel();
@@ -174,8 +175,6 @@ it.each(["model", "style", "prompt", "world", "mode", "window"])(
       await db.world.update(story.worldIds[0], { enabled: false });
     if (change === "mode")
       await db.stories.update(story.id, { timelineMode: "strict" });
-    if (change === "window")
-      await db.preferences.update("preferences", { novelContextRounds: 1 });
     await run(story.id, "novel", "第二轮");
     expect(body(fetcher, 1).messages).toHaveLength(2);
     expect((await rows()).at(-1)?.request?.prefixReuse?.state).toBe("settings");
@@ -204,7 +203,7 @@ it("rebuilds before capacity is exceeded, retains required recent prose, and can
       reset = true;
       expect(report.messages).toHaveLength(2);
       expect(report.messages![1].content).toContain(`正文${turn}。`);
-      expect(report.history?.sources).toHaveLength(1);
+      expect(report.history?.sources).toHaveLength(turn);
     } else if (reset && report.prefixReuse?.state === "continued")
       resumed = true;
   }
@@ -323,6 +322,7 @@ it("keeps transport sessions out of backups and removes them with their story", 
   expect(await db.promptSessions.count()).toBe(0);
   // Profile keys never survive backup import.
   story = (await db.stories.toArray())[0];
+  await db.stories.update(story.id, { autoMemory: false });
   const importedProfile = (await db.profiles.toArray())[0];
   sessionKeys.set(importedProfile.id, "fixture-key");
   await run(story.id, "novel", "导入后继续");
@@ -330,25 +330,19 @@ it("keeps transport sessions out of backups and removes them with their story", 
   expect(await db.promptSessions.count()).toBe(0);
 });
 
-it("removes ignored old excerpts from retained requests and rebuilds after manual memory edits", async () => {
+it("never injects legacy excerpts and ignores changes to unselected memories", async () => {
   const fetcher = mockNovel();
   for (let n = 0; n < 4; n++) await run(story.id, "novel", "敲门");
   const first = (await rows())[0];
-  const memory = (await db.memories.toArray()).find(
-    (m) => m.sources[0].id === first.id,
-  )!;
-  await db.memories.update(memory.id, { status: "ignored" });
+  await db.memories.add({ id: "legacy", storyId: story.id, text: "LEGACY_EXCERPT", automatic: true,
+    sources: [{ id: first.id, versionId: first.versionId }], knownBy: [], scope: "story", status: "accepted", created: 1 });
   await run(story.id, "novel", "点头");
-  expect(body(fetcher, 4).messages).toHaveLength(2);
-  expect(JSON.stringify(body(fetcher, 4).messages)).not.toContain(first.text);
-  await db.memories.update(memory.id, {
-    automatic: false,
-    status: "accepted",
-    text: "用户整理的约定：周末去书店。",
-  });
+  expect((await rows()).at(-1)?.request?.prefixReuse?.state).toBe("continued");
+  expect(JSON.stringify(body(fetcher, 4))).not.toContain("LEGACY_EXCERPT");
+  await db.memories.update("legacy", { automatic: false, text: "UNSELECTED_MEMORY" });
   await run(story.id, "novel", "抬头");
-  expect(body(fetcher, 5).messages).toHaveLength(2);
-  expect(body(fetcher, 5).messages[1].content).toContain("用户整理的约定");
+  expect((await rows()).at(-1)?.request?.prefixReuse?.state).toBe("continued");
+  expect(JSON.stringify(body(fetcher, 5))).not.toContain("UNSELECTED_MEMORY");
 });
 
 it("defaults only DeepSeek to prefix reuse, with an explicit override for aliased gateways", () => {

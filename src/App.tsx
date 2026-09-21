@@ -27,12 +27,13 @@ import {
   CheckCircle2,
   Copy,
 } from "lucide-react";
-import { db, makeStory, deleteStory, reviseEvent, setTimelineMode, refreshTimelineMemory } from "./db";
+import { db, makeStory, deleteStory, reviseEvent, setTimelineMode, ensureStoryRounds } from "./db";
 import { sharedTimeline, visibleText } from "./timeline";
 import { loadRoleDraft, saveRoleDraft, saveCreatedRole } from "./role-draft";
 import { InspirationAssistant } from "./InspirationAssistant";
 import { inspirationCount, chooseInspiration } from "./inspiration";
-import { proseCount } from "./context";
+import { memoryInterval, memoryReadLimit, memoryValid, roundLabel, selectRoundContext } from "./rounds";
+import { memoryBatches, memoryRequestCount, scheduleAutomaticMemory } from "./round-memory";
 import { cacheHitPercent } from "./prefix-cache";
 import { useReadingLayout } from "./reading-layout";
 import { sendChatMessage, replyChat, previewChat, pendingChatMessages, dismissChatBatch } from "./chat";
@@ -961,6 +962,8 @@ function Reference({
   const hitPercent = cacheHitPercent(report.usage);
   const reuseLabels = {
     first: "本次建立多轮前缀",
+    window: "原文窗口已滚动，已移除窗口外原文并重新整理前缀",
+    selection: "参考记忆选择改变，已重新整理前缀",
     continued: "已原样保留前轮请求与回复，新内容追加在末尾",
     settings: "设定或模型配置改变，已重新整理前缀",
     history: "历史内容或知情范围改变，已重新整理前缀",
@@ -977,10 +980,12 @@ function Reference({
       </p>
       {report.history && (
         <p className="hint">
-          正文窗口 {report.history.sources.length} / {report.history.limit}{" "}
-          回合，按发生顺序排列。{report.prefixReuse && "前缀复用期间还会保留之前已带入的经历；容量不足时重新整理。"}
+          {report.history.rounds ? `原文窗口 ${report.history.rounds.length} / ${report.history.limit} 回合 · ${roundLabel(report.history.rounds)}，正文与聊天合计。` : "这是升级前保存的参考记录，新请求将采用20回合上限。"}
         </p>
       )}
+      {report.memoryContext && <p className="hint">本次选中 {report.memoryContext.selected.length} 条记忆{report.memoryContext.selectionToken ? " · 使用一次性选择" : ` · 自动读取上限 ${report.memoryContext.automaticLimit} 条`}。
+        {report.memoryContext.gaps.length > 0 && ` ${roundLabel(report.memoryContext.gaps)}未被所选记忆完整覆盖。`}</p>}
+      {report.materialTokens && <p className="hint">本地分项估算 · 设定 {report.materialTokens.settings} · 记忆 {report.materialTokens.memories} · 原文 {report.materialTokens.history} · 规则与本次输入 {report.materialTokens.task} token</p>}
       {developer && (
         <div className="reference-metrics">
           <p>
@@ -1257,10 +1262,12 @@ function EventEditor({
 }
 function Memories({
   s,
+  mode,
   notify,
   onClose,
 }: {
   s: Story;
+  mode: "novel" | "chat";
   notify: Notice;
   onClose: () => void;
 }) {
@@ -1274,6 +1281,25 @@ function Memories({
       () => db.events.where("storyId").equals(s.id).toArray(),
       [s.id],
     ) || [];
+  const prefs = useLiveQuery(() => db.preferences.get("preferences"), []) || { id: "preferences" as const, activeProfile: "", developer: false, prompts: {} };
+  const profile = useLiveQuery(() => db.profiles.get(prefs.activeProfile), [prefs.activeProfile]);
+  const [viewMode, setViewMode] = useState(mode);
+  const [showLegacy, setShowLegacy] = useState(false);
+  const [localChoice, setLocalChoice] = useState<Story["memorySelection"]>();
+  useEffect(() => {
+    if (localChoice && s.memorySelection?.token === localChoice.token) setLocalChoice(undefined);
+  }, [s.memorySelection?.token, localChoice?.token]);
+  const selection = selectRoundContext({ ...s, memorySelection: localChoice || s.memorySelection }, events, items, prefs, viewMode === "chat" ? s.partner : undefined);
+  const selectedIds = selection.selected.map((m) => m.id);
+  const batches = memoryBatches(s, events, items, prefs, true);
+  const requests = memoryRequestCount(s, batches, prefs, profile);
+  async function toggleMemory(id: string, checked: boolean) {
+    const ids = checked ? [...new Set([...selectedIds, id])] : selectedIds.filter((x) => x !== id);
+    const choice = { token: uid(), ids };
+    setLocalChoice(choice);
+    try { await db.stories.update(s.id, { memorySelection: choice }); }
+    catch (error) { setLocalChoice((current) => current?.token === choice.token ? undefined : current); throw error; }
+  }
   const [editing, setEditing] = useState<Memory>();
   const [mergedIds, setMergedIds] = useState<string[]>([]);
   const [tab, setTab] = useState<"memory" | "facts">("memory");
@@ -1285,16 +1311,12 @@ function Memories({
   async function accept(m: Memory) {
     const valid = m.sources.every((src) => {
       const e = events.find((x) => x.id === src.id);
-      return e && !e.deleted && e.status === "complete";
+      return e && !e.deleted && e.status === "complete" && e.versionId === src.versionId;
     });
-    if (!valid) throw Error("来源不存在或已删除，请忽略这条记忆");
+    if (!valid) { notify("来源已改变，请重新提炼，不能直接确认旧记忆。"); return; }
     await db.memories.put({
       ...m,
       status: "accepted",
-      sources: m.sources.map((src) => ({
-        id: src.id,
-        versionId: events.find((x) => x.id === src.id)!.versionId,
-      })),
     });
     notify("记忆已确认，将按知情范围带入后续生成");
   }
@@ -1322,77 +1344,48 @@ function Memories({
       </div>
       {tab === "memory" ? (
         <>
-      <ContextTip id="memory" title="记住什么，由你决定">
-        <p>
-          {sharedTimeline(s) ? "普通经历自动生成摘记，较早内容会按相关性带入后续写作和聊天。摘记是有省略的原文，可以编辑或忽略；也可以点「AI 整理摘要」进一步提炼。" : "严格知情模式下，AI 整理的内容先成为候选。检查内容和知情角色，接受后才会使用。"}
-        </p>
+      <ContextTip id="memory" title="回合记忆，按需带入">
+        <p>每 {memoryInterval(prefs)} 回合自动提炼一段连贯小结，默认读取最近 {memoryReadLimit(prefs)} 条可用记忆。近期原文合计最多20回；更早的经历通过记忆衔接。</p>
       </ContextTip>
-      <p className="hint">
-        仅作者可见的记忆不会出现在角色聊天中。记忆中心用于微调，自动互通的故事不需要逐条确认。
-      </p>
       <div className="row">
-        <button
-          disabled={busy || isBusy(s.id)}
-          className="primary"
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await organizeMemory(s.id);
-              notify(sharedTimeline(s) ? "这一批摘要已整理并生效，剩余内容可继续整理" : "整理完成，请审核候选");
-            } catch (e) {
-              notify(String(e));
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          <RefreshCw size={16} />
-          {busy ? "整理中…" : sharedTimeline(s) ? "AI 整理摘要" : "立即整理"}
-        </button>
-        <span className="hint">处理进度 · 节点 {s.memoryCursor}</span>
+        <Field label="查看下次参考记忆">
+          <select value={viewMode} onChange={(e) => setViewMode(e.target.value as "novel" | "chat")}>
+            <option value="novel">正文</option><option value="chat">当前角色聊天</option>
+          </select>
+        </Field>
+        <button disabled={!s.memorySelection} onClick={() => db.stories.update(s.id, { memorySelection: undefined })}>恢复默认选择</button>
       </div>
-      {s.memoryError && <p className="error">{s.memoryError}</p>}
-      <details>
-        <summary>{sharedTimeline(s) ? "自动摘记设置" : "自动整理频率"}</summary>
-        <Toggle
-          label={sharedTimeline(s) ? "自动保存经历摘记" : "自动整理（只在当前页面打开时运行）"}
-          value={s.autoMemory}
-          onChange={async (v) => {
-            await db.stories.update(s.id, { autoMemory: v });
-            if (v) await refreshTimelineMemory(s.id);
-          }}
-        />
-        {!sharedTimeline(s) && <div className="two-col">
-          <Field label="每新增几条聊天气泡 · 0 关闭">
-            <input
-              type="number"
-              min="0"
-              value={s.chatThreshold}
-              onChange={async (e) => {
-                await db.stories.update(s.id, {
-                  chatThreshold: Math.max(0, Number(e.target.value)),
-                });
-              }}
-            />
-          </Field>
-          <Field label="每新增几段完整小说 · 0 关闭">
-            <input
-              type="number"
-              min="0"
-              value={s.novelThreshold}
-              onChange={async (e) => {
-                await db.stories.update(s.id, {
-                  novelThreshold: Math.max(0, Number(e.target.value)),
-                });
-              }}
-            />
-          </Field>
-        </div>}
+      <p className="hint" role="status">下次将带入 {selectedIds.length} 条记忆。{s.memorySelection ? "已临时调整：下一次成功回复后恢复默认；失败或取消会保留。" : "正在使用自动选择。勾选可临时增减，仅影响下一次正文或聊天回复。"}</p>
+      {selection.gaps.length > 0 && <p className="hint">{roundLabel(selection.gaps)}未被所选记忆完整覆盖；可勾选已有记忆或一键补齐。</p>}
+      <div className="row">
+        <button disabled={busy || isBusy(s.id) || !batches.length} className="primary" onClick={async () => {
+          setBusy(true);
+          try { await organizeMemory(s.id); notify("回合记忆已补齐。"); }
+          catch (e) { notify(String(e)); }
+          finally { setBusy(false); }
+        }}><RefreshCw size={16} />{busy || s.memoryState === "running" ? "记忆整理中…" : "一键补齐回合记忆"}</button>
+        {(busy || s.memoryState === "running") && <button onClick={() => stop(s.id)}>停止整理</button>}
+      </div>
+      <p className="hint">待整理 {roundLabel(batches.flatMap((b) => b.rounds))} · {batches.length} 批 · {requests === undefined ? "当前容量不足，请调整接口设置" : `预计至少 ${requests} 次请求`}。分批合并可能增加请求；关闭页面或停止后，已完成批次保留。</p>
+      {s.memoryError && <p className="error">{s.memoryError} 写作仍可继续。</p>}
+      <details><summary>自动记忆设置</summary>
+        <Toggle label="自动提炼回合记忆（页面打开时运行）" value={s.autoMemory} onChange={async (v) => {
+          await db.stories.update(s.id, { autoMemory: v });
+          if (v) scheduleAutomaticMemory(s.id);
+        }} />
+        <p className="hint">提炼频率和自动读取数量可在设置的开发者模式中修改。已被重写或删除的来源不会继续使用。</p>
       </details>
+      {items.some((m) => m.automatic) && <Toggle label="显示旧版自动摘记（不自动带入）" value={showLegacy} onChange={setShowLegacy} />}
       {items
-        .filter((m) => m.status !== "ignored")
+        .filter((m) => m.status !== "ignored" && (!m.automatic || showLegacy))
+        .sort((a, b) => Math.max(0, ...(b.rounds || [])) - Math.max(0, ...(a.rounds || [])) || b.created - a.created)
         .map((m) => (
           <article className="memory-card" key={m.id}>
+            <h3>{m.kind === "round" ? `${roundLabel(m.rounds || [])}记忆` : m.automatic ? "旧版自动摘记" : "故事记忆"}</h3>
+            <label className="memory-select"><input type="checkbox" checked={selectedIds.includes(m.id)}
+              disabled={!selection.eligible.some((x) => x.id === m.id)}
+              onChange={(e) => void toggleMemory(m.id, e.target.checked).catch(() => notify("记忆选择保存失败，请重试。"))} />下次带入这条记忆</label>
+            {!selectedIds.includes(m.id) && <p className="hint">{selection.eligible.some((x) => x.id === m.id) ? "未自动选择：近期原文已覆盖，或超出自动读取数量；可手动勾选。" : "不参与当前请求：旧摘记、来源失效、待确认或当前角色不可知。"}</p>}
             <span className="tag">
               {
                 {
@@ -1426,9 +1419,9 @@ function Memories({
             </details>
             <div className="row">
               <button onClick={() => setEditing(m)}>修改 / 知情范围</button>
-              {m.status !== "accepted" && m.status !== "invalid" && (
+              {!m.automatic && m.status !== "accepted" && memoryValid({ ...m, status: "accepted" }, s, events) && (
                 <button onClick={() => accept(m)}>
-                  接受{m.status === "review" ? "并确认新来源" : ""}
+                  确认记忆
                 </button>
               )}
               <button
@@ -1479,6 +1472,8 @@ function Memories({
                   setEditing({
                     ...editing,
                     text: target.text + "\n" + editing.text,
+                    rounds: [...new Set([...(target.rounds || []), ...(editing.rounds || [])])].sort((a, b) => a - b),
+                    batchRounds: [...new Set([...(target.batchRounds || []), ...(editing.batchRounds || [])])].sort((a, b) => a - b),
                     sources: [...target.sources, ...editing.sources].filter(
                       (x, i, a) => a.findIndex((y) => y.id === x.id) === i,
                     ),
@@ -1621,7 +1616,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
     ) || [];
   const world = useLiveQuery(() => db.world.toArray(), []) || [];
   useEffect(() => {
-    void refreshTimelineMemory(id).catch(() => notify("自动摘记没能保存，原文仍保留，可以刷新后重试。"));
+    void ensureStoryRounds(id).catch(() => notify("回合顺序初始化失败，请刷新后重试。"));
   }, [id, s?.timelineMode, s?.autoMemory, s?.roles.map((r) => r.id).join(","), events.length]);
   const [mode, setMode] = useState<"novel" | "chat">("novel"),
     [panel, setPanel] = useState(""),
@@ -1864,7 +1859,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
           </div>
         </div>
         <div className="row">
-          <button data-guide="memory" onClick={() => setPanel("memory")}>
+          <button data-guide="memory" aria-label="故事记忆" onClick={() => setPanel("memory")}>
             <BookMarked size={18} />
             <span>故事记忆</span>
           </button>
@@ -2440,7 +2435,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
         </Modal>
       )}
       {panel === "memory" && (
-        <Memories s={s} notify={notify} onClose={() => setPanel("")} />
+        <Memories s={s} mode={mode} notify={notify} onClose={() => setPanel("")} />
       )}{" "}
       {panel === "settings" && (
         <Modal title="这本故事的设定" onClose={() => setPanel("")}>
@@ -2859,7 +2854,8 @@ function SettingsPage({ notify }: { notify: Notice }) {
   const [edit, setEdit] = useState<Profile>(),
     [kind, setKind] = useState<PromptKind>("novel"),
     [inspirationWindow, setInspirationWindow] = useState("3"),
-    [novelWindow, setNovelWindow] = useState("7"),
+    [memoryEvery, setMemoryEvery] = useState("5"),
+    [memoryLimit, setMemoryLimit] = useState("8"),
     [custom, setCustom] = useState("");
   useEffect(() => {
     setCustom(prefs?.prompts[kind]?.text ?? defaults[kind]);
@@ -2870,8 +2866,8 @@ function SettingsPage({ notify }: { notify: Notice }) {
     );
   }, [prefs?.inspirationParagraphs]);
   useEffect(() => {
-    setNovelWindow(String(proseCount(prefs?.novelContextRounds)));
-  }, [prefs?.novelContextRounds]);
+    if (prefs) { setMemoryEvery(String(memoryInterval(prefs))); setMemoryLimit(String(memoryReadLimit(prefs))); }
+  }, [prefs?.memoryIntervalRounds, prefs?.memoryAutoReadLimit]);
   if (!prefs) return null;
   return (
     <div className="page settings-page">
@@ -2960,31 +2956,16 @@ function SettingsPage({ notify }: { notify: Notice }) {
             <Toggle label="台词检查（只提醒，不拦截）" value={!!prefs.dialogueCheck}
               onChange={(value) => db.preferences.update("preferences", { dialogueCheck: value }).then(() => {})} />
             <p className="hint">默认关闭。开启后只提示台词用字差异，完整正文仍会直接保存；标点变化也可能触发提醒。</p>
-            <Field label="正文参考回合数">
-              <input
-                type="number"
-                min={1}
-                max={50}
-                step={1}
-                value={novelWindow}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setNovelWindow(value);
-                  const count = Number(value);
-                  if (Number.isInteger(count) && count >= 1 && count <= 50)
-                    void db.preferences
-                      .update("preferences", { novelContextRounds: count })
-                      .catch(() => notify("正文参考回合数没能保存，请重试。"));
-                }}
-                onBlur={() =>
-                  setNovelWindow(String(proseCount(prefs.novelContextRounds)))
-                }
-              />
-            </Field>
-            <p className="hint">
-              默认读取最近 7 回合完整正文，可设为 1 到
-              50。未采用草稿不计入；自动互通模式的修改提醒不阻断后文。相关旧原文会按需补充，重写只参考原文之前的经历。启用多轮前缀复用时会保留已带入的历史，容量不足时按此窗口重新整理。必读材料超出容量时会提示调整。关闭开发者模式后仍生效。
-            </p>
+            <p className="hint">正文与聊天共用最多20回原文，按16～20回分批滚动。删除和被替换的旧版本不参与请求。</p>
+            <Field label="每几回合自动提炼记忆"><input type="number" min={1} step={1} value={memoryEvery}
+              onChange={(e) => { setMemoryEvery(e.target.value); const n = Number(e.target.value);
+                if (Number.isSafeInteger(n) && n >= 1) void db.preferences.update("preferences", { memoryIntervalRounds: n }).catch(() => notify("记忆频率保存失败")); }}
+              onBlur={() => setMemoryEvery(String(memoryInterval(prefs)))} /></Field>
+            <Field label="最多自动读取几条回合记忆"><input type="number" min={0} step={1} value={memoryLimit}
+              onChange={(e) => { setMemoryLimit(e.target.value); const n = Number(e.target.value);
+                if (e.target.value && Number.isSafeInteger(n) && n >= 0) void db.preferences.update("preferences", { memoryAutoReadLimit: n }).catch(() => notify("记忆数量保存失败")); }}
+              onBlur={() => setMemoryLimit(String(memoryReadLimit(prefs)))} /></Field>
+            <p className="hint">默认每5回整理一段、自动读取8条；读取数量设为0可关闭自动选择。记忆库可临时增减下一次参考。自动提炼会调用当前接口，失败时保留进度并提示。</p>
             <Field label="灵感小助手参考正文段数">
               <input
                 type="number"

@@ -1,9 +1,9 @@
 import { assemble } from "./context";
 import { prompt } from "./prompts";
 import { styleInstruction } from "./style-presets";
+import { selectRoundContext, memoryReadLimit, roundLabel } from "./rounds";
 import {
   fullAudience,
-  relevance,
   sharedTimeline,
   usableEvent,
 } from "./timeline";
@@ -67,7 +67,9 @@ export function inspirationSourceText({
   prefs,
 }: InspirationInputs) {
   return JSON.stringify({
-    policy: 2,
+    policy: 3,
+    memoryLimit: memoryReadLimit(prefs),
+    windowStart: s.contextWindowStart,
     story: {
       id: s.id,
       background: s.background,
@@ -129,19 +131,19 @@ export function buildInspirationContext(
   memories: Memory[] = [],
   feedback = "",
 ) {
+  const common = selectRoundContext(story, events, memories, prefs, undefined, false, false);
   const recent = recentProse(
-    events,
+    common.history,
     inspirationCount(prefs.inspirationParagraphs),
     story,
   );
   const eligible = events
     .filter((e) => e.storyId === story.id && usableEvent(e, story))
     .sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id));
-  const chats = eligible.filter((e) => e.kind === "message").slice(-20);
+  const chats = [...common.history.filter((e) => e.kind === "message"), ...eligible.filter((e) => e.chatPending)];
   const history = [...recent, ...chats].sort(
     (a, b) => a.seq - b.seq || a.id.localeCompare(b.id),
   );
-  const recentIds = new Set(history.map((e) => e.id));
   const sourceMap = new Map(eligible.map((e) => [e.id, e]));
   const present = story.roles.map((r) => r.id);
   const names = (ids: string[]) =>
@@ -215,35 +217,11 @@ export function buildInspirationContext(
   );
   loadedWorld.filter((w) => !w.always).forEach((w) => addWorld(w, false));
 
-  const validMemories = memories.filter(
-    (m) =>
-      m.storyId === story.id &&
-      m.status === "accepted" &&
-      m.sources.length > 0 &&
-      m.sources.every(
-        (ref) => sourceMap.get(ref.id)?.versionId === ref.versionId,
-      ) &&
-      (!m.automatic ||
-        (sharedTimeline(story) &&
-          story.autoMemory &&
-          m.sources.some((ref) => !recentIds.has(ref.id)))),
-  );
-  const lastSeq = (m: Memory) =>
-    Math.max(...m.sources.map((ref) => sourceMap.get(ref.id)!.seq));
-  const scores = relevance(
-    query,
-    validMemories.map((m) => m.text),
-  );
-  const selectedMemories = validMemories
-    .map((m, i) => ({ m, score: scores[i] }))
-    .sort(
-      (a, b) =>
-        Number(!!a.m.automatic) - Number(!!b.m.automatic) ||
-        b.score - a.score ||
-        lastSeq(b.m) - lastSeq(a.m) ||
-        a.m.id.localeCompare(b.m.id),
-    )
-    .slice(0, 12);
+  const lastSeq = (m: Memory) => Math.max(0, ...m.sources.map((ref) => sourceMap.get(ref.id)!.seq));
+  // Inspiration uses the configured default, never consumes the next-reply override.
+  const rawIds = new Set(history.map((e) => e.id));
+  const readLimit = memoryReadLimit(prefs);
+  const selectedMemories = (readLimit ? common.eligible.filter((m) => m.sources.some((ref) => !rawIds.has(ref.id))).slice(-readLimit) : []).map((m) => ({ m, score: 0 }));
   const timeline: { seq: number; material: Material }[] = [];
   for (const { m, score } of selectedMemories) {
     const audience = m.knownBy.filter((id) =>
@@ -261,9 +239,7 @@ export function buildInspirationContext(
       seq: lastSeq(m),
       material: {
         id: m.id,
-        label: m.automatic
-          ? "早期经历摘记 · 有省略，以原文为准"
-          : "已确认的故事记忆",
+        label: `${roundLabel(m.sources.flatMap((ref) => common.byId.get(ref.id)?.round || []))}记忆`,
         text: `${scope(audience)}\n来源：${m.sources.map((ref) => `经历 ${sourceMap.get(ref.id)!.seq} / ${ref.id} / 版本 ${ref.versionId}`).join("；")}\n${m.text}`,
         mandatory: !m.automatic,
         priority: 60 + Math.min(25, score),

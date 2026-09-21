@@ -77,6 +77,11 @@ export interface Story {
   memoryCursor: number;
   memoryState: "idle" | "running" | "failed" | "interrupted";
   memoryError: string;
+  nextRound?: number;
+  contextWindowStart?: number;
+  memoryAutoStart?: number;
+  // Transient next-reply override; excluded from backups.
+  memorySelection?: { token: string; ids: string[] };
   inspiration?: Inspiration;
   inspirationRequest?: string;
   inspirationRevision?: string;
@@ -123,6 +128,7 @@ export interface SceneEvent {
   warnings?: string[];
   chatPending?: boolean;
   chatBatchId?: string;
+  round?: number;
 }
 export interface ChatBatch {
   id: string;
@@ -154,6 +160,10 @@ export interface Memory {
   status: "candidate" | "accepted" | "ignored" | "invalid" | "review";
   created: number;
   automatic?: boolean;
+  kind?: "round";
+  rounds?: number[];
+  batchRounds?: number[];
+  timelineMode?: "shared" | "strict";
 }
 export interface Profile {
   id: string;
@@ -183,6 +193,8 @@ export interface Preferences {
   dialogueCheck?: boolean;
   inspirationParagraphs?: number;
   novelContextRounds?: number;
+  memoryIntervalRounds?: number;
+  memoryAutoReadLimit?: number;
   stylePresets?: StylePreset[];
   prompts: Partial<Record<PromptKind, { text: string; enabled: boolean }>>;
 }
@@ -224,10 +236,13 @@ export interface ContextReport {
   task?: string;
   messages?: PromptMessage[];
   prefixReuse?: {
-    state: "first" | "continued" | "settings" | "history" | "capacity" | "rewrite";
+    state: "first" | "continued" | "settings" | "history" | "capacity" | "rewrite" | "window" | "selection";
     retainedMessages: number;
   };
-  history?: { limit: number; sources: SourceRef[]; recalled?: SourceRef[] };
+  history?: { limit: number; sources: SourceRef[]; recalled?: SourceRef[]; rounds?: number[]; windowStart?: number };
+  memoryContext?: { selected: string[]; gaps: number[]; selectionToken?: string; automaticLimit: number };
+  materialTokens?: { settings: number; memories: number; history: number; task: number };
+  taskSources?: SourceRef[];
   usage?: ModelUsage;
   durationMs?: number;
 }
@@ -246,6 +261,8 @@ export interface PromptSession {
   events: Record<string, string>;
   memories: Record<string, string>;
   inputTokens?: number;
+  windowStart?: number;
+  selectedMemories?: string[];
 }
 export interface ModelResult {
   text: string;

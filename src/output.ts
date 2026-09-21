@@ -135,16 +135,7 @@ export const outputSchemas: Record<PromptKind, ReturnType<typeof object>> = {
   novel: object({ text: string, facts: array(fact) }),
   chat: object({ messages: array(string) }),
   facts: object({ facts: array(fact) }),
-  memory: object({
-    memories: array(
-      object({
-        text: string,
-        sourceIds: array(string),
-        knownBy: array(string),
-        scope: { type: "string", enum: ["story", "roles"] },
-      }),
-    ),
-  }),
+  memory: object({ text: string }),
   inspiration: object({
     options: array(
       object({

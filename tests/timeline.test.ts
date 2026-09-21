@@ -80,39 +80,33 @@ it("enables a legacy story once while retaining explicit and previously revoked 
   expect((await context()).user).not.toContain("显式私密正文");
   expect((await db.events.get(restricted.id))?.visibility).toBe("facts");
   expect((await db.events.get(restricted.id))?.versions).toHaveLength(2);
-  expect(await db.memories.count()).toBe(4);
+  expect(await db.memories.count()).toBe(0);
 });
 
-it("retrieves an old original after dozens of passages and respects context capacity", async () => {
+it("does not recall old originals by keyword or synthesize excerpt fallbacks", async () => {
   const old = event(1, "他们约定七月去雾岚岛看灯塔，船票放在蓝色抽屉里。");
   await db.events.bulkAdd([old, ...Array.from({ length: 45 }, (_, i) => event(i + 2, `第${i}天，两人在店里整理书架。`))]);
   await refreshTimelineMemory(s.id);
   const r = await context("chat", "雾岚岛的船票放哪了？");
-  expect(r.included.find((m) => m.id === old.id)?.text).toBe(old.text);
-  expect(r.history?.recalled?.some((ref) => ref.id === old.id)).toBe(true);
+  expect(r.included.some((m) => m.id === old.id)).toBe(false);
+  expect(r.history?.recalled).toEqual([]);
+  expect(r.history?.rounds).toEqual(Array.from({ length: 16 }, (_, i) => i + 31));
+  expect(r.memoryContext?.gaps).toContain(1);
   expect(r.estimate).toBeLessThanOrEqual(r.limit);
-  expect(r.included.filter((m) => m.id.startsWith("event-")).map((m) => m.id)).toEqual([
-    "event-1", ...Array.from({ length: 7 }, (_, i) => "event-" + (40 + i)),
-  ]);
-  const memories = await db.memories.toArray();
-  expect(memories).toHaveLength(46);
-  expect(memories.every((m) => m.status === "accepted" && m.knownBy.includes(s.partner))).toBe(true);
+  expect(await db.memories.count()).toBe(0);
 });
 
-it("preserves edited/ignored excerpts and regenerates only an edited source", async () => {
+it("preserves legacy edited and ignored memories without creating fresh excerpts", async () => {
   const a = event(1, "最初约在门口。"), b = event(2, "随后走进书店。");
-  await db.events.bulkAdd([a, b]); await refreshTimelineMemory(s.id);
-  const [first, second] = (await db.memories.toArray()).sort((x, y) => x.created - y.created);
-  await db.memories.update(first.id, { text: "作者改过的摘记", automatic: false });
-  await db.memories.update(second.id, { status: "ignored" });
+  await db.events.bulkAdd([a, b]);
+  await db.memories.bulkAdd([a, b].map((e, i) => ({ id: "legacy-" + i, storyId: s.id,
+    text: i ? e.text : "作者改过的摘记", automatic: !!i, sources: [{ id: e.id, versionId: e.versionId }],
+    status: i ? "ignored" as const : "accepted" as const, knownBy: [], scope: "story" as const, created: i })));
   await refreshTimelineMemory(s.id);
-  expect(await db.memories.count()).toBe(2);
-  expect((await db.memories.get(first.id))?.text).toBe("作者改过的摘记");
   await reviseEvent(a.id, "改为桥边见面。");
-  expect((await db.memories.get(first.id))?.status).toBe("review");
-  expect((await db.memories.get(second.id))?.status).toBe("ignored");
-  expect((await context("novel")).user).toContain("随后走进书店。");
-  expect((await db.memories.toArray()).some((m) => m.automatic && m.text === "改为桥边见面。")).toBe(true);
+  expect((await db.memories.get("legacy-0"))?.status).toBe("review");
+  expect((await db.memories.get("legacy-1"))?.status).toBe("ignored");
+  expect(await db.memories.count()).toBe(2);
 });
 
 it.each(["shared", "strict"] as const)("metadata edits do not invalidate later events in %s mode", async (mode) => {
@@ -180,24 +174,27 @@ it("AI summaries use separate audience requests, inherit prose visibility and re
     ...Array.from({ length: 24 }, (_, i) => event(i + 2, "PUBLIC_EVENT_" + i))]);
   const api = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
     const body = JSON.parse(init?.body as string);
-    const rows = JSON.parse(body.messages[1].content.split("【当前任务】\n")[1]);
+    const content = body.messages[1].content;
+    const rows = JSON.parse(content.slice(content.indexOf("[{")));
     const privateGroup = rows.some((r: any) => r.text === "ONLY_AUTHOR");
     expect(rows.every((r: any) => privateGroup ? r.text === "ONLY_AUTHOR" : r.text.startsWith("PUBLIC_EVENT_"))).toBe(true);
-    return response({ memories: [{ text: privateGroup ? "AUTHOR_SUMMARY" : "SHARED_SUMMARY", sourceIds: rows.map((r: any) => r.id), knownBy: [], scope: "story" }] });
+    return response({ text: privateGroup ? "AUTHOR_SUMMARY" : "SHARED_SUMMARY" });
   });
   await organizeMemory(s.id);
-  expect(api).toHaveBeenCalledTimes(2);
-  expect((await db.stories.get(s.id))?.memoryCursor).toBe(20);
+  expect(api).toHaveBeenCalledTimes(6);
+  expect((await db.stories.get(s.id))?.memoryCursor).toBe(25);
   const memories = await db.memories.toArray();
-  expect(memories.find((m) => m.text === "SHARED_SUMMARY")).toMatchObject({ status: "accepted", knownBy: s.roles.map((r) => r.id) });
+  expect(memories.find((m) => m.text === "SHARED_SUMMARY")).toMatchObject({ status: "accepted", knownBy: s.roles.map((r) => r.id).sort() });
   expect((await context()).user).not.toContain("AUTHOR_SUMMARY");
-  await organizeMemory(s.id); expect(api).toHaveBeenCalledTimes(3);
+  await organizeMemory(s.id); expect(api).toHaveBeenCalledTimes(6);
   expect((await db.stories.get(s.id))?.memoryCursor).toBe(25);
 });
 
 it("round-trips sharing, warnings, source versions, excerpt status and dialogue preference in backups", async () => {
   const e = event(1, "备份私密正文", { visibility: "author", warnings: ["可选提醒"] });
-  await db.events.add(e); await refreshTimelineMemory(s.id);
+  await db.events.add(e);
+  await db.memories.add({ id: "legacy-backup", storyId: s.id, text: e.text, automatic: true,
+    sources: [{ id: e.id, versionId: e.versionId }], status: "accepted", knownBy: [], scope: "story", created: 1 });
   await db.preferences.update("preferences", { dialogueCheck: true });
   await importBackup(await exportBackup(), true);
   const imported = (await db.stories.toArray())[0];

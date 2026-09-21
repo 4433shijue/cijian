@@ -12,23 +12,8 @@ test("desktop full journey with controlled protocol fixture", async ({
   await page.route("https://fixture.test/**", async (route) => {
     const body = route.request().postDataJSON();
     const system = body.messages?.[0]?.content || "";
-    const rows = system.includes("memories")
-      ? JSON.parse(body.messages[1].content.split("【当前任务】\n")[1])
-      : [];
-    const last = rows.at(-1);
-    const response = system.includes("memories")
-      ? JSON.stringify({
-          memories: last
-            ? [
-                {
-                  text: "对方说伞可以明天归还。",
-                  sourceIds: [last.id],
-                  knownBy: last.knownBy,
-                  scope: "story",
-                },
-              ]
-            : [],
-        })
+    const response = system.includes('"一段连贯的回合记忆"')
+      ? JSON.stringify({ text: "对方说伞可以明天归还，两人已经约好路过书店时再交还，目前伞仍由借用的一方保管。" })
       : system.includes("messages")
         ? JSON.stringify({
             messages: ["伞先放你那里。", "明天路过书店再给我。"],
@@ -99,11 +84,9 @@ test("desktop full journey with controlled protocol fixture", async ({
   await expect(page.locator(".message-event")).toHaveCount(3);
   await expect(page.getByText("伞先放你那里。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "故事记忆" }).click();
-  await page.getByRole("button", { name: "立即整理" }).click();
-  await expect(page.getByText("处理进度 · 节点 4")).toBeVisible();
-  await expect(page.getByText("待确认", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: "接受", exact: true }).last().click();
-  await expect(page.getByText("已记住", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "一键补齐回合记忆" }).click();
+  await expect(page.getByText("已记住", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "一键补齐回合记忆" })).toBeDisabled();
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.reload();
   await page.getByRole("button", { name: "手机聊天", exact: true }).click();

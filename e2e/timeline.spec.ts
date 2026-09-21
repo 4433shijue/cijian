@@ -34,7 +34,7 @@ for (const mobile of [false, true]) test(`shared timeline carries old prose into
   await seed(page);
   await page.getByRole("button", { name: "整本启用自动互通", exact: true }).click();
   await expect(page.getByRole("button", { name: "整本启用自动互通", exact: true })).toHaveCount(0);
-  await expect.poll(async () => (await readStore(page, "memories")).length).toBe(32);
+  await expect.poll(async () => (await readStore(page, "memories")).length).toBe(0);
   const requests: any[] = [];
   await page.route("https://timeline.fixture.test/**", async (route) => {
     const body = route.request().postDataJSON(); requests.push(body);
@@ -51,7 +51,8 @@ for (const mobile of [false, true]) test(`shared timeline carries old prose into
   await page.getByRole("button", { name: "让 TA 回复（2）", exact: true }).click();
   await expect(page.locator(".message-event.theirs")).toHaveCount(2);
   expect(requests).toHaveLength(1);
-  expect(requests[0].messages[1].content).toContain("雾岚岛的船票已经放在蓝色抽屉。");
+  expect(requests[0].messages[1].content).not.toContain("雾岚岛的船票已经放在蓝色抽屉。");
+  expect(requests[0].messages[1].content).toContain("未被所选记忆完整覆盖");
   expect(requests[0].messages[1].content).toContain("旧正文第32段");
   expect(requests[0].messages[1].content).not.toContain("PRIVATE_SECRET_HIDDEN");
   await page.screenshot({ path: `work/timeline-${mobile ? "mobile" : "desktop"}.png`, fullPage: false });
@@ -84,6 +85,7 @@ test("optional dialogue advice and paragraph privacy controls persist without in
   await page.goto("/#settings");
   await page.getByRole("checkbox", { name: "显示内部提示词编辑器" }).check();
   await page.getByRole("checkbox", { name: "台词检查（只提醒，不拦截）" }).check();
+  await expect.poll(async () => (await readStore(page, "preferences"))[0].dialogueCheck).toBe(true);
   await page.reload();
   await expect(page.getByRole("checkbox", { name: "台词检查（只提醒，不拦截）" })).toBeChecked();
   await page.route("https://timeline.fixture.test/**", (route) => route.fulfill({ json: {

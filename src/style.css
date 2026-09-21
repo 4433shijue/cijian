@@ -1217,6 +1217,16 @@ details pre {
   padding: 20px 0;
   border-bottom: 1px solid #dfe6d3;
 }
+.memory-select {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0.75rem 0;
+  font-size: 0.9rem;
+}
+.memory-select input {
+  flex: 0 0 auto;
+}
 .memory-card > p {
   margin: 10px 0;
 }

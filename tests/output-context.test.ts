@@ -138,7 +138,7 @@ describe("recoverable model output", () => {
 });
 
 describe("stable context with a rolling prose window", () => {
-  it("keeps world/personas stable while advancing exactly seven chronological prose rounds", async () => {
+  it("keeps settings stable and applies the combined twenty-round policy regardless of legacy prose settings", async () => {
     const s = await story();
     s.worldIds = ["static", "trigger"];
     const worlds = [
@@ -167,10 +167,10 @@ describe("stable context with a rolling prose window", () => {
       "雨落下。",
     );
     expect(first.history?.sources.map((x) => x.id)).toEqual(
-      [2, 3, 4, 5, 6, 7, 8].map((n) => "prose-" + n),
+      [1, 2, 3, 4, 5, 6, 7, 8].map((n) => "prose-" + n),
     );
     expect(next.history?.sources.map((x) => x.id)).toEqual(
-      [3, 4, 5, 6, 7, 8, 9].map((n) => "prose-" + n),
+      [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => "prose-" + n),
     );
     expect(first.stablePrefix).toBe(next.stablePrefix);
     expect(next.user.startsWith(next.stablePrefix!)).toBe(true);
@@ -182,7 +182,7 @@ describe("stable context with a rolling prose window", () => {
     expect(next.user.indexOf("正文标记3。")).toBeLessThan(
       next.user.indexOf("正文标记9。"),
     );
-    expect(next.user).not.toContain("正文标记2。");
+    expect(next.user).toContain("正文标记2。");
     expect(next.user.endsWith("本次没有识别到引用台词。")).toBe(true);
     const small = buildContext(
       "novel",
@@ -199,10 +199,7 @@ describe("stable context with a rolling prose window", () => {
       p,
       "递伞",
     );
-    expect(small.history?.sources.map((x) => x.id)).toEqual([
-      "prose-8",
-      "prose-9",
-    ]);
+    expect(small.history?.sources.map((x) => x.id)).toEqual(events.map((e) => e.id));
     expect(small.stablePrefix).toBe(first.stablePrefix);
     expect(proseCount(undefined)).toBe(7);
     expect(proseCount(0)).toBe(7);
@@ -220,7 +217,7 @@ describe("stable context with a rolling prose window", () => {
         { ...p, context: 4000 },
         "递伞",
       ),
-    ).toThrow("正文参考回合数");
+    ).toThrow("减少勾选记忆");
   });
   it("applies audience filters before constructing the cached chat prefix", async () => {
     const s = await story();

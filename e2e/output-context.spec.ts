@@ -249,7 +249,7 @@ test("an open reference window receives final usage after generation completes",
   expect((await readStore(page, "events"))[0].status).toBe("complete");
 });
 
-test("seven-round default and configurable history remain independent of inspiration and expose actual cache usage", async ({
+test("combined round window and memory preferences remain independent of inspiration and expose cache usage", async ({
   page,
 }) => {
   await seed(page, 9);
@@ -257,28 +257,28 @@ test("seven-round default and configurable history remain independent of inspira
     .locator(".story-toolbar")
     .getByRole("button", { name: "本次参考内容", exact: true })
     .click();
-  await expect(page.getByRole("dialog")).toContainText("正文窗口 7 / 7 回合");
+  await expect(page.getByRole("dialog")).toContainText("原文窗口 9 / 20 回合");
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "关闭", exact: true })
     .click();
   await page.goto("/#settings");
   await page.getByRole("checkbox", { name: "显示内部提示词编辑器" }).check();
-  await expect(page.getByLabel("正文参考回合数", { exact: true })).toHaveValue(
-    "7",
+  await expect(page.getByLabel("每几回合自动提炼记忆", { exact: true })).toHaveValue(
+    "5",
   );
   await expect(
     page.getByLabel("灵感小助手参考正文段数", { exact: true }),
   ).toHaveValue("3");
-  await page.getByLabel("正文参考回合数", { exact: true }).fill("2");
+  await page.getByLabel("每几回合自动提炼记忆", { exact: true }).fill("2");
   await page.getByRole("checkbox", { name: "显示内部提示词编辑器" }).uncheck();
   await page.reload();
-  expect((await readStore(page, "preferences"))[0].novelContextRounds).toBe(2);
+  expect((await readStore(page, "preferences"))[0].memoryIntervalRounds).toBe(2);
   await page.getByRole("checkbox", { name: "显示内部提示词编辑器" }).check();
   await page.goto("/#story/fixture-story");
   await page.route("https://output.fixture.test/**", async (route) => {
     const input = route.request().postDataJSON().messages[1].content;
-    expect(input).not.toContain("过去正文7。");
+    expect(input).toContain("过去正文7。");
     expect(input.indexOf("过去正文8。")).toBeLessThan(
       input.indexOf("过去正文9。"),
     );
@@ -307,7 +307,7 @@ test("seven-round default and configurable history remain independent of inspira
   ).toBeVisible();
   await latest.getByRole("button", { name: "参考内容", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("正文窗口 2 / 2 回合");
+  await expect(dialog).toContainText("原文窗口 9 / 20 回合");
   await expect(dialog).toContainText("缓存命中 100 token");
   await expect(dialog).toContainText("命中率 50.0%");
   await expect(dialog).toContainText("缓存写入 服务未返回");

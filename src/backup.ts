@@ -54,6 +54,9 @@ const story = z.object({
   memoryCursor: z.number(),
   memoryState: z.enum(["idle", "running", "failed", "interrupted"]),
   memoryError: str,
+  nextRound: z.number().int().positive().optional(),
+  contextWindowStart: z.number().int().nonnegative().optional(),
+  memoryAutoStart: z.number().int().positive().optional(),
 });
 const world = z.object({
   id: str,
@@ -95,6 +98,7 @@ const event = z.object({
   warnings: ids.optional(),
   chatPending: z.boolean().optional(),
   chatBatchId: str.optional(),
+  round: z.number().int().positive().optional(),
 });
 const chatBatch = z.object({
   id: str,
@@ -120,6 +124,10 @@ const memory = z.object({
   sources: z.array(z.object({ id: str, versionId: str })),
   status: z.enum(["candidate", "accepted", "ignored", "invalid", "review"]),
   automatic: z.boolean().optional(),
+  kind: z.literal("round").optional(),
+  rounds: z.array(z.number().int().positive()).optional(),
+  batchRounds: z.array(z.number().int().positive()).optional(),
+  timelineMode: z.enum(["shared", "strict"]).optional(),
   created: z.number(),
 });
 const profile = z.object({
@@ -147,6 +155,8 @@ const prefs = z.object({
   dialogueCheck: z.boolean().optional(),
   inspirationParagraphs: z.number().int().min(1).max(20).optional(),
   novelContextRounds: z.number().int().min(1).max(50).optional(),
+  memoryIntervalRounds: z.number().int().positive().safe().optional(),
+  memoryAutoReadLimit: z.number().int().nonnegative().safe().optional(),
   stylePresets: z
     .array(
       z.object({
@@ -276,7 +286,7 @@ export async function exportBackup() {
       created: new Date().toISOString(),
       roles: await db.roles.toArray(),
       stories: (await db.stories.toArray()).map(
-        ({ inspiration, inspirationRequest, inspirationRevision, ...story }) =>
+        ({ inspiration, inspirationRequest, inspirationRevision, memorySelection, ...story }) =>
           story,
       ),
       world: await db.world.toArray(),

@@ -81,7 +81,7 @@ export async function preparePrefix(
   // Include all bound world entries, even keyword-triggered ones, so removing or
   // restricting a previously used entry invalidates its retained copy.
   const config = JSON.stringify({
-    version: 1,
+    version: 2,
     system,
     prefix: baseline.stablePrefix,
     profile: [
@@ -97,15 +97,12 @@ export async function preparePrefix(
     ],
     style: [styleInstruction(s, prefs, kind), s.length, s.psychology],
     timeline: [s.timelineMode, s.autoMemory, baseline.history?.limit],
+    pending: baseline.taskSources,
     world: s.worldIds.map((id) => world.find((w) => w.id === id)),
-    memories: memories
-      .filter((m) => !m.automatic)
-      .sort((a, b) => a.id.localeCompare(b.id))
-      .map(memoryStamp),
-    ignoredExcerpts: memories
-      .filter((m) => m.automatic && m.status === "ignored")
-      .sort((a, b) => a.id.localeCompare(b.id))
-      .map(memoryStamp),
+    memories: (baseline.memoryContext?.selected || []).map((id) => {
+      const memory = memories.find((m) => m.id === id);
+      return memory && [id, memoryStamp(memory)];
+    }),
   });
   const previous = rewrite ? undefined : await db.promptSessions.get(id);
   const eventMap = new Map(events.map((e) => [e.id, e]));
@@ -115,7 +112,20 @@ export async function preparePrefix(
     : "first";
   let reused = previous;
   if (previous) {
-    if (previous.config !== config) {
+    const rawIds = new Set(baseline.history?.sources.map((ref) => ref.id));
+    if (previous.covered.some((ref) => {
+      const e = eventMap.get(ref.id);
+      return !e || e.deleted || e.versionId !== ref.versionId;
+    })) {
+      state = "history";
+      reused = undefined;
+    } else if (previous.windowStart !== baseline.history?.windowStart || previous.covered.some((ref) => !rawIds.has(ref.id))) {
+      state = "window";
+      reused = undefined;
+    } else if (JSON.stringify(previous.selectedMemories) !== JSON.stringify(baseline.memoryContext?.selected || [])) {
+      state = "selection";
+      reused = undefined;
+    } else if (previous.config !== config) {
       state = "settings";
       reused = undefined;
     } else if (
@@ -174,40 +184,8 @@ export async function preparePrefix(
     }
   }
   if (!reused) {
-    // Keep every mandatory item, but leave growth room by admitting fewer
-    // optional excerpts. Repacking is local and never calls the model.
-    const all = baseline.included;
-    const minimum = messageCost([
-      { role: "system", content: system },
-      {
-        role: "user",
-        content:
-          all
-            .filter((m) => m.mandatory)
-            .map(section)
-            .join("") +
-          "【当前任务】\n" +
-          baseline.task,
-      },
-    ]);
-    if (minimum > baseline.limit)
-      throw Error(
-        "当前输入和必读材料超过上下文容量，请增大容量或减少正文参考回合数。没有发送请求。",
-      );
-    const target = Math.max(minimum, Math.floor(baseline.limit * 0.65));
-    let used = minimum;
-    const selected = new Set(all.filter((m) => m.mandatory));
-    for (const m of all
-      .filter((m) => !m.mandatory)
-      .sort((a, b) => b.priority - a.priority)) {
-      const extra = estimate(section(m));
-      if (used + extra <= target) {
-        selected.add(m);
-        used += extra;
-      }
-    }
-    included = all.filter((m) => selected.has(m));
-    omitted = [...baseline.omitted, ...all.filter((m) => !selected.has(m))];
+    included = baseline.included;
+    omitted = baseline.omitted;
     messages = [
       { role: "system", content: system },
       {
@@ -223,7 +201,7 @@ export async function preparePrefix(
         .filter((m) => !m.mandatory)
         .sort((a, b) => a.priority - b.priority)[0];
       if (!optional)
-        throw Error("当前输入和必读材料超过上下文容量。没有发送请求。");
+        throw Error(`当前输入和必读材料估算需要 ${cost} token，可用 ${baseline.limit}，超出 ${cost - baseline.limit} token。请精简设定、减少勾选记忆或调整接口容量。没有发送请求。`);
       included = included.filter((m) => m !== optional);
       omitted = [...omitted, optional];
       messages[1].content =
@@ -265,6 +243,8 @@ export async function preparePrefix(
     session: {
       id,
       storyId: s.id,
+      windowStart: baseline.history?.windowStart,
+      selectedMemories: baseline.memoryContext?.selected || [],
       config,
       messages,
       materials: included,
@@ -297,7 +277,7 @@ export async function commitPrefix(
     session.covered.push({ id: e.id, versionId: e.versionId });
     session.materials.push({
       id: e.id,
-      label: `经历 ${e.seq} / ${e.kind === "novel" ? "正文" : s.roles.find((r) => r.id === e.speaker)?.name + " 发言"}（前轮已带入）`,
+      label: `第${e.round}回 / 消息顺序 ${e.seq} / ${e.kind === "novel" ? "正文" : s.roles.find((r) => r.id === e.speaker)?.name + " 发言"}（前轮已带入）`,
       text: e.text,
       mandatory: false,
       priority: 0,

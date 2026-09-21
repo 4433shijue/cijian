@@ -2,8 +2,8 @@ import { withStoryLock } from "./locks";
 import { active, isBusy } from "./generation-state";
 export { isBusy, stop } from "./generation-state";
 import { z } from "zod";
-import { db, keyFor, reviseEvent, refreshTimelineMemory, collapseEarlierProse } from "./db";
-import { fullAudience, sharedTimeline, usableEvent } from "./timeline";
+import { db, keyFor, reviseEvent, collapseEarlierProse, ensureStoryRounds, consumeMemorySelection } from "./db";
+import { usableEvent } from "./timeline";
 import {
   uid,
   type SceneEvent,
@@ -38,16 +38,6 @@ const factsSchema = z.object({
     z.object({ quote: z.string().min(1), knownBy: z.array(z.string()) }),
   ),
 });
-const memoriesSchema = z.object({
-  memories: z.array(
-    z.object({
-      text: z.string().min(1),
-      sourceIds: z.array(z.string()).min(1),
-      knownBy: z.array(z.string()),
-      scope: z.enum(["story", "roles"]).default("story"),
-    }),
-  ),
-});
 async function settings() {
   const prefs = await db.preferences.get("preferences");
   const p = prefs && (await db.profiles.get(prefs.activeProfile));
@@ -63,6 +53,8 @@ async function report(
   until = Infinity,
   options: { styleOnly?: boolean } = {},
 ) {
+  const normalized = await ensureStoryRounds(s.id);
+  s = { ...s, nextRound: normalized.nextRound, contextWindowStart: normalized.contextWindowStart };
   const prior = (
     await db.events.where("storyId").equals(s.id).sortBy("seq")
   ).filter((e) => e.seq < until);
@@ -83,7 +75,7 @@ async function report(
     prefs,
     p,
     input,
-    options,
+    { ...options, rewrite: Number.isFinite(until) },
   );
   return preparePrefix(baseline, s, p, prefs, kind, prior, memories, world, Number.isFinite(until));
 }
@@ -350,7 +342,10 @@ async function runUnlocked(
           status: "complete",
           eventId: old?.id || event!.id,
         });
-        await commitPrefix(prepared, s, result.text, adopted, result.usage);
+        await ensureStoryRounds(storyId);
+        const numbered = (await db.events.bulkGet(adopted.map((e) => e.id))).filter((e): e is SceneEvent => !!e);
+        await commitPrefix(prepared, s, result.text, numbered, result.usage);
+        await consumeMemorySelection(storyId, context.memoryContext?.selectionToken);
       },
     );
     event = undefined;
@@ -415,132 +410,8 @@ async function extractFactsUnlocked(id: string) {
     active.delete(e.storyId);
   }
 }
-export async function memoryDue(s: Story) {
-  const events = await db.events
-    .where("storyId")
-    .equals(s.id)
-    .filter(
-      (e) => e.seq > s.memoryCursor && !e.deleted && e.status === "complete",
-    )
-    .toArray();
-  return (
-    (s.chatThreshold > 0 &&
-      events.filter((e) => e.kind === "message").length >= s.chatThreshold) ||
-    (s.novelThreshold > 0 &&
-      events.filter((e) => e.kind === "novel").length >= s.novelThreshold)
-  );
-}
-async function organizeMemoryUnlocked(storyId: string) {
-  if (active.has(storyId))
-    throw Error("故事正在生成，整理会在当前任务结束后进行");
-  const controller = new AbortController();
-  active.set(storyId, controller);
-  const jobId = uid();
-  try {
-    const s = await db.stories.get(storyId);
-    if (!s) throw Error("故事不存在");
-    const pending = await db.events
-      .where("storyId")
-      .equals(storyId)
-      .filter(
-        (e) =>
-          e.seq > s.memoryCursor &&
-          usableEvent(e, s) && !e.chatPending,
-      )
-      .sortBy("seq");
-    if (!pending.length) return;
-    const { p, prefs, key } = await settings();
-    // Process a bounded, contiguous prefix; each audience gets a separate request.
-    // An author-only secret must not contaminate a shared summary in the same call.
-    const events: SceneEvent[] = [];
-    for (const e of pending.slice(0, 20)) {
-      try {
-        assemble(prompt("memory", prefs), JSON.stringify([...events, e].map((x) => ({
-          id: x.id, text: x.text, knownBy: fullAudience(x, s),
-        }))), [], p.context, p.maxOutput);
-      } catch (error) {
-        if (!events.length) throw error;
-        break;
-      }
-      events.push(e);
-    }
-    await db.stories.update(storyId, {
-      memoryState: "running",
-      memoryError: "",
-    });
-    await db.jobs.add({
-      id: jobId,
-      storyId,
-      kind: "memory",
-      eventId: "",
-      inputVersion: String(s.memoryCursor),
-      status: "running",
-      created: Date.now(),
-      error: "",
-    });
-    const groups = new Map<string, SceneEvent[]>();
-    for (const e of events) {
-      const audience = JSON.stringify([...fullAudience(e, s)].sort());
-      groups.set(audience, [...(groups.get(audience) || []), e]);
-    }
-    const summaries: { memory: z.infer<typeof memoriesSchema>["memories"][number]; sources: SceneEvent[] }[] = [];
-    for (const group of groups.values()) {
-      const rows = group.map((e) => ({ id: e.id, text: e.text, knownBy: fullAudience(e, s) }));
-      const r = assemble(prompt("memory", prefs), JSON.stringify(rows), [], p.context, p.maxOutput);
-      const result = await generate(p, key, r.system, r.user, controller.signal, undefined, fetch, { kind: "memory" });
-      if (!result.complete) throw Error("整理未完整结束，进度未前移");
-      for (const m of memoriesSchema.parse(parseJSON(result.text)).memories) {
-        const sources = group.filter((e) => m.sourceIds.includes(e.id));
-        if (sources.length === new Set(m.sourceIds).size) summaries.push({ memory: m, sources });
-      }
-    }
-    await db.transaction(
-      "rw",
-      [db.events, db.memories, db.stories, db.jobs],
-      async () => {
-        for (const e of events)
-          if ((await db.events.get(e.id))?.versionId !== e.versionId)
-            throw Error("整理期间经历已修改，请重新整理");
-        if ((await db.stories.get(storyId))?.timelineMode !== s.timelineMode)
-          throw Error("整理期间故事互通设置已改变，请重新整理");
-        for (const { memory: m, sources } of summaries) {
-          const audience = s.roles
-            .map((r) => r.id)
-            .filter((id) =>
-              sources.every((e) => fullAudience(e, s).includes(id)),
-            );
-          await db.memories.add({
-            id: uid(),
-            storyId,
-            text: m.text,
-            knownBy: sharedTimeline(s) ? audience : m.knownBy.filter((id) => audience.includes(id)),
-            scope: m.scope,
-            sources: sources.map((e) => ({ id: e.id, versionId: e.versionId })),
-            status: sharedTimeline(s) ? "accepted" : "candidate",
-            created: Date.now(),
-          });
-        }
-        await db.stories.update(storyId, {
-          memoryCursor: events.at(-1)!.seq,
-          memoryState: "idle",
-          memoryError: "",
-        });
-        await db.jobs.update(jobId, { status: "complete" });
-      },
-    );
-  } catch (e) {
-    const error = e instanceof Error ? e.message : String(e);
-    await db.stories.update(storyId, {
-      memoryState: "failed",
-      memoryError: error,
-    });
-    await db.jobs.update(jobId, { status: "failed", error });
-    throw e;
-  } finally {
-    active.delete(storyId);
-  }
-}
-
+export { memoryDue, organizeMemory } from "./round-memory";
+import { maybeOrganizeMemory, scheduleAutomaticMemory } from "./round-memory";
 export async function run(
   storyId: string,
   kind: "novel" | "chat",
@@ -552,13 +423,7 @@ export async function run(
   await withStoryLock(storyId, () =>
     runUnlocked(storyId, kind, input, rewriteId, options),
   );
-  const s = await db.stories.get(storyId);
-  if (s && sharedTimeline(s)) await refreshTimelineMemory(storyId);
-  else if (s && s.autoMemory && s.memoryState === "idle" && (await memoryDue(s)))
-    await organizeMemory(storyId).catch(() => {});
-}
-export async function organizeMemory(storyId: string) {
-  return withStoryLock(storyId, () => organizeMemoryUnlocked(storyId));
+  await maybeOrganizeMemory(storyId);
 }
 export async function extractFacts(id: string) {
   const e = await db.events.get(id);
@@ -646,7 +511,9 @@ export async function adoptDraft(
           inspirationRevision: uid(),
           ...(story.draft === draft.input ? { draft: "" } : {}),
         });
-        await refreshTimelineMemory(story.id);
+        await ensureStoryRounds(story.id);
+        await consumeMemorySelection(story.id, draft.request?.memoryContext?.selectionToken);
+        scheduleAutomaticMemory(story.id);
         return target.id;
       },
     ),

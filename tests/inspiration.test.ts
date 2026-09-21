@@ -466,6 +466,7 @@ it("bounds recent messages, resolves world triggers and limits memory knowledge 
       speaker: a.id,
       participants: [a.id],
       text: `私聊第${i + 1}条，约好在灯塔碰面。`,
+      chatBatchId: `batch-${i}`,
     }),
   );
   const world = await db.world.toArray();
@@ -505,7 +506,7 @@ it("bounds recent messages, resolves world triggers and limits memory knowledge 
     [memory],
   );
   expect(report.included.filter((m) => m.id.startsWith("prose-"))).toHaveLength(
-    20,
+    19,
   );
   expect(report.user).not.toContain("私聊第4条");
   expect(report.user).toContain("私聊第24条");

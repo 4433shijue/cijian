@@ -1,7 +1,8 @@
 import { prompt } from "./prompts";
 import { quotedDialogue } from "./output";
 import { styleInstruction } from "./style-presets";
-import { fullAudience, historyExcerpt, relevance, sharedTimeline, usableEvent, visibleText } from "./timeline";
+import { sharedTimeline, usableEvent, visibleText } from "./timeline";
+import { HISTORY_LIMIT, roundLabel, selectRoundContext } from "./rounds";
 import type {
   Story,
   SceneEvent,
@@ -39,7 +40,7 @@ export function assemble(
   }
   if (used > limit)
     throw Error(
-      `当前输入和必读材料估算需要 ${used} token，可用 ${limit}。请增大上下文容量、降低输出限额、精简设定或调低正文参考回合数。没有发送请求。`,
+      `当前输入和必读材料估算需要 ${used} token，可用 ${limit}，超出 ${used - limit} token。请增大上下文容量、降低输出限额、精简设定或减少勾选记忆。没有发送请求。`,
     );
   for (const m of materials
     .filter((m) => !m.mandatory)
@@ -82,7 +83,7 @@ export function buildContext(
   prefs: Preferences,
   p: Profile,
   input: string,
-  options: { styleOnly?: boolean; chatMessages?: string[] } = {},
+  options: { styleOnly?: boolean; chatMessages?: string[]; rewrite?: boolean } = {},
 ): ContextReport {
   const viewer = kind === "chat" ? s.partner : undefined;
   const mats: Material[] = [];
@@ -151,56 +152,17 @@ export function buildContext(
     (w) => !w.always && w.keywords.some((k) => k.trim() && input.includes(k)),
   ))
     add(w.id, "世界书 · " + w.title, w.text, true, 60);
-  const limit = proseCount(prefs.novelContextRounds);
-  const usable = (e: SceneEvent) => usableEvent(e, s) && (kind !== "chat" || !e.chatPending);
-  const eligible = events
-    .filter((e) => usable(e) && visibleEvent(e, viewer, s))
-    .sort((a, b) => a.seq - b.seq);
-  const recent = eligible.filter((e) => e.kind === "novel").slice(-limit);
-  const recentChat = eligible.filter((e) => e.kind === "message").slice(-20);
-  const recentIds = new Set([...recent, ...recentChat].map((e) => e.id));
-  const older = eligible.filter((e) => !recentIds.has(e.id));
-  const scores = relevance(input, older.map((e) => visibleEvent(e, viewer, s)));
-  const recalled = older.map((e, i) => ({ e, score: scores[i] }))
-    .filter((x) => x.score >= 2).sort((a, b) => b.score - a.score || b.e.seq - a.e.seq)
-    .slice(0, 4).map((x) => x.e);
-  const recalledIds = new Set(recalled.map((e) => e.id));
-  const sourceMap = new Map(events.filter(usable).map((e) => [e.id, e]));
-  const validMemories = memories.filter((m) => m.status === "accepted" &&
-    (!viewer || m.knownBy.includes(viewer)) && m.sources.every((ref) => {
-      const e = sourceMap.get(ref.id);
-      return e?.versionId === ref.versionId && (!m.automatic || !viewer || fullAudience(e, s).includes(viewer));
-    }));
-  const summarized = new Set(validMemories.filter((m) => !m.automatic).flatMap((m) => m.sources.map((ref) => ref.id)));
-  const usableMemories = validMemories.filter((m) => !m.automatic || (sharedTimeline(s) && s.autoMemory &&
-    m.sources.some((ref) => !recentIds.has(ref.id) && !recalledIds.has(ref.id) && !summarized.has(ref.id))))
-    .sort((a, b) => Math.max(0, ...a.sources.map((ref) => sourceMap.get(ref.id)?.seq || 0)) -
-      Math.max(0, ...b.sources.map((ref) => sourceMap.get(ref.id)?.seq || 0)) || a.created - b.created || a.id.localeCompare(b.id));
-  const memoryScores = relevance(input, usableMemories.map((m) => m.text));
-  for (const [i, m] of usableMemories.entries())
-    add(m.id, m.automatic ? "早期经历摘记（有省略，可查原文）" : "已确认的故事记忆",
-      m.text, !m.automatic && !sharedTimeline(s), (m.automatic ? 60 : 90) + Math.min(25, memoryScores[i] * 3), false, m.sources, !!m.automatic);
-  // Old/imported stories also have a bounded fallback before excerpts are persisted.
-  const covered = new Set(memories.filter((m) => ["accepted", "ignored"].includes(m.status) && m.sources.every((ref) =>
-    sourceMap.get(ref.id)?.versionId === ref.versionId)).flatMap((m) => m.sources.map((ref) => ref.id)));
-  if (sharedTimeline(s) && s.autoMemory)
-    for (const [i, e] of older.entries())
-      if (!recalledIds.has(e.id) && !covered.has(e.id))
-        add("excerpt:" + e.id, `早期经历 ${e.seq} 摘记（有省略）`, historyExcerpt(visibleEvent(e, viewer, s)),
-          false, 60 + Math.min(25, scores[i] * 3), false, [{ id: e.id, versionId: e.versionId }], true);
-  const history = [...recentChat, ...recent, ...recalled].sort((a, b) => a.seq - b.seq);
+  const selected = selectRoundContext(s, events, memories, prefs, viewer, options.rewrite);
+  const history = selected.history;
+  const rawIds = new Set(history.map((e) => e.id));
+  for (const m of selected.selected) {
+    const rounds = m.sources.map((ref) => selected.byId.get(ref.id)?.round).filter((n): n is number => n !== undefined);
+    add(m.id, `${roundLabel(rounds)}记忆${m.sources.some((ref) => rawIds.has(ref.id)) ? "（与原文重叠，细节以原文为准）" : ""}`,
+      m.text, true, 90, false, m.sources);
+  }
   for (const e of history) {
-    const text = visibleEvent(e, viewer, s);
-    if (text)
-      add(
-        e.id,
-        `经历 ${e.seq} / ${e.id} / 版本 ${e.versionId} / ${e.kind === "novel" ? "正文" : s.roles.find((r) => r.id === e.speaker)?.name + " 发言"}${recalledIds.has(e.id) ? " / 相关旧原文" : ""}`,
-        text,
-        e.kind === "novel" && recentIds.has(e.id),
-        recalledIds.has(e.id) ? 110 : 120 + history.indexOf(e),
-        false,
-        [{ id: e.id, versionId: e.versionId }],
-      );
+    add(e.id, `第${e.round}回 / 消息顺序 ${e.seq} / ${e.id} / 版本 ${e.versionId} / ${e.kind === "novel" ? "正文" : (s.roles.find((r) => r.id === e.speaker)?.name || "角色") + " 发言"}`,
+      visibleEvent(e, viewer, s), true, 120, false, [{ id: e.id, versionId: e.versionId }]);
   }
   let task = input;
   if (kind === "novel")
@@ -212,16 +174,23 @@ export function buildContext(
   if (kind === "chat")
     task = `${styleInstruction(s, prefs, "chat")}\n你扮演 ${s.roles.find((r) => r.id === s.partner)?.name}（${s.partner}），用户扮演 ${s.roles.find((r) => r.id === s.player)?.name}（${s.player}）。以下是本轮按发送顺序排列、尚未回复的用户消息。读完整组后统一回应；后面的补充与纠正应覆盖前面的旧意思。\n${JSON.stringify({ pending_user_messages: options.chatMessages || [input] })}`;
   if (kind === "chat" && sharedTimeline(s))
-    task = "正文和手机聊天发生在同一条时间线上。所给正文是已经发生的共同经历，沿着最后的状态继续聊天；较晚的明确变化覆盖旧状态。早期摘记可能有省略，细节以相关原文为准。不要把旁白或别人的心理描写当成自己说过的话。\n" + task;
+    task = "正文和手机聊天发生在同一条时间线上。所给正文是已经发生的共同经历，沿着最后的状态继续聊天；较晚的明确变化覆盖旧状态。回合记忆是摘要，细节以窗口内原文为准。不要把旁白或别人的心理描写当成自己说过的话。\n" + task;
+  const pending = kind === "novel" ? events.filter((e) => e.chatPending && usableEvent(e, s)).sort((a, b) => a.seq - b.seq) : [];
+  if (pending.length) task = "已发送、尚未获得聊天回复的本次补充（不算已完成回合）\n" + JSON.stringify(pending.map((e) => ({
+    speaker: s.roles.find((r) => r.id === e.speaker)?.name, order: e.seq, text: e.text,
+  }))) + "\n" + task;
+  task = `本次${options.rewrite ? "重写历史回合" : `生成第${s.nextRound || Math.max(0, ...selected.rounds.map((r) => r.number)) + 1}回`}。参考按回合编号由早到晚排列，编号空缺不代表事件连续发生。较晚的有效原文覆盖旧状态；记忆与原文重叠时以原文为准。${selected.gaps.length ? `较早的${roundLabel(selected.gaps)}未被所选记忆完整覆盖，不要将缺失内容自行补成事实。` : ""}\n` + task;
   const report = assemble(prompt(kind, prefs), task, mats, p.context, p.maxOutput);
+  const memoryIds = new Set(selected.selected.map((m) => m.id));
+  const cost = (filter: (m: Material) => boolean) => report.included.filter(filter).reduce((n, m) => n + estimate(`【${m.label}】\n${m.text}\n\n`), 0);
   return {
     ...report,
-    history: {
-      limit,
-      sources: recent
-        .filter((e) => visibleEvent(e, viewer, s))
-        .map((e) => ({ id: e.id, versionId: e.versionId })),
-      recalled: recalled.filter((e) => report.included.some((m) => m.id === e.id)).map((e) => ({ id: e.id, versionId: e.versionId })),
-    },
+    taskSources: pending.map((e) => ({ id: e.id, versionId: e.versionId })),
+    history: { limit: HISTORY_LIMIT, sources: history.map((e) => ({ id: e.id, versionId: e.versionId })),
+      rounds: [...new Set(history.map((e) => e.round!))], windowStart: selected.start, recalled: [] },
+    memoryContext: { selected: selected.selected.map((m) => m.id), gaps: selected.gaps,
+      automaticLimit: selected.limit, selectionToken: selected.selectionToken },
+    materialTokens: { settings: cost((m) => !memoryIds.has(m.id) && !rawIds.has(m.id)),
+      memories: cost((m) => memoryIds.has(m.id)), history: cost((m) => rawIds.has(m.id)), task: estimate(report.system + task) },
   };
 }

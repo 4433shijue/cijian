@@ -334,16 +334,13 @@ describe("history and backup", () => {
     expect(await db.roles.count()).toBe(backup.roles.length);
     expect((await db.stories.toArray())[0].id).toBe(backup.stories[0].id);
   });
-  it("counts each bubble and only completed novels after cursor", async () => {
+  it("counts completed reply groups rather than individual bubbles", async () => {
     const { s, e } = await fixture();
-    s.novelThreshold = 0;
-    s.chatThreshold = 2;
-    await db.events.add({ ...e, id: uid(), seq: 2, kind: "message" });
-    expect(await memoryDue(s)).toBe(false);
-    await db.events.add({ ...e, id: uid(), seq: 3, kind: "message" });
+    await db.preferences.update("preferences", { memoryIntervalRounds: 3 });
+    await db.events.bulkAdd([2, 3].map((seq) => ({ ...e, id: uid(), seq, kind: "message" as const, chatBatchId: "same-reply" })));
+    expect(await memoryDue(s)).toBe(false); // one prose + one chat group
+    await db.events.add({ ...e, id: uid(), seq: 4 });
     expect(await memoryDue(s)).toBe(true);
-    s.memoryCursor = 3;
-    expect(await memoryDue(s)).toBe(false);
   });
 });
 describe("protocol contracts", () => {
@@ -749,7 +746,7 @@ it("filters worldbook keywords and whole character combinations", async () => {
   ).not.toContain("KEYWORD_FACT");
 });
 
-it("memory progress prevents duplicate calls and never auto-accepts candidates", async () => {
+it("paragraph memory coverage prevents duplicate calls and assigns audience from current sources", async () => {
   const { s, e } = await fixture();
   await db.profiles.put(profile);
   await db.preferences.put(prefs);
@@ -763,14 +760,7 @@ it("memory progress prevents duplicate calls and never auto-accepts candidates",
             {
               message: {
                 content: JSON.stringify({
-                  memories: [
-                    {
-                      text: "他递了伞。",
-                      sourceIds: [e.id],
-                      knownBy: [],
-                      scope: "story",
-                    },
-                  ],
+                  text: "他递了伞。两人仍在门口，约定等雨停后再出发。",
                 }),
               },
               finish_reason: "stop",
@@ -785,6 +775,6 @@ it("memory progress prevents duplicate calls and never auto-accepts candidates",
   await organizeMemory(s.id);
   await initialize();
   expect(fetcher).toHaveBeenCalledTimes(1);
-  expect((await db.memories.toArray())[0].status).toBe("candidate");
+  expect((await db.memories.toArray())[0]).toMatchObject({ status: "accepted", kind: "round", knownBy: [] });
   expect((await db.stories.get(s.id))?.memoryCursor).toBe(1);
 });

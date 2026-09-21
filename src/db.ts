@@ -1,7 +1,8 @@
 import Dexie, { type Table } from "dexie";
-import { fullAudience, historyExcerpt, sharedTimeline, usableEvent } from "./timeline";
+import { sharedTimeline } from "./timeline";
 import { withStoryLock } from "./locks";
 import { isBusy } from "./generation-state";
+import { numberedRounds, roundWindow } from "./rounds";
 import type { TransferRecord, TransferSession, TransferChunk } from "./transfer-types";
 import {
   uid,
@@ -220,6 +221,7 @@ export async function reviseEvent(
     if (!e) throw Error("这段内容已不存在");
     if (expectedVersion && expectedVersion !== e.versionId)
       throw Error("原文已修改，本次结果不会覆盖新版本");
+    await ensureStoryRounds(e.storyId);
     const versionId = uid(),
       nextFacts = facts ?? (text === e.text ? e.facts : []);
     const story = await db.stories.get(e.storyId);
@@ -227,6 +229,7 @@ export async function reviseEvent(
     const nextVisibility = visibility ?? e.visibility;
     await db.events.put({
       ...e,
+      round: (await db.events.get(id))?.round,
       text,
       deleted,
       facts: nextFacts,
@@ -267,6 +270,34 @@ export async function reviseEvent(
         });
     if (story && sharedTimeline(story)) await refreshTimelineMemory(e.storyId);
   });
+  const changed = await db.events.get(id);
+  if (changed) void import("./round-memory").then((m) => m.scheduleAutomaticMemory(changed.storyId));
+}
+
+// Persist numbering and the monotonic window floor before edits can remove a round.
+// Lazy migration also handles imported v1.7 stories without touching draft history.
+export async function ensureStoryRounds(storyId: string) {
+  return db.transaction("rw", [db.stories, db.events], async () => {
+    const s = await db.stories.get(storyId);
+    if (!s) throw Error("故事不存在");
+    const events = await db.events.where("storyId").equals(storyId).sortBy("seq");
+    const original = new Map(events.map((e) => [e.id, e]));
+    const rounds = numberedRounds(events);
+    for (const r of rounds) for (const e of r.events)
+      if (original.get(e.id)?.round !== r.number) await db.events.update(e.id, { round: r.number });
+    const nextRound = Math.max(s.nextRound || 1, ...rounds.map((r) => r.number + 1));
+    const normalized = rounds.flatMap((r) => r.events);
+    const update = { nextRound, contextWindowStart: roundWindow(s, normalized).start,
+      memoryAutoStart: s.memoryAutoStart ?? nextRound };
+    if (Object.entries(update).some(([key, value]) => s[key as keyof Story] !== value))
+      await db.stories.update(storyId, update);
+    return { ...s, ...update };
+  });
+}
+
+export async function consumeMemorySelection(storyId: string, token?: string) {
+  if (token && (await db.stories.get(storyId))?.memorySelection?.token === token)
+    await db.stories.update(storyId, { memorySelection: undefined });
 }
 
 // Display-only updates must not revise event versions or invalidate memories/cache.
@@ -277,27 +308,9 @@ export async function collapseEarlierProse(storyId: string, before: number) {
 }
 
 export async function refreshTimelineMemory(storyId: string) {
-  await db.transaction("rw", [db.stories, db.events, db.memories], async () => {
-    const s = await db.stories.get(storyId);
-    if (!s || !sharedTimeline(s) || !s.autoMemory) return;
-    const events = await db.events.where("storyId").equals(storyId).sortBy("seq");
-    const memories = await db.memories.where("storyId").equals(storyId).toArray();
-    for (const e of events) {
-      if (!usableEvent(e, s) || e.chatPending || !e.text.trim()) continue;
-      if (memories.some((m) => !m.automatic && ["accepted", "ignored"].includes(m.status) &&
-        m.sources.some((ref) => ref.id === e.id && ref.versionId === e.versionId))) continue;
-      const existing = memories.find((m) => m.automatic && m.sources.length === 1 && m.sources[0].id === e.id);
-      if (existing && ["accepted", "ignored"].includes(existing.status) && existing.sources[0].versionId === e.versionId &&
-        JSON.stringify(existing.knownBy) === JSON.stringify(fullAudience(e, s))) continue;
-      await db.memories.put({
-        id: existing?.id || uid(), storyId, text: historyExcerpt(e.text),
-        knownBy: fullAudience(e, s), scope: "story",
-        sources: [{ id: e.id, versionId: e.versionId }],
-        status: existing?.status === "ignored" ? "ignored" : "accepted",
-        created: e.created, automatic: true,
-      });
-    }
-  });
+  // Old excerpts remain inspectable. New memories are AI paragraphs, created by
+  // round-memory only after successful generation or an explicit backfill.
+  void storyId;
 }
 
 export async function setTimelineMode(storyId: string, mode: "shared" | "strict") {
