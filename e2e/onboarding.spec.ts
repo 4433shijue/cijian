@@ -19,10 +19,12 @@ async function modelFixture(
       return;
     }
     let text = "连接成功";
+    let finishReason = "stop";
     if (!connection) {
       if (options.failNovel) {
         options.failNovel = false;
         text = JSON.stringify({ text: "不完整的片段。", facts: [] });
+        finishReason = "length";
       } else
         text = JSON.stringify({
           text: "顾言轻轻合上书，指尖在封面上停了片刻，抬头说：“你来了。”",
@@ -34,7 +36,7 @@ async function modelFixture(
       body:
         "data: " +
         JSON.stringify({
-          choices: [{ delta: { content: text }, finish_reason: "stop" }],
+          choices: [{ delta: { content: text }, finish_reason: finishReason }],
         }) +
         "\n\ndata: [DONE]\n\n",
     });
@@ -131,7 +133,8 @@ test("first visit, failed connection, refresh recovery, first real save and comp
   await page.getByRole("button", { name: "进入故事，写第一段" }).click();
   await page.getByRole("button", { name: "填入一句示例" }).click();
   await page.getByRole("button", { name: "扩写这一刻", exact: true }).click();
-  await expect(page.locator(".draft-label")).toBeVisible();
+  await expect(page.locator(".draft-label")).toContainText("未完成草稿");
+  await expect(page.locator(".prose-event").last().locator(".error")).toContainText("服务未完整结束");
   expect((await starterState(page)).status).toBe("active");
   await page.getByRole("button", { name: "扩写这一刻", exact: true }).click();
   await expect(
@@ -147,7 +150,7 @@ test("first visit, failed connection, refresh recovery, first real save and comp
   );
   await page.getByRole("button", { name: "故事记忆", exact: true }).click();
   await expect(
-    page.getByLabel("记住什么，由你决定", { exact: true }),
+    page.getByLabel("回合记忆，按需带入", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.reload();

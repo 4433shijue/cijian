@@ -17,7 +17,12 @@ import { generate } from "./model";
 import { buildContext, assemble } from "./context";
 import { preparePrefix, commitPrefix } from "./prefix-cache";
 import { prompt } from "./prompts";
-import { parseJSON, draftText, missingQuotes } from "./output";
+import { parseJSON, draftText, missingQuotes, topLevelString } from "./output";
+import { selectedTheaterPresets } from "./theater-presets";
+import {
+  createTheaterAttempt, updateTheaterAttempt, finishTheaterAttempt,
+  failTheaterAttempt, rebindTheaterAttempt, validateTheaterHtml,
+} from "./theater";
 export { parseJSON, draftText, checkQuotes } from "./output";
 const novelSchema = z.object({
   text: z.string().trim().min(1),
@@ -77,6 +82,8 @@ async function report(
     input,
     { ...options, rewrite: Number.isFinite(until) },
   );
+  // Combined responses contain non-canonical HTML. Never retain them as assistant history.
+  if (kind === "novel" && s.theaterAuto) return { report: baseline };
   return preparePrefix(baseline, s, p, prefs, kind, prior, memories, world, Number.isFinite(until));
 }
 export async function preview(
@@ -132,12 +139,15 @@ async function runUnlocked(
     jobId = uid();
   let saving = Promise.resolve();
   let storageError: unknown;
+  let theaterId: string | undefined;
+  let latestRaw = "";
   try {
     const s = await db.stories.get(storyId);
     if (!s) throw Error("故事不存在");
     if (kind === "chat" && (!s.partner || s.partner === s.player))
       throw Error("请选择两位不同的聊天角色");
     const { p, prefs, key } = await settings();
+    const autoTheater = kind === "novel" && !!s.theaterAuto;
     if (!key.trim()) throw Error("请先到设置填写 API Key，当前没有发送请求");
     const old = rewriteId ? await db.events.get(rewriteId) : undefined;
     if (
@@ -190,6 +200,11 @@ async function runUnlocked(
         error: "",
       });
     });
+    if (autoTheater) {
+      const theater = await createTheaterAttempt(event, selectedTheaterPresets(s, prefs));
+      theaterId = theater.id;
+      event.theater = { id: theater.id, sourceVersionId: theater.sourceVersionId, status: "running", previousId: theater.previousId };
+    }
     let last = 0;
     const result = await generate(
       p,
@@ -199,13 +214,18 @@ async function runUnlocked(
       control.signal,
       (raw) => {
         if (!event) return;
-        event.raw = raw;
+        latestRaw = raw;
         event.text = draftText(raw);
+        event.raw = theaterId ? JSON.stringify({ text: event.text, facts: [] }) : raw;
         if (Date.now() - last > 200) {
           last = Date.now();
-          const update = { raw, text: event.text };
+          const update = { raw: event.raw, text: event.text };
+          const html = theaterId ? topLevelString(raw, "theaterHtml")?.value || "" : "";
           saving = saving
-            .then(() => db.events.update(event!.id, update))
+            .then(async () => {
+              await db.events.update(event!.id, update);
+              if (theaterId) await updateTheaterAttempt(theaterId, raw, html);
+            })
             .then(() => {})
             .catch((error) => {
               storageError ??= error;
@@ -213,18 +233,27 @@ async function runUnlocked(
         }
       },
       fetch,
-      { kind, stablePrefix: context.stablePrefix, messages: context.messages },
+      { kind, theater: autoTheater, stablePrefix: context.stablePrefix, messages: context.messages },
     );
     await saving;
     if (storageError) throw storageError;
-    event.raw = result.text;
+    latestRaw = result.text;
     event.text = draftText(result.text);
+    event.raw = theaterId ? JSON.stringify({ text: event.text, facts: [] }) : result.text;
+    if (theaterId) await updateTheaterAttempt(theaterId, result.text, topLevelString(result.text, "theaterHtml")?.value || "");
     event.request = {
       ...context,
       usage: result.usage,
       durationMs: result.durationMs,
     };
+    if (control.signal.aborted) throw Error("已停止生成，收到的正文保留为草稿。");
     if (!result.complete) throw Error("服务未完整结束 · " + result.reason);
+    let theaterHtml = "";
+    let theaterError = "";
+    if (theaterId) {
+      try { theaterHtml = validateTheaterHtml(parseJSON(result.text).theaterHtml); }
+      catch (error) { theaterError = error instanceof Error ? error.message : "小剧场未完整生成，可以单独重试。"; }
+    }
     let texts: string[];
     if (kind === "novel") {
       let data: z.infer<typeof novelSchema>;
@@ -252,6 +281,7 @@ async function runUnlocked(
           quote: f.quote,
           knownBy: [],
         }));
+      if (theaterId) event.raw = JSON.stringify(data);
     } else {
       try {
         texts = chatSchema.parse(parseJSON(result.text)).messages;
@@ -280,8 +310,9 @@ async function runUnlocked(
     ];
     await db.transaction(
       "rw",
-      [db.events, db.stories, db.memories, db.jobs, db.promptSessions],
+      [db.events, db.stories, db.memories, db.jobs, db.promptSessions, db.theaters],
       async () => {
+        if (control.signal.aborted) throw Error("已停止生成，收到的正文保留为草稿。");
         if (!(await db.stories.get(storyId)))
           throw Error("故事已删除，未写入结果");
         const adopted: SceneEvent[] = userEvent ? [userEvent] : [];
@@ -301,14 +332,25 @@ async function runUnlocked(
           await db.events.update(old.id, {
             status: "complete",
             error: "",
-            raw: result.text,
+            raw: event!.raw,
             request: event!.request,
             acceptedByAuthor: undefined,
             rewriteOf: undefined,
             warnings: event!.warnings || [],
             collapsed: false,
           });
+          if (theaterId) {
+            const finalEvent = (await db.events.get(old.id))!;
+            await rebindTheaterAttempt(theaterId, finalEvent);
+          }
           await db.events.delete(event!.id);
+        }
+        if (theaterId) {
+          const finalEvent = (await db.events.get(old?.id || event!.id))!;
+          if (theaterError) await failTheaterAttempt(theaterId, theaterError);
+          else await finishTheaterAttempt(theaterId, finalEvent, theaterHtml, result.text);
+          // Any older session is rebuilt from adopted prose after a combined response.
+          await db.promptSessions.where("storyId").equals(storyId).delete();
         }
         if (!old && kind === "chat")
           for (const text of texts.slice(1)) {
@@ -346,6 +388,7 @@ async function runUnlocked(
         const numbered = (await db.events.bulkGet(adopted.map((e) => e.id))).filter((e): e is SceneEvent => !!e);
         await commitPrefix(prepared, s, result.text, numbered, result.usage);
         await consumeMemorySelection(storyId, context.memoryContext?.selectionToken);
+        if (control.signal.aborted) throw Error("已停止生成，收到的正文保留为草稿。");
       },
     );
     event = undefined;
@@ -355,6 +398,10 @@ async function runUnlocked(
     const message = error instanceof Error ? error.message : String(error);
     if (event && (await db.stories.get(storyId))) {
       await db.events.put({ ...event, status: "draft", error: message });
+      if (theaterId) {
+        await updateTheaterAttempt(theaterId, latestRaw, topLevelString(latestRaw, "theaterHtml")?.value || "");
+        await failTheaterAttempt(theaterId, message, control.signal.aborted ? "interrupted" : "failed");
+      }
     }
     await db.jobs.update(jobId, { status: "failed", error: message });
     throw error;
@@ -443,7 +490,7 @@ export async function adoptDraft(
   return withStoryLock(original.storyId, () =>
     db.transaction(
       "rw",
-      [db.events, db.stories, db.jobs, db.memories],
+      [db.events, db.stories, db.jobs, db.memories, db.theaters],
       async () => {
         const draft = await db.events.get(id);
         const story = await db.stories.get(original.storyId);
@@ -492,6 +539,10 @@ export async function adoptDraft(
           rewriteOf: undefined,
           collapsed: false,
         });
+        if (draft.theater) {
+          const finalEvent = (await db.events.get(target.id))!;
+          await rebindTheaterAttempt(draft.theater.id, finalEvent);
+        }
         if (!draft.rewriteOf) await collapseEarlierProse(story.id, target.seq);
         if (target.id !== draft.id) await db.events.delete(draft.id);
         for (const job of await db.jobs

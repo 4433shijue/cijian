@@ -8,6 +8,7 @@ export const backupTables = [
   "preferences",
   "chatBatches",
   "roleDrafts",
+  "theaters",
 ] as const;
 export type BackupTable = (typeof backupTables)[number];
 export type Counts = Record<BackupTable, number>;
@@ -62,6 +63,7 @@ export interface WorkOptions {
   fontSize: number;
   lineHeight: number;
   pageBreak: boolean;
+  theaters?: boolean;
 }
 export type TransferCommand =
   | { type: "read"; file: File; session: string }

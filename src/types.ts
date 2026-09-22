@@ -1,5 +1,26 @@
 export type Protocol = "chat" | "responses" | "claude" | "gemini";
-export type PromptKind = "novel" | "chat" | "facts" | "memory" | "inspiration";
+export type PromptKind = "novel" | "chat" | "facts" | "memory" | "inspiration" | "theater";
+export interface TheaterPreset {
+  id: string;
+  name: string;
+  prompt: string;
+}
+export type TheaterStatus = "running" | "complete" | "failed" | "interrupted";
+export interface TheaterRecord {
+  id: string;
+  storyId: string;
+  eventId: string;
+  sourceVersionId: string;
+  presets: TheaterPreset[];
+  html: string;
+  text: string;
+  raw: string;
+  status: TheaterStatus;
+  error: string;
+  created: number;
+  updated: number;
+  previousId?: string;
+}
 export interface StylePreset {
   id: string;
   name: string;
@@ -69,6 +90,8 @@ export interface Story {
   length: string;
   style: string;
   stylePresetId?: string;
+  theaterAuto?: boolean;
+  theaterPresetIds?: string[];
   psychology: boolean;
   timelineMode?: "shared" | "strict";
   autoMemory: boolean;
@@ -129,6 +152,12 @@ export interface SceneEvent {
   chatPending?: boolean;
   chatBatchId?: string;
   round?: number;
+  theater?: {
+    id: string;
+    sourceVersionId: string;
+    status: TheaterStatus;
+    previousId?: string;
+  };
 }
 export interface ChatBatch {
   id: string;
@@ -196,6 +225,7 @@ export interface Preferences {
   memoryIntervalRounds?: number;
   memoryAutoReadLimit?: number;
   stylePresets?: StylePreset[];
+  theaterPresets?: TheaterPreset[];
   prompts: Partial<Record<PromptKind, { text: string; enabled: boolean }>>;
 }
 export interface Job {

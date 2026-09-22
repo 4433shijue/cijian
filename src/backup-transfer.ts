@@ -1,6 +1,6 @@
 import Dexie, { type Table } from "dexie";
 import { db } from "./db";
-import { recordSchemas } from "./backup";
+import { recordSchemas, mergeTheaterPresets } from "./backup";
 import { samplingParameters } from "./sampling";
 import { uid, type Preferences, type Role, type Story } from "./types";
 import { BackupParser, READ_CHUNK_BYTES } from "./backup-parser";
@@ -172,6 +172,28 @@ async function checkStaged(
       )
         throw Error("备份消息的回复批次无效");
     }
+    if (e.theater) {
+      const t = await staged(session, "theaters", e.theater.id);
+      if (!t || t.storyId !== e.storyId || t.eventId !== e.id ||
+        t.sourceVersionId !== e.theater.sourceVersionId || t.status !== e.theater.status ||
+        t.previousId !== e.theater.previousId)
+        throw Error("备份正文的小剧场关联无效");
+    }
+  });
+  await eachStaged(session, "theaters", async (t) => {
+    progress();
+    const e = await staged(session, "events", t.eventId);
+    if (!e || e.storyId !== t.storyId || e.kind !== "novel" ||
+      (!e.versions.some((v: any) => v.id === t.sourceVersionId) &&
+        !(e.status === "draft" && e.versionId === t.sourceVersionId)))
+      throw Error("备份小剧场的正文来源不完整");
+    if (t.previousId) {
+      const previous = await staged(session, "theaters", t.previousId);
+      if (!previous || previous.id === t.id || previous.storyId !== t.storyId ||
+        previous.eventId !== t.eventId ||
+        previous.status !== "complete")
+        throw Error("备份小剧场的已有结果关联无效");
+    }
   });
   await eachStaged(session, "memories", async (m) => {
     progress();
@@ -247,10 +269,12 @@ export function backupRemapper() {
     paragraphs: x.paragraphs.map((p) => ({ ...p, id: id(p.id) })),
   });
   const styleIds = new Map<string, string>();
+  const theaterPresetIds = new Map<string, string>();
   return {
     id,
     role,
     styleIds,
+    theaterPresetIds,
     row(table: BackupTable, x: any, replace: boolean): any {
       switch (table) {
         case "roles":
@@ -273,6 +297,7 @@ export function backupRemapper() {
             player: id(x.player),
             partner: id(x.partner),
             stylePresetId: styleIds.get(x.stylePresetId) || x.stylePresetId,
+            theaterPresetIds: (x.theaterPresetIds ?? ["theater-roast"]).map((presetId: string) => theaterPresetIds.get(presetId) || presetId),
             memoryState:
               x.memoryState === "running" ? "interrupted" : x.memoryState,
           };
@@ -285,6 +310,13 @@ export function backupRemapper() {
             participants: x.participants.map(id),
             versionId: id(x.versionId),
             chatBatchId: x.chatBatchId ? id(x.chatBatchId) : undefined,
+            theater: x.theater && {
+              ...x.theater,
+              id: id(x.theater.id),
+              sourceVersionId: id(x.theater.sourceVersionId),
+              previousId: x.theater.previousId ? id(x.theater.previousId) : undefined,
+              status: x.theater.status === "running" ? "interrupted" : x.theater.status,
+            },
             rewriteOf: x.rewriteOf && {
               id: id(x.rewriteOf.id),
               versionId: id(x.rewriteOf.versionId),
@@ -327,6 +359,18 @@ export function backupRemapper() {
           };
         case "profiles":
           return { ...x, id: id(x.id), remember: false, key: undefined };
+        case "theaters":
+          return {
+            ...x,
+            id: id(x.id),
+            storyId: id(x.storyId),
+            eventId: id(x.eventId),
+            sourceVersionId: id(x.sourceVersionId),
+            previousId: x.previousId ? id(x.previousId) : undefined,
+            presets: x.presets.map((preset: any) => ({ ...preset, id: theaterPresetIds.get(preset.id) || preset.id })),
+            status: x.status === "running" ? "interrupted" : x.status,
+            error: x.status === "running" ? "导入的小剧场尚未完成，可以重新生成。" : x.error,
+          };
         case "roleDrafts":
           return { id: x.id, role: role(x.role) };
         default:
@@ -354,6 +398,7 @@ export async function commitStaged(
       if (
         (await db.jobs.where("status").equals("running").count()) ||
         (await db.chatBatches.where("status").equals("running").count()) ||
+        (await db.theaters.where("status").equals("running").count()) ||
         (await db.stories.filter((s) => s.memoryState === "running").count())
       )
         throw Error(
@@ -363,6 +408,8 @@ export async function commitStaged(
       const imported = (await staged(session, "preferences", "preferences")) as
         Preferences | undefined;
       const apply = options.applySettings && summary.scope !== "story";
+      const theaterPresets = mergeTheaterPresets(existing?.theaterPresets || [], imported?.theaterPresets || []);
+      for (const [before, after] of theaterPresets.ids) remap.theaterPresetIds.set(before, after);
       const styles = [...(existing?.stylePresets || [])];
       for (const preset of imported?.stylePresets || []) {
         const old = styles.find((p) => p.id === preset.id);
@@ -426,6 +473,7 @@ export async function commitStaged(
           ? { ...imported, activeProfile: remap.id(imported.activeProfile) }
           : {}),
         stylePresets: styles,
+        theaterPresets: theaterPresets.presets,
       });
       control.check();
     })
@@ -450,6 +498,10 @@ export async function exportBackupBlob(
       );
       const relatedRoles = new Set(castRoles);
       const relatedWorld = new Set<string>();
+      const relatedTheaterPresets = new Set(s ? s.theaterPresetIds ?? ["theater-roast"] : []);
+      if (s) await db.theaters.where("storyId").equals(s.id).each((theater) => {
+        for (const preset of theater.presets) relatedTheaterPresets.add(preset.id);
+      });
       if (s)
         await visitRows(db.world, async (w) => {
           if (
@@ -464,7 +516,7 @@ export async function exportBackupBlob(
       await writer.write(
         JSON.stringify({
           format: "little-scene",
-          version: 1,
+          version: 2,
           created: new Date().toISOString(),
           scope: s ? "story" : "library",
           ...(s ? { title: s.title } : {}),
@@ -480,7 +532,7 @@ export async function exportBackupBlob(
             if (["profiles", "roleDrafts"].includes(table)) return;
             if (table === "stories" && raw.id !== s.id) return;
             if (
-              ["events", "memories", "chatBatches"].includes(table) &&
+              ["events", "memories", "chatBatches", "theaters"].includes(table) &&
               raw.storyId !== s.id
             )
               return;
@@ -501,6 +553,9 @@ export async function exportBackupBlob(
             row.prompts = {};
             row.stylePresets = row.stylePresets?.filter(
               (p: any) => p.id === s.stylePresetId,
+            );
+            row.theaterPresets = row.theaterPresets?.filter(
+              (p: any) => relatedTheaterPresets.has(p.id),
             );
           }
           await writer.write((first ? "" : ",") + JSON.stringify(row));

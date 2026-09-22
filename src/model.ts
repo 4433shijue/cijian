@@ -1,8 +1,9 @@
 import type { Profile, ModelResult, PromptKind, ModelUsage, PromptMessage } from "./types";
 import { samplingParameters } from "./sampling";
-import { outputSchemas } from "./output";
+import { outputSchemas, novelTheaterSchema } from "./output";
 export interface GenerationOptions {
   kind?: PromptKind;
+  theater?: boolean;
   stablePrefix?: string;
   messages?: PromptMessage[];
 }
@@ -127,7 +128,7 @@ export function requestSpec(
   if (options.kind && mode !== "compatible") {
     const schemaMode =
       mode === "schema" || (mode === "auto" && nativeSchema(p));
-    const schema = outputSchemas[options.kind];
+    const schema = options.kind === "novel" && options.theater ? novelTheaterSchema : outputSchemas[options.kind];
     const format = schemaMode
       ? {
           type: "json_schema",

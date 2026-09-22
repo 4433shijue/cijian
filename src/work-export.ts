@@ -26,7 +26,7 @@ export const safeFilename = (s: string) =>
     .replace(/[ .]+$/, "")
     .slice(0, 90) || "此间作品";
 type Block = {
-  kind: "title" | "heading" | "prose" | "chat";
+  kind: "title" | "heading" | "prose" | "chat" | "theater";
   text: string;
   boundary?: boolean;
 };
@@ -128,11 +128,11 @@ async function documentWriter(
     stream = archive!.start("OEBPS/story.xhtml");
     await write(
       xmlHead +
-        `<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN"><head><title>${xmlText(story.title)}</title><style>body{font-size:${size / 16}em;line-height:${line};font-family:serif}p{white-space:pre-wrap;overflow-wrap:anywhere}.chat{margin-left:1em}.entry{margin-top:1.5em}${o.pageBreak ? ".boundary{break-before:page;page-break-before:always}" : ""}</style></head><body>`,
+        `<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN"><head><title>${xmlText(story.title)}</title><style>body{font-size:${size / 16}em;line-height:${line};font-family:serif}p{white-space:pre-wrap;overflow-wrap:anywhere}.theater{padding:12px;border-left:3px solid #849980;background:#f4f6ef}.chat{margin-left:1em}.entry{margin-top:1.5em}${o.pageBreak ? ".boundary{break-before:page;page-break-before:always}" : ""}</style></head><body>`,
     );
   } else if (o.format === "print") {
     await write(
-      `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${xmlText(story.title)} · 打印预览</title><style>:root{--size:${size}px;--line:${line}}*{box-sizing:border-box}body{margin:0;background:#eef1e8;color:#253d31;font:16px system-ui}nav{position:sticky;top:0;padding:14px;display:flex;flex-wrap:wrap;align-items:center;gap:18px;background:#f6f8f0;border-bottom:1px solid #d6dfcc}button,input{font:inherit}button{padding:9px 16px;border:1px solid #809b85;border-radius:8px;background:white;color:inherit}article{max-width:800px;margin:24px auto;padding:42px;background:white;font:var(--size)/var(--line) "Songti SC",SimSun,serif}h1{text-align:center;font-size:1.7em}h2{font-size:1.15em;break-after:avoid}p{white-space:pre-wrap;overflow-wrap:anywhere;orphans:3;widows:3}.chat{padding-left:1em;border-left:2px solid #dde5d6}.entry{margin-top:1.4em}body.paginate .boundary{break-before:page;page-break-before:always}@page{size:A4;margin:20mm}@media print{nav{display:none}body,article{background:white;color:black}article{margin:0;padding:0;max-width:none}}@media(max-width:600px){article{padding:22px;margin:12px}}</style></head><body class="${o.pageBreak ? "paginate" : ""}"><nav aria-label="打印排版"><label>字号 <input aria-label="预览字号" type="range" min="12" max="24" value="${size}" oninput="document.documentElement.style.setProperty('--size',this.value+'px')"></label><label>行距 <input aria-label="预览行距" type="range" min="1.2" max="2.5" step="0.1" value="${line}" oninput="document.documentElement.style.setProperty('--line',this.value)"></label><label><input type="checkbox" ${o.pageBreak ? "checked" : ""} onchange="document.body.classList.toggle('paginate',this.checked)">正文段落另起一页</label><button onclick="window.print()">打印 / 保存 PDF</button><span>在打印窗口选择「另存为 PDF」</span></nav><article>`,
+      `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${xmlText(story.title)} · 打印预览</title><style>:root{--size:${size}px;--line:${line}}*{box-sizing:border-box}body{margin:0;background:#eef1e8;color:#253d31;font:16px system-ui}nav{position:sticky;top:0;padding:14px;display:flex;flex-wrap:wrap;align-items:center;gap:18px;background:#f6f8f0;border-bottom:1px solid #d6dfcc}button,input{font:inherit}button{padding:9px 16px;border:1px solid #809b85;border-radius:8px;background:white;color:inherit}article{max-width:800px;margin:24px auto;padding:42px;background:white;font:var(--size)/var(--line) "Songti SC",SimSun,serif}h1{text-align:center;font-size:1.7em}h2{font-size:1.15em;break-after:avoid}p{white-space:pre-wrap;overflow-wrap:anywhere;orphans:3;widows:3}.theater{padding:12px;border-left:3px solid #849980;background:#f4f6ef}.chat{padding-left:1em;border-left:2px solid #dde5d6}.entry{margin-top:1.4em}body.paginate .boundary{break-before:page;page-break-before:always}@page{size:A4;margin:20mm}@media print{nav{display:none}body,article{background:white;color:black}article{margin:0;padding:0;max-width:none}}@media(max-width:600px){article{padding:22px;margin:12px}}</style></head><body class="${o.pageBreak ? "paginate" : ""}"><nav aria-label="打印排版"><label>字号 <input aria-label="预览字号" type="range" min="12" max="24" value="${size}" oninput="document.documentElement.style.setProperty('--size',this.value+'px')"></label><label>行距 <input aria-label="预览行距" type="range" min="1.2" max="2.5" step="0.1" value="${line}" oninput="document.documentElement.style.setProperty('--line',this.value)"></label><label><input type="checkbox" ${o.pageBreak ? "checked" : ""} onchange="document.body.classList.toggle('paginate',this.checked)">正文段落另起一页</label><button onclick="window.print()">打印 / 保存 PDF</button><span>在打印窗口选择「另存为 PDF」</span></nav><article>`,
     );
   }
   let proseSeen = false;
@@ -161,7 +161,7 @@ async function documentWriter(
                 ? "Heading1"
                 : "Normal";
           await write(
-            `<w:p><w:pPr><w:pStyle w:val="${style}"/>${boundary && i === 0 && o.pageBreak ? "<w:pageBreakBefore/>" : ""}</w:pPr><w:r><w:t xml:space="preserve">${xmlText(line)}</w:t></w:r></w:p>`,
+            `<w:p><w:pPr><w:pStyle w:val="${style}"/>${b.kind === "theater" ? '<w:pBdr><w:left w:val="single" w:sz="12" w:space="8" w:color="849980"/></w:pBdr><w:shd w:val="clear" w:fill="F4F6EF"/>' : ""}${boundary && i === 0 && o.pageBreak ? "<w:pageBreakBefore/>" : ""}</w:pPr><w:r><w:t xml:space="preserve">${xmlText(line)}</w:t></w:r></w:p>`,
           );
         }
       } else {
@@ -198,6 +198,7 @@ export async function exportWork(
     !["txt", "md", "docx", "epub", "print"].includes(o.format) ||
     !["novel", "all", "chat"].includes(o.content) ||
     !["all", "selection"].includes(o.range) ||
+    (o.theaters !== undefined && typeof o.theaters !== "boolean") ||
     !Number.isFinite(o.fontSize) ||
     !Number.isFinite(o.lineHeight)
   )
@@ -265,6 +266,15 @@ export async function exportWork(
                 text: `[手机聊天 · ${e.participants.map(roleName).join("、")}]\n${roleName(e.speaker)}：${e.text}`,
               },
         );
+        if (o.theaters && e.kind === "novel") {
+          const theaters = await db.theaters.where("[eventId+sourceVersionId]")
+            .equals([e.id, e.versionId]).filter((t) => t.storyId === story.id && t.status === "complete").toArray();
+          const theater = theaters.sort((a, b) => b.updated - a.updated || b.created - a.created || b.id.localeCompare(a.id))[0];
+          if (theater?.text.trim()) await doc.block({
+            kind: "theater",
+            text: `【小剧场${theater.presets.length ? " · " + theater.presets.map((p) => p.name).join("、") : ""}】\n${theater.text}`,
+          });
+        }
         selected++;
         if (selected === 1 || selected % 16 === 0)
           control.report({

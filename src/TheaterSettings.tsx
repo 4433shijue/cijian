@@ -1,0 +1,119 @@
+import { useEffect, useState } from "react";
+import { ChevronDown, ChevronUp, Plus } from "lucide-react";
+import { db } from "./db";
+import { uid, type Preferences, type Story, type TheaterPreset } from "./types";
+import { allTheaterPresets, builtInTheaterPresets, selectedTheaterPresets } from "./theater-presets";
+
+export function StoryTheaterSettings({ story, prefs, update }: {
+  story: Story; prefs?: Preferences; update: (patch: Partial<Story>) => Promise<unknown>;
+}) {
+  const preferences: Preferences = prefs || { id: "preferences", activeProfile: "", developer: false, prompts: {} };
+  const [selection, setSelection] = useState(story.theaterPresetIds);
+  const [automatic, setAutomatic] = useState(!!story.theaterAuto);
+  useEffect(() => setSelection(story.theaterPresetIds), [story.id, JSON.stringify(story.theaterPresetIds)]);
+  useEffect(() => setAutomatic(!!story.theaterAuto), [story.id, story.theaterAuto]);
+  const selected = selectedTheaterPresets({ ...story, theaterPresetIds: selection }, preferences);
+  const ids = selected.map((preset) => preset.id);
+  const available = allTheaterPresets(preferences);
+  const [error, setError] = useState("");
+  async function save(patch: Partial<Story>) {
+    setError("");
+    if (patch.theaterPresetIds) setSelection(patch.theaterPresetIds);
+    if (patch.theaterAuto !== undefined) setAutomatic(patch.theaterAuto);
+    try { await update(patch); }
+    catch { setSelection(story.theaterPresetIds); setAutomatic(!!story.theaterAuto); setError("小剧场设置没能保存，请再试一次。"); }
+  }
+  function move(index: number, by: number) {
+    const next = [...ids];
+    [next[index], next[index + by]] = [next[index + by], next[index]];
+    void save({ theaterPresetIds: next });
+  }
+  return <section className="story-theater-settings">
+    <h3>小剧场</h3>
+    <label className="toggle"><input type="checkbox" checked={automatic}
+      onChange={(event) => void save({ theaterAuto: event.target.checked })} /><span>新正文自动生成小剧场</span></label>
+    <p className="hint">随新正文一起生成，默认收起。未开启时，可以点击每段下方的小剧场单独生成。</p>
+    <p className="hint">当前内容：{selected.map((preset) => preset.name).join("、") || "尚未选择"}</p>
+    {prefs?.developer && <div className="theater-story-presets">
+      <h4>这本故事的小剧场内容</h4>
+      <p className="hint">可以选择多项，按下面的顺序呈现。修改后对下一次生成生效。</p>
+      <div className="theater-preset-choices">
+        {available.map((preset) => <label className="toggle" key={preset.id}>
+          <input type="checkbox" checked={ids.includes(preset.id)} disabled={ids.length === 1 && ids.includes(preset.id)}
+            onChange={(event) => void save({ theaterPresetIds: event.target.checked ? [...ids, preset.id] : ids.filter((id) => id !== preset.id) })} />
+          <span>{preset.name}</span>
+        </label>)}
+      </div>
+      <ol className="theater-preset-order">
+        {selected.map((preset, index) => <li key={preset.id}>
+          <span>{index + 1}. {preset.name}</span><div>
+            <button type="button" aria-label={"上移" + preset.name} disabled={index === 0} onClick={() => move(index, -1)}><ChevronUp size={16} /></button>
+            <button type="button" aria-label={"下移" + preset.name} disabled={index === selected.length - 1} onClick={() => move(index, 1)}><ChevronDown size={16} /></button>
+          </div>
+        </li>)}
+      </ol>
+    </div>}
+    {error && <p className="error" role="alert">{error}</p>}
+  </section>;
+}
+
+export function TheaterPresetSettings({ prefs, notify }: { prefs: Preferences; notify: (message: string) => void }) {
+  const [editing, setEditing] = useState<TheaterPreset>();
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const custom = prefs.theaterPresets || [];
+  async function persist(next: TheaterPreset[], message: string) {
+    setSaving(true);
+    setError("");
+    try { await db.preferences.update("preferences", { theaterPresets: next }); notify(message); setEditing(undefined); }
+    catch { setError("预设没能保存，请再试一次。"); }
+    finally { setSaving(false); }
+  }
+  async function removePreset(id: string) {
+    setSaving(true);
+    setError("");
+    try {
+      await db.transaction("rw", [db.preferences, db.stories], async () => {
+        const latest = await db.preferences.get("preferences");
+        await db.preferences.update("preferences", { theaterPresets: (latest?.theaterPresets || []).filter((item) => item.id !== id) });
+        for (const story of await db.stories.toArray()) {
+          if (!story.theaterPresetIds?.includes(id)) continue;
+          const selected = story.theaterPresetIds.filter((presetId) => presetId !== id);
+          await db.stories.update(story.id, { theaterPresetIds: selected.length ? selected : ["theater-roast"] });
+        }
+      });
+      if (editing?.id === id) setEditing(undefined);
+      notify("小剧场预设已删除，原有小剧场仍会保留");
+    } catch { setError("预设没能删除，请再试一次。"); }
+    finally { setSaving(false); }
+  }
+  return <section className="settings-card theater-preset-settings">
+    <div className="section-title"><div><h2>小剧场预设</h2><p className="hint">给幕间内容起个名字，写下你想看的内容。每本故事可以选择多项并调整顺序。</p></div>
+      <button onClick={() => setEditing({ id: uid(), name: "", prompt: "" })}><Plus size={16} />新建小剧场预设</button></div>
+    <div className="style-preset-grid">
+      {allTheaterPresets(prefs).map((preset) => {
+        const builtin = builtInTheaterPresets.some((item) => item.id === preset.id);
+        const overridden = builtin && custom.some((item) => item.id === preset.id);
+        return <article className="style-preset-card" key={preset.id}>
+          <span className="tag">{builtin ? overridden ? "内置 · 已修改" : "内置" : "自定义"}</span>
+          <strong>{preset.name}</strong><p className="theater-preset-description">{preset.prompt}</p>
+          <div className="row"><button onClick={() => setEditing({ ...preset })}>编辑</button>
+            <button onClick={() => setEditing({ id: uid(), name: preset.name + "（副本）", prompt: preset.prompt })}>复制</button>
+            {overridden && <button disabled={saving} onClick={() => void persist(custom.filter((item) => item.id !== preset.id), "已恢复内置小剧场预设")}>恢复内置</button>}
+            {!builtin && <button disabled={saving} onClick={() => void removePreset(preset.id)}>删除</button>}
+          </div>
+        </article>;
+      })}
+    </div>
+    {editing && <div className="inline-editor theater-preset-editor">
+      <h3>编辑小剧场预设</h3>
+      <label className="field"><span>小剧场预设名称</span><input value={editing.name} maxLength={80} onChange={(event) => setEditing({ ...editing, name: event.target.value })} /></label>
+      <label className="field"><span>小剧场内容要求</span><textarea className="long-text" value={editing.prompt}
+        onChange={(event) => setEditing({ ...editing, prompt: event.target.value })} placeholder="写下这段小剧场想呈现的内容、语气或排版。" /></label>
+      <div className="row"><button className="primary" disabled={saving || !editing.name.trim() || !editing.prompt.trim()}
+        onClick={() => void persist([...custom.filter((item) => item.id !== editing.id), { id: editing.id, name: editing.name.trim(), prompt: editing.prompt.trim() }], "小剧场预设已保存")}>保存小剧场预设</button>
+        <button disabled={saving} onClick={() => setEditing(undefined)}>取消</button></div>
+    </div>}
+    {error && <p className="error" role="alert">{error}</p>}
+  </section>;
+}

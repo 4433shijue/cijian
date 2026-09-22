@@ -1,6 +1,7 @@
 import { prompt } from "./prompts";
 import { quotedDialogue } from "./output";
 import { styleInstruction } from "./style-presets";
+import { selectedTheaterPresets, theaterInstruction } from "./theater-presets";
 import { sharedTimeline, usableEvent, visibleText } from "./timeline";
 import { HISTORY_LIMIT, roundLabel, selectRoundContext } from "./rounds";
 import type {
@@ -180,7 +181,13 @@ export function buildContext(
     speaker: s.roles.find((r) => r.id === e.speaker)?.name, order: e.seq, text: e.text,
   }))) + "\n" + task;
   task = `本次${options.rewrite ? "重写历史回合" : `生成第${s.nextRound || Math.max(0, ...selected.rounds.map((r) => r.number)) + 1}回`}。参考按回合编号由早到晚排列，编号空缺不代表事件连续发生。较晚的有效原文覆盖旧状态；记忆与原文重叠时以原文为准。${selected.gaps.length ? `较早的${roundLabel(selected.gaps)}未被所选记忆完整覆盖，不要将缺失内容自行补成事实。` : ""}\n` + task;
-  const report = assemble(prompt(kind, prefs), task, mats, p.context, p.maxOutput);
+  const autoTheater = kind === "novel" && !!s.theaterAuto;
+  const theaterPresets = autoTheater ? selectedTheaterPresets(s, prefs) : [];
+  if (autoTheater && !theaterPresets.length) throw Error("请先为小剧场选择至少一个预设。");
+  const system = prompt(kind, prefs, autoTheater) + (autoTheater
+    ? "\n\n【仅用于 theaterHtml 的番外要求】\n" + theaterInstruction(theaterPresets) +
+      (prefs.prompts.theater?.enabled ? "\n作者的附加小剧场偏好\n" + prefs.prompts.theater.text : "") : "");
+  const report = assemble(system, task, mats, p.context, p.maxOutput);
   const memoryIds = new Set(selected.selected.map((m) => m.id));
   const cost = (filter: (m: Material) => boolean) => report.included.filter(filter).reduce((n, m) => n + estimate(`【${m.label}】\n${m.text}\n\n`), 0);
   return {

@@ -92,6 +92,17 @@ for (const mobile of [false, true])
       await expect(
         page.locator(".prose-event").last().locator(".event-text"),
       ).toHaveText(`第${n}段，他把杯子放下。`);
+      // Streamed text appears before the atomic adoption/cache transaction.
+      // Reload only after it has committed, so this tests persisted reuse.
+      await expect
+        .poll(
+          async () =>
+            (await readStore(page, "events")).filter(
+              (event) => event.kind === "novel" && event.status === "complete",
+            ).length,
+        )
+        .toBe(n);
+      await expect(page.locator(".composer textarea")).toHaveValue("");
       if (n > 1)
         expect(requests[n - 1].messages.slice(0, -1)).toEqual([
           ...requests[n - 2].messages,

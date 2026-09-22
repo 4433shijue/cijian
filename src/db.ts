@@ -17,6 +17,7 @@ import {
   type Job,
   type ChatBatch,
   type PromptSession,
+  type TheaterRecord,
 } from "./types";
 export class SceneDB extends Dexie {
   roles!: Table<Role, string>;
@@ -30,6 +31,7 @@ export class SceneDB extends Dexie {
   jobs!: Table<Job, string>;
   chatBatches!: Table<ChatBatch, string>;
   promptSessions!: Table<PromptSession, string>;
+  theaters!: Table<TheaterRecord, string>;
   transferRecords!: Table<TransferRecord, [string, string, string]>;
   transferSessions!: Table<TransferSession, string>;
   transferChunks!: Table<TransferChunk, [string, number]>;
@@ -53,6 +55,9 @@ export class SceneDB extends Dexie {
       transferRecords: "[session+table+id],session,[session+table+order]",
       transferSessions: "id",
       transferChunks: "[session+index],session",
+    });
+    this.version(6).stores({
+      theaters: "id,storyId,eventId,[eventId+sourceVersionId],status",
     });
   }
 }
@@ -87,6 +92,8 @@ export function makeStory(
     psychology: false,
     timelineMode: "shared",
     stylePresetId: "builtin-natural",
+    theaterAuto: false,
+    theaterPresetIds: ["theater-roast"],
     autoMemory: true,
     chatThreshold: 20,
     novelThreshold: 5,
@@ -172,7 +179,18 @@ export async function initialize() {
       if (w.title === "临河旧书店") await db.world.delete(w.id);
   }
   const recover = async (id: string) => {
-    await db.transaction("rw", [db.jobs, db.stories, db.chatBatches], async () => {
+    await db.transaction("rw", [db.jobs, db.stories, db.chatBatches, db.theaters, db.events], async () => {
+      for (const theater of await db.theaters.where("status").equals("running")
+        .filter((record) => record.storyId === id).toArray()) {
+        await db.theaters.update(theater.id, {
+          status: "interrupted",
+          error: "上次小剧场生成已中断，可以重新生成。",
+          updated: Date.now(),
+        });
+        const event = await db.events.get(theater.eventId);
+        if (event?.theater?.id === theater.id)
+          await db.events.update(event.id, { theater: { ...event.theater, status: "interrupted" } });
+      }
       for (const batch of await db.chatBatches.where("storyId").equals(id).toArray())
         if (batch.status === "running")
           await db.chatBatches.update(batch.id, {
@@ -344,13 +362,14 @@ export async function setTimelineMode(storyId: string, mode: "shared" | "strict"
 export async function deleteStory(id: string) {
   await db.transaction(
     "rw",
-    [db.stories, db.events, db.memories, db.jobs, db.chatBatches, db.promptSessions],
+    [db.stories, db.events, db.memories, db.jobs, db.chatBatches, db.promptSessions, db.theaters],
     async () => {
       await db.events.where("storyId").equals(id).delete();
       await db.memories.where("storyId").equals(id).delete();
       await db.jobs.where("storyId").equals(id).delete();
       await db.chatBatches.where("storyId").equals(id).delete();
       await db.promptSessions.where("storyId").equals(id).delete();
+      await db.theaters.where("storyId").equals(id).delete();
       await db.stories.delete(id);
     },
   );

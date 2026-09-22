@@ -166,14 +166,16 @@ export class BackupParser {
       throw Error("备份文件被截断，没有读到完整结尾");
     if (
       this.metadata.format !== "little-scene" ||
-      this.metadata.version !== 1 ||
+      ![1, 2].includes(this.metadata.version as number) ||
       typeof this.metadata.created !== "string"
     )
-      throw Error("这不是支持的此间备份（需要 version 1）");
+      throw Error("这不是支持的此间备份（需要 version 1 或 2）");
     for (const key of backupTables.filter(
-      (t) => t !== "chatBatches" && t !== "roleDrafts",
+      (t) => t !== "chatBatches" && t !== "roleDrafts" && t !== "theaters",
     ))
       if (!this.seen.has(key)) throw Error("备份缺少资料区：" + key);
+    if (this.metadata.version === 2 && !this.seen.has("theaters"))
+      throw Error("备份缺少资料区：theaters");
     if (
       this.metadata.scope !== undefined &&
       !["story", "library"].includes(String(this.metadata.scope))

@@ -55,6 +55,67 @@ export function parseJSON(raw: string): any {
   );
 }
 
+/** Read one top-level JSON string, including a safely decoded streaming prefix.
+ * Never mistake a nested property or HTML's quoted text for a response field. */
+export function topLevelString(raw: string, key: string): { value: string; complete: boolean } | undefined {
+  const source = unwrap(raw);
+  const start = source.indexOf("{");
+  if (start < 0) return;
+  const read = (at: number) => {
+    let value = "";
+    for (let i = at + 1; i < source.length; i++) {
+      const c = source[i];
+      if (c === '"') return { value, complete: true, end: i };
+      if (c !== "\\") {
+        if (c.charCodeAt(0) < 32) return;
+        value += c;
+        continue;
+      }
+      const next = source[++i];
+      if (next === undefined) return { value, complete: false, end: i };
+      if (next === "u") {
+        const hex = source.slice(i + 1, i + 5);
+        if (hex.length < 4) return { value, complete: false, end: source.length };
+        if (!/^[\da-f]{4}$/i.test(hex)) return;
+        value += String.fromCharCode(parseInt(hex, 16));
+        i += 4;
+      } else {
+        const escapes: Record<string, string> = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
+        if (!(next in escapes)) return;
+        value += escapes[next];
+      }
+    }
+    return { value, complete: false, end: source.length };
+  };
+  let depth = 0;
+  let previous = "";
+  for (let i = start; i < source.length; i++) {
+    const c = source[i];
+    if (/\s/.test(c)) continue;
+    if (c === '"') {
+      const token = read(i);
+      if (!token?.complete) return;
+      if (depth === 1 && (previous === "{" || previous === ",")) {
+        let at = token.end + 1;
+        while (/\s/.test(source[at] || "x")) at++;
+        if (source[at] !== ":") return;
+        at++;
+        while (/\s/.test(source[at] || "x")) at++;
+        if (token.value === key) {
+          if (source[at] !== '"') return;
+          const found = read(at);
+          return found && { value: found.value, complete: found.complete };
+        }
+      }
+      i = token.end;
+    } else if (c === "{" || c === "[") depth++;
+    else if (c === "}" || c === "]") {
+      if (--depth === 0) return;
+    }
+    previous = c;
+  }
+}
+
 export function draftText(raw: string): string {
   try {
     const data = parseJSON(raw);
@@ -66,16 +127,10 @@ export function draftText(raw: string): string {
     return typeof data === "string" ? data : "";
   } catch {
     const text = unwrap(raw);
-    const m = text.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)/s);
-    if (m) {
-      try {
-        return JSON.parse('"' + m[1] + '"');
-      } catch {
-        return m[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
-      }
-    }
+    const field = topLevelString(raw, "text");
+    if (field) return field.value;
     // Plain prose is recoverable; protocol objects and broken JSON stay in raw details.
-    return /^[\[{]/.test(text) || /"(?:text|messages|error)"\s*:/.test(text)
+    return /^[\[{]/.test(text) || /"(?:text|messages|error|theaterHtml)"\s*:/.test(text)
       ? ""
       : text;
   }
@@ -131,8 +186,10 @@ const object = (properties: Record<string, unknown>) => ({
   additionalProperties: false,
 });
 const fact = object({ quote: string, knownBy: array(string) });
+export const novelTheaterSchema = object({ text: string, facts: array(fact), theaterHtml: string });
 export const outputSchemas: Record<PromptKind, ReturnType<typeof object>> = {
   novel: object({ text: string, facts: array(fact) }),
+  theater: object({ theaterHtml: string }),
   chat: object({ messages: array(string) }),
   facts: object({ facts: array(fact) }),
   memory: object({ text: string }),

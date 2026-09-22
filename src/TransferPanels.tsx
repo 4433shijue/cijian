@@ -249,6 +249,10 @@ export function BackupSettings({
                 <dt>角色草稿</dt>
                 <dd>{t.summary.counts.roleDrafts}</dd>
               </div>
+              <div>
+                <dt>小剧场</dt>
+                <dd>{t.summary.counts.theaters}</dd>
+              </div>
             </dl>
             <p className="hint">
               合并会新增副本并重建关联，包含已删除内容、历史版本和未完成草稿。故事的自定义文风一起保留，同名预设不会覆盖现有版本。
@@ -342,6 +346,7 @@ export function StoryTransfer({
     fontSize: 16,
     lineHeight: 1.8,
     pageBreak: false,
+    theaters: false,
   });
   const count = useLiveQuery(
     () =>
@@ -378,7 +383,7 @@ export function StoryTransfer({
         </button>
       </div>
       <p className="hint">
-        作品用于阅读分享；故事备份保留角色、人设、记忆、历史版本和草稿，可重新导入。
+        作品用于阅读分享；故事备份保留角色、人设、记忆、小剧场、历史版本和草稿，可重新导入。
       </p>
       {expanded && (
         <div className="transfer-options">
@@ -485,6 +490,15 @@ export function StoryTransfer({
               onChange={(e) => change({ characters: e.target.checked })}
             />
             附上人物介绍（名字与简介）
+          </label>
+          <label className="transfer-check">
+            <input
+              type="checkbox"
+              disabled={t.running || options.content === "chat"}
+              checked={Boolean(options.theaters) && options.content !== "chat"}
+              onChange={(e) => change({ theaters: e.target.checked })}
+            />
+            附上小剧场（当前正文版本的已完成内容）
           </label>
           {["docx", "epub", "print"].includes(options.format) && (
             <div className="transfer-grid">

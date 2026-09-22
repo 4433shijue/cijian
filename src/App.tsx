@@ -31,6 +31,8 @@ import { db, makeStory, deleteStory, reviseEvent, setTimelineMode, ensureStoryRo
 import { sharedTimeline, visibleText } from "./timeline";
 import { loadRoleDraft, saveRoleDraft, saveCreatedRole } from "./role-draft";
 import { InspirationAssistant } from "./InspirationAssistant";
+import { TheaterPanel, EventRawOutput } from "./TheaterPanel";
+import { StoryTheaterSettings, TheaterPresetSettings } from "./TheaterSettings";
 import { inspirationCount, chooseInspiration } from "./inspiration";
 import { memoryInterval, memoryReadLimit, memoryValid, roundLabel, selectRoundContext } from "./rounds";
 import { memoryBatches, memoryRequestCount, scheduleAutomaticMemory } from "./round-memory";
@@ -1099,10 +1101,7 @@ function DraftReview({
           ))}
         </div>
       )}
-      <details>
-        <summary>查看模型原始输出</summary>
-        <pre>{event.raw || "没有收到输出"}</pre>
-      </details>
+      <EventRawOutput event={event} />
       <p className="hint">
         采用操作不会调用
         AI。角色知情事实先留空，可以之后用「摘录事实」整理并确认。
@@ -2169,19 +2168,17 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
                     <button
                       disabled={busy}
                       onClick={async () => {
-                        await db.events.delete(e.id);
+                        await db.transaction("rw", [db.events, db.theaters], async () => {
+                          await db.theaters.where("eventId").equals(e.id).delete();
+                          await db.events.delete(e.id);
+                        });
                       }}
                     >
                       删除草稿
                     </button>
                   </div>
                 )}
-                {e.status === "draft" && e.raw && (
-                  <details>
-                    <summary>查看模型原始输出</summary>
-                    <pre>{e.raw}</pre>
-                  </details>
-                )}
+                {e.status === "draft" && (e.raw || e.theater) && <EventRawOutput event={e} />}
                 {e.status === "draft" && e.request && (
                   <button
                     onClick={() => {
@@ -2192,6 +2189,10 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
                     参考内容
                   </button>
                 )}
+                {e.kind === "novel" && (e.status === "complete" || e.theater) &&
+                  (reading || !e.collapsed || e.status === "draft") && (
+                    <TheaterPanel key={e.id} event={e} blocked={generating} />
+                  )}
               </div>
             </article>
           );
@@ -2439,6 +2440,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
       )}{" "}
       {panel === "settings" && (
         <Modal title="这本故事的设定" onClose={() => setPanel("")}>
+          <StoryTheaterSettings story={s} prefs={prefs} update={update} />
           <Field label="正文与手机聊天">
             <select value={s.timelineMode || "strict"} disabled={generating} onChange={async (event) => {
               try { await setTimelineMode(id, event.target.value as "shared" | "strict"); notify("故事互通设置已保存"); }
@@ -3003,6 +3005,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
                 <option value="facts">事实摘录</option>
                 <option value="memory">记忆整理</option>
                 <option value="inspiration">灵感小助手</option>
+                <option value="theater">小剧场</option>
               </select>
             </Field>
             <textarea
@@ -3062,6 +3065,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
         )}
       </section>
       {prefs.developer && <StylePresetSettings prefs={prefs} notify={notify} />}
+      {prefs.developer && <TheaterPresetSettings prefs={prefs} notify={notify} />}
       {edit && (
         <ProfileEditor
           value={edit}

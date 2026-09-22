@@ -1712,6 +1712,51 @@ details pre {
   background: #fbfdf5;
   box-shadow: 0 8px 22px #405b3a18;
 }
+.theater-panel {
+  margin-top: 20px;
+  border: 1px solid #d6decd;
+  border-radius: 13px;
+  overflow: hidden;
+  background: rgba(244, 247, 235, .68);
+}
+.theater-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 16px;
+  border: 0;
+  border-radius: 0;
+  color: #49604b;
+  background: transparent;
+  text-align: left;
+}
+.theater-toggle:hover { background: rgba(225, 233, 213, .5); }
+.theater-toggle-title, .theater-toggle-state { display: inline-flex; align-items: center; gap: 9px; }
+.theater-toggle-title strong { font-weight: 600; letter-spacing: .07em; }
+.theater-toggle-state { font-size: 12px; color: #798570; }
+.theater-content { border-top: 1px solid #dce3d3; padding: 10px 12px 12px; }
+.theater-content > .hint, .theater-content > .error, .theater-content > .review { margin: 8px 4px; }
+.theater-presets-label { margin: 2px 4px 8px; font-size: 12px; color: #7a816b; }
+.theater-frame { display: block; width: 100%; min-width: 0; border: 0; background: transparent; }
+.theater-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.theater-actions button { min-height: 34px; padding: 6px 10px; font-size: 12px; background: transparent; }
+.story-theater-settings { margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #dce3d3; }
+.story-theater-settings h3 { margin-top: 0; }
+.theater-story-presets h4 { margin: 16px 0 6px; }
+.theater-preset-choices { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.theater-preset-order { list-style: none; padding: 0; margin: 12px 0 0; }
+.theater-preset-order li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 9px; border-bottom: 1px solid #e3e7dc; }
+.theater-preset-order li > div { display: flex; gap: 6px; }
+.theater-preset-order button { padding: 5px; min-height: 30px; }
+.theater-preset-description { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+@media (max-width: 600px) {
+  .theater-panel { margin-top: 15px; }
+  .theater-toggle { padding: 12px; }
+  .theater-content { padding: 8px 5px; }
+  .theater-preset-settings .section-title { align-items: flex-start; flex-direction: column; }
+}
 .style-preset-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
