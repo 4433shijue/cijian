@@ -3,7 +3,11 @@ import { sharedTimeline } from "./timeline";
 import { withStoryLock } from "./locks";
 import { isBusy } from "./generation-state";
 import { numberedRounds, roundWindow } from "./rounds";
-import type { TransferRecord, TransferSession, TransferChunk } from "./transfer-types";
+import type {
+  TransferRecord,
+  TransferSession,
+  TransferChunk,
+} from "./transfer-types";
 import {
   uid,
   paragraphs,
@@ -94,6 +98,7 @@ export function makeStory(
     stylePresetId: "builtin-natural",
     theaterAuto: false,
     theaterPresetIds: ["theater-roast"],
+    theaterDensity: "standard",
     autoMemory: true,
     chatThreshold: 20,
     novelThreshold: 5,
@@ -179,40 +184,52 @@ export async function initialize() {
       if (w.title === "临河旧书店") await db.world.delete(w.id);
   }
   const recover = async (id: string) => {
-    await db.transaction("rw", [db.jobs, db.stories, db.chatBatches, db.theaters, db.events], async () => {
-      for (const theater of await db.theaters.where("status").equals("running")
-        .filter((record) => record.storyId === id).toArray()) {
-        await db.theaters.update(theater.id, {
-          status: "interrupted",
-          error: "上次小剧场生成已中断，可以重新生成。",
-          updated: Date.now(),
-        });
-        const event = await db.events.get(theater.eventId);
-        if (event?.theater?.id === theater.id)
-          await db.events.update(event.id, { theater: { ...event.theater, status: "interrupted" } });
-      }
-      for (const batch of await db.chatBatches.where("storyId").equals(id).toArray())
-        if (batch.status === "running")
-          await db.chatBatches.update(batch.id, {
+    await db.transaction(
+      "rw",
+      [db.jobs, db.stories, db.chatBatches, db.theaters, db.events],
+      async () => {
+        for (const theater of await db.theaters
+          .where("status")
+          .equals("running")
+          .filter((record) => record.storyId === id)
+          .toArray()) {
+          await db.theaters.update(theater.id, {
             status: "interrupted",
-            error: "上次回复已中断，已发送的消息仍保留，可以重试本组。",
+            error: "上次小剧场生成已中断，可以重新生成。",
+            updated: Date.now(),
           });
-      for (const j of await db.jobs
-        .where("storyId")
-        .equals(id)
-        .filter((j) => j.status === "running")
-        .toArray())
-        await db.jobs.update(j.id, {
-          status: "interrupted",
-          error: "上次页面关闭，任务已中断。草稿仍保留，请手动重试。",
-        });
-      const s = await db.stories.get(id);
-      if (s?.memoryState === "running")
-        await db.stories.update(id, {
-          memoryState: "interrupted",
-          memoryError: "上次整理中断，可手动继续。",
-        });
-    });
+          const event = await db.events.get(theater.eventId);
+          if (event?.theater?.id === theater.id)
+            await db.events.update(event.id, {
+              theater: { ...event.theater, status: "interrupted" },
+            });
+        }
+        for (const batch of await db.chatBatches
+          .where("storyId")
+          .equals(id)
+          .toArray())
+          if (batch.status === "running")
+            await db.chatBatches.update(batch.id, {
+              status: "interrupted",
+              error: "上次回复已中断，已发送的消息仍保留，可以重试本组。",
+            });
+        for (const j of await db.jobs
+          .where("storyId")
+          .equals(id)
+          .filter((j) => j.status === "running")
+          .toArray())
+          await db.jobs.update(j.id, {
+            status: "interrupted",
+            error: "上次页面关闭，任务已中断。草稿仍保留，请手动重试。",
+          });
+        const s = await db.stories.get(id);
+        if (s?.memoryState === "running")
+          await db.stories.update(id, {
+            memoryState: "interrupted",
+            memoryError: "上次整理中断，可手动继续。",
+          });
+      },
+    );
   };
   for (const s of await db.stories.toArray()) {
     if (typeof navigator !== "undefined" && navigator.locks)
@@ -274,7 +291,10 @@ export async function reviseEvent(
       .filter((x) => contentChanged && x.seq > e.seq)
       .toArray();
     for (const x of later) await db.events.update(x.id, { review: true });
-    const affected = new Set([id, ...(story && sharedTimeline(story) ? [] : later.map((x) => x.id))]);
+    const affected = new Set([
+      id,
+      ...(story && sharedTimeline(story) ? [] : later.map((x) => x.id)),
+    ]);
     for (const m of await db.memories
       .where("storyId")
       .equals(e.storyId)
@@ -289,7 +309,10 @@ export async function reviseEvent(
     if (story && sharedTimeline(story)) await refreshTimelineMemory(e.storyId);
   });
   const changed = await db.events.get(id);
-  if (changed) void import("./round-memory").then((m) => m.scheduleAutomaticMemory(changed.storyId));
+  if (changed)
+    void import("./round-memory").then((m) =>
+      m.scheduleAutomaticMemory(changed.storyId),
+    );
 }
 
 // Persist numbering and the monotonic window floor before edits can remove a round.
@@ -298,30 +321,57 @@ export async function ensureStoryRounds(storyId: string) {
   return db.transaction("rw", [db.stories, db.events], async () => {
     const s = await db.stories.get(storyId);
     if (!s) throw Error("故事不存在");
-    const events = await db.events.where("storyId").equals(storyId).sortBy("seq");
+    const events = await db.events
+      .where("storyId")
+      .equals(storyId)
+      .sortBy("seq");
     const original = new Map(events.map((e) => [e.id, e]));
     const rounds = numberedRounds(events);
-    for (const r of rounds) for (const e of r.events)
-      if (original.get(e.id)?.round !== r.number) await db.events.update(e.id, { round: r.number });
-    const nextRound = Math.max(s.nextRound || 1, ...rounds.map((r) => r.number + 1));
+    for (const r of rounds)
+      for (const e of r.events)
+        if (original.get(e.id)?.round !== r.number)
+          await db.events.update(e.id, { round: r.number });
+    const nextRound = Math.max(
+      s.nextRound || 1,
+      ...rounds.map((r) => r.number + 1),
+    );
     const normalized = rounds.flatMap((r) => r.events);
-    const update = { nextRound, contextWindowStart: roundWindow(s, normalized).start,
-      memoryAutoStart: s.memoryAutoStart ?? nextRound };
-    if (Object.entries(update).some(([key, value]) => s[key as keyof Story] !== value))
+    const update = {
+      nextRound,
+      contextWindowStart: roundWindow(s, normalized).start,
+      memoryAutoStart: s.memoryAutoStart ?? nextRound,
+    };
+    if (
+      Object.entries(update).some(
+        ([key, value]) => s[key as keyof Story] !== value,
+      )
+    )
       await db.stories.update(storyId, update);
     return { ...s, ...update };
   });
 }
 
 export async function consumeMemorySelection(storyId: string, token?: string) {
-  if (token && (await db.stories.get(storyId))?.memorySelection?.token === token)
+  if (
+    token &&
+    (await db.stories.get(storyId))?.memorySelection?.token === token
+  )
     await db.stories.update(storyId, { memorySelection: undefined });
 }
 
 // Display-only updates must not revise event versions or invalidate memories/cache.
 export async function collapseEarlierProse(storyId: string, before: number) {
-  await db.events.where("storyId").equals(storyId)
-    .filter((e) => e.kind === "novel" && e.status === "complete" && !e.deleted && e.seq < before && !e.collapsed)
+  await db.events
+    .where("storyId")
+    .equals(storyId)
+    .filter(
+      (e) =>
+        e.kind === "novel" &&
+        e.status === "complete" &&
+        !e.deleted &&
+        e.seq < before &&
+        !e.collapsed,
+    )
     .modify({ collapsed: true });
 }
 
@@ -331,38 +381,78 @@ export async function refreshTimelineMemory(storyId: string) {
   void storyId;
 }
 
-export async function setTimelineMode(storyId: string, mode: "shared" | "strict") {
+export async function setTimelineMode(
+  storyId: string,
+  mode: "shared" | "strict",
+) {
   return withStoryLock(storyId, async () => {
     if (isBusy(storyId)) throw Error("请等待当前任务结束后再切换互通设置");
-    await db.transaction("rw", [db.stories, db.events, db.memories], async () => {
-      const s = await db.stories.get(storyId);
-      if (!s) throw Error("故事不存在");
-      if (s.timelineMode === mode) return;
-      // Preserve explicit restricted facts from old stories. Empty AI candidates
-      // are not author privacy settings and do not require per-event approval.
-      if (mode === "shared" && !sharedTimeline(s)) {
-        for (const e of await db.events.where("storyId").equals(storyId).toArray())
-          if (e.kind === "novel" && !e.visibility && (e.facts.some((f) => f.knownBy.length) ||
-            e.versions.some((v) => v.facts.some((f) => f.knownBy.length))))
-            await reviseEvent(e.id, e.text, e.deleted, e.facts, e.versionId, "facts");
-      }
-      await db.stories.update(storyId, { timelineMode: mode, updated: Date.now() });
-      // A summary generated from shared prose cannot enter strict character knowledge.
-      for (const m of await db.memories.where("storyId").equals(storyId).toArray())
-        if (m.automatic) await db.memories.update(m.id, { status: m.status === "ignored" ? "ignored" : "invalid" });
-        else if (mode === "strict" && m.status === "accepted") {
-          const sources = await db.events.bulkGet(m.sources.map((ref) => ref.id));
-          if (sources.some((e) => e?.kind === "novel"))
-            await db.memories.update(m.id, { status: "review" });
+    await db.transaction(
+      "rw",
+      [db.stories, db.events, db.memories],
+      async () => {
+        const s = await db.stories.get(storyId);
+        if (!s) throw Error("故事不存在");
+        if (s.timelineMode === mode) return;
+        // Preserve explicit restricted facts from old stories. Empty AI candidates
+        // are not author privacy settings and do not require per-event approval.
+        if (mode === "shared" && !sharedTimeline(s)) {
+          for (const e of await db.events
+            .where("storyId")
+            .equals(storyId)
+            .toArray())
+            if (
+              e.kind === "novel" &&
+              !e.visibility &&
+              (e.facts.some((f) => f.knownBy.length) ||
+                e.versions.some((v) => v.facts.some((f) => f.knownBy.length)))
+            )
+              await reviseEvent(
+                e.id,
+                e.text,
+                e.deleted,
+                e.facts,
+                e.versionId,
+                "facts",
+              );
         }
-      await refreshTimelineMemory(storyId);
-    });
+        await db.stories.update(storyId, {
+          timelineMode: mode,
+          updated: Date.now(),
+        });
+        // A summary generated from shared prose cannot enter strict character knowledge.
+        for (const m of await db.memories
+          .where("storyId")
+          .equals(storyId)
+          .toArray())
+          if (m.automatic)
+            await db.memories.update(m.id, {
+              status: m.status === "ignored" ? "ignored" : "invalid",
+            });
+          else if (mode === "strict" && m.status === "accepted") {
+            const sources = await db.events.bulkGet(
+              m.sources.map((ref) => ref.id),
+            );
+            if (sources.some((e) => e?.kind === "novel"))
+              await db.memories.update(m.id, { status: "review" });
+          }
+        await refreshTimelineMemory(storyId);
+      },
+    );
   });
 }
 export async function deleteStory(id: string) {
   await db.transaction(
     "rw",
-    [db.stories, db.events, db.memories, db.jobs, db.chatBatches, db.promptSessions, db.theaters],
+    [
+      db.stories,
+      db.events,
+      db.memories,
+      db.jobs,
+      db.chatBatches,
+      db.promptSessions,
+      db.theaters,
+    ],
     async () => {
       await db.events.where("storyId").equals(id).delete();
       await db.memories.where("storyId").equals(id).delete();

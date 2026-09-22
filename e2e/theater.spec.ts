@@ -89,6 +89,25 @@ test("automatic theater shares the prose request and stays collapsed until opene
   expect(requests).toBe(1);
 });
 
+test("story theater density persists for ordinary users and is sent with the theater request", async ({ page }) => {
+  await seed(page);
+  let requestBody = "";
+  await page.route("https://theater.fixture.test/**", async (route) => {
+    requestBody = JSON.stringify(route.request().postDataJSON());
+    await route.fulfill({ contentType: "text/event-stream", body: "data: " + JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ theaterHtml: mockHtml }) }, finish_reason: "stop" }] }) + "\n\ndata: [DONE]\n\n" });
+  });
+  await page.getByRole("button", { name: "故事设置", exact: true }).click();
+  await expect(page.getByLabel("小剧场丰富度", { exact: true })).toHaveValue("standard");
+  await page.getByLabel("小剧场丰富度", { exact: true }).selectOption("rich");
+  await expect.poll(async () => (await readStore(page, "stories")).find((story) => story.id === "fixture-story")?.theaterDensity).toBe("rich");
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.locator(".theater-toggle").click();
+  await expect(page.frameLocator(".theater-frame").getByText("伞柄上的那点心思")).toBeVisible();
+  expect(requestBody).toContain("【小剧场丰富度：丰富】");
+  await page.getByRole("button", { name: "故事设置", exact: true }).click();
+  await expect(page.getByLabel("小剧场丰富度", { exact: true })).toHaveValue("rich");
+});
+
 test("automatic prose rewrite folds its new theater even when the previous theater was open", async ({ page }) => {
   await seed(page, { saved: true, automatic: true });
   let requests = 0;

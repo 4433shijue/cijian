@@ -19,7 +19,10 @@ import { draftText } from "../src/output";
 import {
   allTheaterPresets,
   builtInTheaterPresets,
+  normalizeTheaterDensity,
   selectedTheaterPresets,
+  theaterDensityInstruction,
+  theaterInstruction,
 } from "../src/theater-presets";
 import { theaterText } from "../src/theater-text";
 import type {
@@ -166,6 +169,27 @@ it("keeps built-in order while overriding preset names and content, deduplicatin
   expect(builtInTheaterPresets[0].name).toBe("主角们的吐槽");
 });
 
+it("uses standard density by default and keeps density guidance separate from HTML protocol", () => {
+  expect(story.theaterDensity).toBe("standard");
+  expect(normalizeTheaterDensity(undefined)).toBe("standard");
+  expect(normalizeTheaterDensity("invalid")).toBe("standard");
+  expect(normalizeTheaterDensity("light")).toBe("light");
+  expect(normalizeTheaterDensity("rich")).toBe("rich");
+  expect(theaterDensityInstruction("light")).toContain("一个具体动作或台词");
+  expect(theaterDensityInstruction("rich")).toContain(
+    "关系位置、信息理解或情绪变化",
+  );
+  const instruction = theaterInstruction([
+    builtInTheaterPresets[2],
+    builtInTheaterPresets[0],
+  ]);
+  expect(instruction.indexOf("【话外之音】")).toBeLessThan(
+    instruction.indexOf("【主角们的吐槽】"),
+  );
+  expect(instruction).toContain("本节写法要求");
+  expect(instruction).toContain("不使用 Markdown 围栏");
+});
+
 it("extracts readable HTML text without code, resource URLs, hidden metadata, or entity artifacts", () => {
   const content =
     '<html><head><title>隐藏标题</title><style>body{color:red}</style></head><body><script>alert("secret")</script><div>阿岚&nbsp;&amp; 雨伞<br>第二行</div><p hidden>隐藏句子</p><template><p>模板内容</p></template><img src="https://private.test/pixel"><p>结尾 &lt;小字&gt;</p></body></html>';
@@ -241,6 +265,30 @@ it("builds a read-only target-turn context with applicable world knowledge and n
     }),
   ).toThrow();
   expect((await db.events.get(target.id))?.theater).toBeUndefined();
+});
+
+it("snapshots the selected density on each manual attempt", async () => {
+  await db.stories.update(story.id, { theaterDensity: "rich" });
+  const richContext = buildTheaterContext(
+    { ...story, theaterDensity: "rich" },
+    event(),
+    [world],
+    prefs,
+    profile,
+  );
+  expect(richContext.user).toContain("小剧场丰富度：丰富");
+  const rich = await createTheaterAttempt(
+    event(),
+    builtInTheaterPresets.slice(0, 1),
+  );
+  expect(rich.density).toBe("rich");
+  await failTheaterAttempt(rich.id, "fixture");
+  const compact = await createTheaterAttempt(
+    event(),
+    builtInTheaterPresets.slice(0, 1),
+    "light",
+  );
+  expect(compact.density).toBe("light");
 });
 
 it("shares one request for concurrent manual clicks and keeps theater content out of prose and memories", async () => {

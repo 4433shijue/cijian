@@ -1,4 +1,9 @@
-import type { Preferences, Story, TheaterPreset } from "./types";
+import type {
+  Preferences,
+  Story,
+  TheaterDensity,
+  TheaterPreset,
+} from "./types";
 
 export const builtInTheaterPresets: TheaterPreset[] = [
   {
@@ -57,13 +62,33 @@ export function selectedTheaterPresets(story: Story, prefs: Preferences) {
 }
 
 export const theaterWriting =
-  "围绕提供的人物设定、世界书与本回合正文写一则短番外，保持人物口气和当时处境。补充的小动作、心理与玩笑要贴合眼前场景，含义不明的地方留有余地，不替作者确定隐藏秘密、后续发展或关系结论。选择多个方向时，各写一小节，避免重复。用自然白话，让动作和台词承载情绪，写到有趣的地方就收住，不复述全文，不在结尾讲道理。文字不用破折号和提示性冒号，不用先立误解再推翻的句式，避开整齐排比和汇报腔。小剧场始终作为番外，不写成主线中已经发生的新事件。私密设定只能用于理解对应人物，不自动成为其他人物或观众的知识。";
+  "围绕提供的人物设定、世界书与本回合正文写一则短番外，保持人物口气和当时处境。每个已选方向都先从目标正文里找一件可核对的动作、台词或物件作为具体落点，再写至少一处动作或声音的变化，以及一处关系位置、信息理解或情绪的细微偏移。变化只能来自本段材料与直接可见的反应，素材不足时停在原地。标准密度写两至三个互相承接的小节，丰富密度可以拆成多个短层次，轻量密度尽快收束。选择多个方向时各写一节，避免重复正文、同义改写、连续感叹和空泛总结。用自然白话，让动作和台词承载情绪，写到有趣的地方就收住。不要用破折号和提示性冒号，不用先立误解再推翻的句式，避开整齐排比和汇报腔。小剧场始终作为番外，不写成主线中已经发生的新事件。私密设定只能用于理解对应人物，不自动成为其他人物或观众的知识。";
+
+export function theaterDensityInstruction(density: TheaterDensity | undefined) {
+  switch (density || "standard") {
+    case "light":
+      return "【小剧场丰富度：轻量】只抓最有意思的一两个点。每个已选方向写一小段，先落到一个具体动作或台词，再给一个反应，尽快收束。少用分节和重复回应，优先保证读者一眼能看完。";
+    case "rich":
+      return "【小剧场丰富度：丰富】可以把已选方向展开成多个短小层次或小节。每层都从目标正文的具体落点出发，再写动作、对白和彼此回应如何带来一点关系位置、信息理解或情绪变化，但每一步都必须贴着目标正文，避免复述、空泛总结和凭空推进主线。";
+    default:
+      return "【小剧场丰富度：标准】适度展开已选方向，每节保留两三个具体细节或来回回应。先有场面落点，再有反应和一处小余波，写到有趣处自然收束。";
+  }
+}
+
+export function normalizeTheaterDensity(value: unknown): TheaterDensity {
+  return value === "light" || value === "rich" || value === "standard"
+    ? value
+    : "standard";
+}
 
 // Content instructions remain independent of the model's outer JSON protocol.
 export function theaterInstruction(presets: TheaterPreset[]) {
   return [
     theaterWriting,
-    ...presets.map((preset) => `【${preset.name}】\n${preset.prompt}`),
+    ...presets.map(
+      (preset) =>
+        `【${preset.name}】\n${preset.prompt}\n本节写法要求\n先落到本回合一个具体动作、台词或物件，再按预设完成一轮反应或观察，最后停在本段可支持的余波上。不要把其他预设的内容换个说法重复一遍。`,
+    ),
     "【小剧场展示格式】\n将小剧场写成一个自包含的 HTML 片段，可用内联样式和 style 标签自由设计卡片、纸条、对话气泡或评论区。多个预设按上面列出的顺序展示，各有清楚的小标题，整体适配窄屏，文字可换行。不输出脚本、事件处理属性、表单、iframe、外部资源、链接跳转或任何网络请求，不使用固定定位和无限动画。美化只改变展示，角色名字与正文内容须作为可阅读文字保留。HTML 字符串交给外层约定的 theaterHtml 字段，不使用 Markdown 围栏。",
   ].join("\n\n");
 }

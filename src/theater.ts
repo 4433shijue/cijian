@@ -5,7 +5,12 @@ import { withStoryLock } from "./locks";
 import { generate } from "./model";
 import { parseJSON, topLevelString } from "./output";
 import { prompt } from "./prompts";
-import { selectedTheaterPresets, theaterInstruction } from "./theater-presets";
+import {
+  normalizeTheaterDensity,
+  selectedTheaterPresets,
+  theaterDensityInstruction,
+  theaterInstruction,
+} from "./theater-presets";
 import { theaterText } from "./theater-text";
 import {
   uid,
@@ -15,6 +20,7 @@ import {
   type Profile,
   type SceneEvent,
   type Story,
+  type TheaterDensity,
   type TheaterPreset,
   type TheaterRecord,
   type WorldEntry,
@@ -111,6 +117,8 @@ export function buildTheaterContext(
   return assemble(
     prompt("theater", prefs),
     "只为给出的目标正文生成小剧场。当前没有提供其他回合，不补全前后剧情，也不把番外当作正式经历。\n\n" +
+      theaterDensityInstruction(story.theaterDensity) +
+      "\n\n" +
       theaterInstruction(presets),
     materials,
     profile.context,
@@ -154,15 +162,17 @@ async function publishSummary(record: TheaterRecord) {
 export async function createTheaterAttempt(
   event: SceneEvent,
   presets: TheaterPreset[],
+  density?: TheaterDensity,
 ): Promise<TheaterRecord> {
   return db.transaction("rw", tables, async () => {
     const current = await db.events.get(event.id);
+    const story = await db.stories.get(event.storyId);
     if (
       !current ||
       current.deleted ||
       current.kind !== "novel" ||
       current.versionId !== event.versionId ||
-      !(await db.stories.get(event.storyId))
+      !story
     )
       throw Error("正文已经变化，请重新打开小剧场");
     const existing =
@@ -178,6 +188,7 @@ export async function createTheaterAttempt(
       eventId: event.id,
       sourceVersionId: event.versionId,
       presets: structuredClone(presets),
+      density: normalizeTheaterDensity(density ?? story.theaterDensity),
       html: "",
       text: "",
       raw: "",

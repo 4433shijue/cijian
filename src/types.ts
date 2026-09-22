@@ -1,10 +1,12 @@
 export type Protocol = "chat" | "responses" | "claude" | "gemini";
-export type PromptKind = "novel" | "chat" | "facts" | "memory" | "inspiration" | "theater";
+export type PromptKind =
+  "novel" | "chat" | "facts" | "memory" | "inspiration" | "theater";
 export interface TheaterPreset {
   id: string;
   name: string;
   prompt: string;
 }
+export type TheaterDensity = "light" | "standard" | "rich";
 export type TheaterStatus = "running" | "complete" | "failed" | "interrupted";
 export interface TheaterRecord {
   id: string;
@@ -12,6 +14,7 @@ export interface TheaterRecord {
   eventId: string;
   sourceVersionId: string;
   presets: TheaterPreset[];
+  density?: TheaterDensity;
   html: string;
   text: string;
   raw: string;
@@ -92,6 +95,7 @@ export interface Story {
   stylePresetId?: string;
   theaterAuto?: boolean;
   theaterPresetIds?: string[];
+  theaterDensity?: TheaterDensity;
   psychology: boolean;
   timelineMode?: "shared" | "strict";
   autoMemory: boolean;
@@ -266,12 +270,36 @@ export interface ContextReport {
   task?: string;
   messages?: PromptMessage[];
   prefixReuse?: {
-    state: "first" | "continued" | "settings" | "history" | "capacity" | "rewrite" | "window" | "selection";
+    state:
+      | "first"
+      | "continued"
+      | "settings"
+      | "history"
+      | "capacity"
+      | "rewrite"
+      | "window"
+      | "selection";
     retainedMessages: number;
   };
-  history?: { limit: number; sources: SourceRef[]; recalled?: SourceRef[]; rounds?: number[]; windowStart?: number };
-  memoryContext?: { selected: string[]; gaps: number[]; selectionToken?: string; automaticLimit: number };
-  materialTokens?: { settings: number; memories: number; history: number; task: number };
+  history?: {
+    limit: number;
+    sources: SourceRef[];
+    recalled?: SourceRef[];
+    rounds?: number[];
+    windowStart?: number;
+  };
+  memoryContext?: {
+    selected: string[];
+    gaps: number[];
+    selectionToken?: string;
+    automaticLimit: number;
+  };
+  materialTokens?: {
+    settings: number;
+    memories: number;
+    history: number;
+    task: number;
+  };
   taskSources?: SourceRef[];
   usage?: ModelUsage;
   durationMs?: number;

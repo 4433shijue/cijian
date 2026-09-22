@@ -7,6 +7,7 @@ import { exportBackup, importBackup, validateBackup } from "../src/backup";
 import { stageBackup, commitStaged, exportBackupBlob } from "../src/backup-transfer";
 import { TransferControl } from "../src/transfer-store";
 import { exportWork } from "../src/work-export";
+import { createTheaterAttempt } from "../src/theater";
 import type { WorkOptions } from "../src/transfer-types";
 import { uid, type SceneEvent, type TheaterRecord } from "../src/types";
 
@@ -102,6 +103,47 @@ it.each(["legacy", "stream"])("imports v1 backups without theaters through %s", 
   }
   expect(await db.stories.count()).toBe(2);
   expect(await db.theaters.count()).toBe(1);
+});
+
+it.each(["legacy", "stream"])("exports density snapshots and defaults missing legacy density to standard through %s", async (method) => {
+  const { story, theater } = await fixture();
+  await db.stories.update(story.id, { theaterDensity: "rich" });
+  await db.theaters.update(theater.id, { density: "light" });
+  const exported = await exportBackup();
+  expect(exported.stories.find((row) => row.id === story.id)?.theaterDensity).toBe("rich");
+  expect(exported.theaters.find((row) => row.id === theater.id)?.density).toBe("light");
+  const streamExport = await exportBackupBlob(uid());
+  const streamed = JSON.parse(await streamExport.blob.text());
+  expect(streamed.stories.find((row: any) => row.id === story.id)?.theaterDensity).toBe("rich");
+  expect(streamed.theaters.find((row: any) => row.id === theater.id)?.density).toBe("light");
+
+  const legacy = structuredClone(exported) as any;
+  legacy.version = 1;
+  delete legacy.stories[0].theaterDensity;
+  delete legacy.theaters[0].density;
+  expect(validateBackup(legacy).stories[0].theaterDensity).toBeUndefined();
+  expect(validateBackup(legacy).theaters[0].density).toBeUndefined();
+  if (method === "legacy") await importBackup(legacy);
+  else {
+    const summary = await stageBackup(blob(legacy), uid());
+    await commitStaged(summary.session, { replace: false, applySettings: false });
+  }
+  const copied = (await db.stories.toArray()).find((row) => row.id !== story.id)!;
+  const copiedTheater = (await db.theaters.where("storyId").equals(copied.id).toArray())[0];
+  expect(copied.theaterDensity).toBe("standard");
+  expect(copiedTheater.density).toBe("standard");
+});
+
+it("uses the story density snapshot when starting a new theater attempt and defaults old stories to standard", async () => {
+  const { story, event } = await fixture();
+  await db.stories.update(story.id, { theaterDensity: "rich" });
+  const rich = await createTheaterAttempt(event, [{ id: "theater-roast", name: "吐槽", prompt: "" }]);
+  expect(rich.density).toBe("rich");
+  await db.theaters.delete(rich.id);
+  await db.events.update(event.id, { theater: undefined });
+  await db.stories.update(story.id, { theaterDensity: undefined });
+  const standard = await createTheaterAttempt(event, [{ id: "theater-roast", name: "吐槽", prompt: "" }]);
+  expect(standard.density).toBe("standard");
 });
 
 it.each(["legacy", "stream"])("blocks %s imports during a manual theater request without a job record", async (method) => {

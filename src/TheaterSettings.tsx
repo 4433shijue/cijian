@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { db } from "./db";
-import { uid, type Preferences, type Story, type TheaterPreset } from "./types";
+import { uid, type Preferences, type Story, type TheaterDensity, type TheaterPreset } from "./types";
 import { allTheaterPresets, builtInTheaterPresets, selectedTheaterPresets } from "./theater-presets";
 
 export function StoryTheaterSettings({ story, prefs, update }: {
@@ -10,8 +10,10 @@ export function StoryTheaterSettings({ story, prefs, update }: {
   const preferences: Preferences = prefs || { id: "preferences", activeProfile: "", developer: false, prompts: {} };
   const [selection, setSelection] = useState(story.theaterPresetIds);
   const [automatic, setAutomatic] = useState(!!story.theaterAuto);
+  const [density, setDensity] = useState<TheaterDensity>(story.theaterDensity || "standard");
   useEffect(() => setSelection(story.theaterPresetIds), [story.id, JSON.stringify(story.theaterPresetIds)]);
   useEffect(() => setAutomatic(!!story.theaterAuto), [story.id, story.theaterAuto]);
+  useEffect(() => setDensity(story.theaterDensity || "standard"), [story.id, story.theaterDensity]);
   const selected = selectedTheaterPresets({ ...story, theaterPresetIds: selection }, preferences);
   const ids = selected.map((preset) => preset.id);
   const available = allTheaterPresets(preferences);
@@ -20,8 +22,14 @@ export function StoryTheaterSettings({ story, prefs, update }: {
     setError("");
     if (patch.theaterPresetIds) setSelection(patch.theaterPresetIds);
     if (patch.theaterAuto !== undefined) setAutomatic(patch.theaterAuto);
+    if (patch.theaterDensity) setDensity(patch.theaterDensity);
     try { await update(patch); }
-    catch { setSelection(story.theaterPresetIds); setAutomatic(!!story.theaterAuto); setError("小剧场设置没能保存，请再试一次。"); }
+    catch {
+      setSelection(story.theaterPresetIds);
+      setAutomatic(!!story.theaterAuto);
+      setDensity(story.theaterDensity || "standard");
+      setError("小剧场设置没能保存，请再试一次。");
+    }
   }
   function move(index: number, by: number) {
     const next = [...ids];
@@ -30,6 +38,14 @@ export function StoryTheaterSettings({ story, prefs, update }: {
   }
   return <section className="story-theater-settings">
     <h3>小剧场</h3>
+    <label className="field theater-density-field"><span>小剧场丰富度</span>
+      <select aria-label="小剧场丰富度" value={density} onChange={(event) => void save({ theaterDensity: event.target.value as TheaterDensity })}>
+        <option value="light">轻量 · 抓住一两个重点</option>
+        <option value="standard">标准 · 适度展开（推荐）</option>
+        <option value="rich">丰富 · 更多层次和回应</option>
+      </select>
+    </label>
+    <p className="hint">影响每次生成的小剧场展开程度。旧故事没有设置时按“标准”处理；修改后对下一次生成生效。</p>
     <label className="toggle"><input type="checkbox" checked={automatic}
       onChange={(event) => void save({ theaterAuto: event.target.checked })} /><span>新正文自动生成小剧场</span></label>
     <p className="hint">随新正文一起生成，默认收起。未开启时，可以点击每段下方的小剧场单独生成。</p>

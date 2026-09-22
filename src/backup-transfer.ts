@@ -298,6 +298,7 @@ export function backupRemapper() {
             partner: id(x.partner),
             stylePresetId: styleIds.get(x.stylePresetId) || x.stylePresetId,
             theaterPresetIds: (x.theaterPresetIds ?? ["theater-roast"]).map((presetId: string) => theaterPresetIds.get(presetId) || presetId),
+            theaterDensity: x.theaterDensity ?? "standard",
             memoryState:
               x.memoryState === "running" ? "interrupted" : x.memoryState,
           };
@@ -367,6 +368,7 @@ export function backupRemapper() {
             eventId: id(x.eventId),
             sourceVersionId: id(x.sourceVersionId),
             previousId: x.previousId ? id(x.previousId) : undefined,
+            density: x.density ?? "standard",
             presets: x.presets.map((preset: any) => ({ ...preset, id: theaterPresetIds.get(preset.id) || preset.id })),
             status: x.status === "running" ? "interrupted" : x.status,
             error: x.status === "running" ? "导入的小剧场尚未完成，可以重新生成。" : x.error,
@@ -546,6 +548,8 @@ export async function exportBackupBlob(
             delete row.key;
             row.remember = false;
           }
+          if (table === "stories") row.theaterDensity = row.theaterDensity ?? "standard";
+          if (table === "theaters") row.density = row.density ?? "standard";
           if (s && table === "world") row.storyIds = [s.id];
           if (s && table === "preferences") {
             row.activeProfile = "";

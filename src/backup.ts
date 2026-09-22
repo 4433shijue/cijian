@@ -32,7 +32,11 @@ const version = z.object({
   visibility: z.enum(["inherit", "author", "facts"]).optional(),
 });
 const theaterStatus = z.enum(["running", "complete", "failed", "interrupted"]);
-const theaterPreset = z.object({ id: str.min(1), name: str.min(1), prompt: str });
+const theaterPreset = z.object({
+  id: str.min(1),
+  name: str.min(1),
+  prompt: str,
+});
 const theater = z.object({
   id: str,
   storyId: str,
@@ -47,6 +51,7 @@ const theater = z.object({
   created: z.number(),
   updated: z.number(),
   previousId: str.optional(),
+  density: z.enum(["light", "standard", "rich"]).optional(),
 });
 const story = z.object({
   id: str,
@@ -65,6 +70,7 @@ const story = z.object({
   stylePresetId: str.optional(),
   theaterAuto: z.boolean().optional(),
   theaterPresetIds: ids.optional(),
+  theaterDensity: z.enum(["light", "standard", "rich"]).optional(),
   psychology: z.boolean(),
   timelineMode: z.enum(["shared", "strict"]).optional(),
   autoMemory: z.boolean(),
@@ -118,12 +124,14 @@ const event = z.object({
   chatPending: z.boolean().optional(),
   chatBatchId: str.optional(),
   round: z.number().int().positive().optional(),
-  theater: z.object({
-    id: str,
-    sourceVersionId: str,
-    status: theaterStatus,
-    previousId: str.optional(),
-  }).optional(),
+  theater: z
+    .object({
+      id: str,
+      sourceVersionId: str,
+      status: theaterStatus,
+      previousId: str.optional(),
+    })
+    .optional(),
 });
 const chatBatch = z.object({
   id: str,
@@ -194,16 +202,30 @@ const prefs = z.object({
       }),
     )
     .optional(),
-  theaterPresets: z.array(theaterPreset).refine(
-    (presets) => new Set(presets.map((p) => p.id)).size === presets.length,
-    "小剧场预设 ID 重复",
-  ).optional(),
+  theaterPresets: z
+    .array(theaterPreset)
+    .refine(
+      (presets) => new Set(presets.map((p) => p.id)).size === presets.length,
+      "小剧场预设 ID 重复",
+    )
+    .optional(),
   prompts: z.record(
     z.enum(["novel", "chat", "facts", "memory", "inspiration", "theater"]),
     z.object({ text: str, enabled: z.boolean() }),
   ),
 });
-export const recordSchemas = { roles: role, stories: story, world, events: event, memories: memory, profiles: profile, preferences: prefs, chatBatches: chatBatch, theaters: theater, roleDrafts: z.object({ id: str, role }) };
+export const recordSchemas = {
+  roles: role,
+  stories: story,
+  world,
+  events: event,
+  memories: memory,
+  profiles: profile,
+  preferences: prefs,
+  chatBatches: chatBatch,
+  theaters: theater,
+  roleDrafts: z.object({ id: str, role }),
+};
 const schema = z.object({
   format: z.literal("little-scene"),
   version: z.union([z.literal(1), z.literal(2)]),
@@ -224,8 +246,12 @@ const schema = z.object({
 export type Backup = z.infer<typeof schema>;
 export function validateBackup(raw: unknown) {
   const b = schema.parse(raw);
-  if (b.version === 2 && (!raw || typeof raw !== "object" ||
-    !Array.isArray((raw as { theaters?: unknown }).theaters)))
+  if (
+    b.version === 2 &&
+    (!raw ||
+      typeof raw !== "object" ||
+      !Array.isArray((raw as { theaters?: unknown }).theaters))
+  )
     throw Error("备份缺少资料区：theaters");
   for (const p of b.profiles) samplingParameters(p);
   for (const list of [
@@ -246,51 +272,87 @@ export function validateBackup(raw: unknown) {
   const theaters = new Map(b.theaters.map((x) => [x.id, x]));
   for (const t of b.theaters) {
     const e = events.get(t.eventId);
-    if (!e || e.storyId !== t.storyId || e.kind !== "novel" ||
+    if (
+      !e ||
+      e.storyId !== t.storyId ||
+      e.kind !== "novel" ||
       (!e.versions.some((v) => v.id === t.sourceVersionId) &&
-        !(e.status === "draft" && e.versionId === t.sourceVersionId)))
+        !(e.status === "draft" && e.versionId === t.sourceVersionId))
+    )
       throw Error("备份小剧场的正文来源不完整");
     if (t.previousId) {
       const previous = theaters.get(t.previousId);
-      if (!previous || previous.id === t.id || previous.storyId !== t.storyId ||
+      if (
+        !previous ||
+        previous.id === t.id ||
+        previous.storyId !== t.storyId ||
         previous.eventId !== t.eventId ||
-        previous.status !== "complete")
+        previous.status !== "complete"
+      )
         throw Error("备份小剧场的已有结果关联无效");
     }
   }
   for (const e of b.events) {
     if (!e.theater) continue;
     const t = theaters.get(e.theater.id);
-    if (!t || t.storyId !== e.storyId || t.eventId !== e.id ||
-      t.sourceVersionId !== e.theater.sourceVersionId || t.status !== e.theater.status ||
-      t.previousId !== e.theater.previousId)
+    if (
+      !t ||
+      t.storyId !== e.storyId ||
+      t.eventId !== e.id ||
+      t.sourceVersionId !== e.theater.sourceVersionId ||
+      t.status !== e.theater.status ||
+      t.previousId !== e.theater.previousId
+    )
       throw Error("备份正文的小剧场关联无效");
   }
   for (const batch of b.chatBatches) {
     const s = b.stories.find((s) => s.id === batch.storyId);
     const matches = (id: string, speaker: string) => {
       const e = events.get(id);
-      return e && e.storyId === batch.storyId && e.kind === "message" &&
-        e.speaker === speaker && e.participants.length === 2 &&
-        e.participants.includes(batch.player) && e.participants.includes(batch.partner) &&
-        e.chatBatchId === batch.id;
+      return (
+        e &&
+        e.storyId === batch.storyId &&
+        e.kind === "message" &&
+        e.speaker === speaker &&
+        e.participants.length === 2 &&
+        e.participants.includes(batch.player) &&
+        e.participants.includes(batch.partner) &&
+        e.chatBatchId === batch.id
+      );
     };
-    if (!s || batch.player === batch.partner ||
-      ![batch.player, batch.partner].every((id) => s.roles.some((r) => r.id === id)) ||
+    if (
+      !s ||
+      batch.player === batch.partner ||
+      ![batch.player, batch.partner].every((id) =>
+        s.roles.some((r) => r.id === id),
+      ) ||
       new Set(batch.sources.map((x) => x.id)).size !== batch.sources.length ||
       new Set(batch.replyIds).size !== batch.replyIds.length ||
-      (batch.sources.length > 0 && batch.sources.length !== batch.messages.length) ||
-      batch.sources.some((ref) => !matches(ref.id, batch.player) ||
-        events.get(ref.id)?.origin !== "user" ||
-        !events.get(ref.id)?.versions.some((v) => v.id === ref.versionId)) ||
-      batch.replyIds.some((id) => !matches(id, batch.partner) || events.get(id)?.origin === "user"))
+      (batch.sources.length > 0 &&
+        batch.sources.length !== batch.messages.length) ||
+      batch.sources.some(
+        (ref) =>
+          !matches(ref.id, batch.player) ||
+          events.get(ref.id)?.origin !== "user" ||
+          !events.get(ref.id)?.versions.some((v) => v.id === ref.versionId),
+      ) ||
+      batch.replyIds.some(
+        (id) =>
+          !matches(id, batch.partner) || events.get(id)?.origin === "user",
+      )
+    )
       throw Error("备份聊天批次关联不完整");
   }
   for (const e of b.events) {
     if (!e.chatBatchId) continue;
     const batch = batches.get(e.chatBatchId);
-    if (!batch || batch.storyId !== e.storyId || e.kind !== "message" ||
-      (e.origin === "user" && !batch.sources.some((source) => source.id === e.id)))
+    if (
+      !batch ||
+      batch.storyId !== e.storyId ||
+      e.kind !== "message" ||
+      (e.origin === "user" &&
+        !batch.sources.some((source) => source.id === e.id))
+    )
       throw Error("备份消息的回复批次无效");
   }
   for (const e of b.events) {
@@ -327,13 +389,26 @@ export function validateBackup(raw: unknown) {
 
 // Imported overrides receive private IDs so they cannot change another story's
 // built-in preset. Identical local definitions can safely share their ID.
-export function mergeTheaterPresets(existing: TheaterPreset[], imported: TheaterPreset[]) {
+export function mergeTheaterPresets(
+  existing: TheaterPreset[],
+  imported: TheaterPreset[],
+) {
   const presets = [...existing];
   const ids = new Map<string, string>();
-  const builtIns = new Set(["theater-roast", "theater-details", "theater-subtext", "theater-audience", "theater-body"]);
+  const builtIns = new Set([
+    "theater-roast",
+    "theater-details",
+    "theater-subtext",
+    "theater-audience",
+    "theater-body",
+  ]);
   for (const preset of imported) {
     const current = presets.find((p) => p.id === preset.id);
-    if (current && current.name === preset.name && current.prompt === preset.prompt)
+    if (
+      current &&
+      current.name === preset.name &&
+      current.prompt === preset.prompt
+    )
       continue;
     const id = current || builtIns.has(preset.id) ? uid() : preset.id;
     ids.set(preset.id, id);
@@ -361,8 +436,16 @@ export async function exportBackup() {
       created: new Date().toISOString(),
       roles: await db.roles.toArray(),
       stories: (await db.stories.toArray()).map(
-        ({ inspiration, inspirationRequest, inspirationRevision, memorySelection, ...story }) =>
-          story,
+        ({
+          inspiration,
+          inspirationRequest,
+          inspirationRevision,
+          memorySelection,
+          ...story
+        }) => ({
+          ...story,
+          theaterDensity: story.theaterDensity ?? "standard",
+        }),
       ),
       world: await db.world.toArray(),
       events: (await db.events.toArray()).map(({ request, ...e }) => e),
@@ -372,8 +455,13 @@ export async function exportBackup() {
         remember: false,
       })),
       preferences: await db.preferences.toArray(),
-      chatBatches: (await db.chatBatches.toArray()).map(({ request, ...batch }) => batch),
-      theaters: await db.theaters.toArray(),
+      chatBatches: (await db.chatBatches.toArray()).map(
+        ({ request, ...batch }) => batch,
+      ),
+      theaters: (await db.theaters.toArray()).map((theater) => ({
+        ...theater,
+        density: theater.density ?? "standard",
+      })),
     }),
   );
 }
@@ -397,14 +485,18 @@ export async function importBackup(value: unknown, replace = false) {
     paragraphs: x.paragraphs.map((p) => ({ ...p, id: remap(p.id) })),
   });
   await db.transaction("rw", db.tables, async () => {
-    if (await db.jobs.where("status").equals("running").count() ||
-      await db.chatBatches.where("status").equals("running").count() ||
-      await db.theaters.where("status").equals("running").count())
+    if (
+      (await db.jobs.where("status").equals("running").count()) ||
+      (await db.chatBatches.where("status").equals("running").count()) ||
+      (await db.theaters.where("status").equals("running").count())
+    )
       throw Error(
         "请先停止正在进行的生成或记忆整理，再导入备份。现有资料未改变。",
       );
     const theaterPresets = mergeTheaterPresets(
-      replace ? [] : (await db.preferences.get("preferences"))?.theaterPresets || [],
+      replace
+        ? []
+        : (await db.preferences.get("preferences"))?.theaterPresets || [],
       b.preferences[0]?.theaterPresets || [],
     );
     if (replace)
@@ -430,7 +522,10 @@ export async function importBackup(value: unknown, replace = false) {
         player: remap(x.player),
         partner: remap(x.partner),
         stylePresetId: x.stylePresetId,
-        theaterPresetIds: (x.theaterPresetIds ?? ["theater-roast"]).map((id) => theaterPresets.ids.get(id) || id),
+        theaterPresetIds: (x.theaterPresetIds ?? ["theater-roast"]).map(
+          (id) => theaterPresets.ids.get(id) || id,
+        ),
+        theaterDensity: x.theaterDensity ?? "standard",
         memoryState:
           x.memoryState === "running" ? "interrupted" : x.memoryState,
       })),
@@ -448,8 +543,13 @@ export async function importBackup(value: unknown, replace = false) {
           ...x.theater,
           id: remap(x.theater.id),
           sourceVersionId: remap(x.theater.sourceVersionId),
-          previousId: x.theater.previousId ? remap(x.theater.previousId) : undefined,
-          status: x.theater.status === "running" ? "interrupted" as const : x.theater.status,
+          previousId: x.theater.previousId
+            ? remap(x.theater.previousId)
+            : undefined,
+          status:
+            x.theater.status === "running"
+              ? ("interrupted" as const)
+              : x.theater.status,
         },
         rewriteOf: x.rewriteOf && {
           id: remap(x.rewriteOf.id),
@@ -463,25 +563,45 @@ export async function importBackup(value: unknown, replace = false) {
         })),
       })),
     );
-    await db.chatBatches.bulkAdd(b.chatBatches.map((x) => ({
-      ...x, id: remap(x.id), storyId: remap(x.storyId),
-      player: remap(x.player), partner: remap(x.partner),
-      sources: x.sources.map((ref) => ({ id: remap(ref.id), versionId: remap(ref.versionId) })),
-      replyIds: x.replyIds.map(remap),
-      status: x.status === "running" ? "interrupted" as const : x.status,
-      error: x.status === "running" ? "导入的回复尚未完成，可以重试本组。" : x.error,
-    })));
-    await db.theaters.bulkAdd(b.theaters.map((x) => ({
-      ...x,
-      id: remap(x.id),
-      storyId: remap(x.storyId),
-      eventId: remap(x.eventId),
-      sourceVersionId: remap(x.sourceVersionId),
-      previousId: x.previousId ? remap(x.previousId) : undefined,
-      presets: x.presets.map((p) => ({ ...p, id: theaterPresets.ids.get(p.id) || p.id })),
-      status: x.status === "running" ? "interrupted" as const : x.status,
-      error: x.status === "running" ? "导入的小剧场尚未完成，可以重新生成。" : x.error,
-    })));
+    await db.chatBatches.bulkAdd(
+      b.chatBatches.map((x) => ({
+        ...x,
+        id: remap(x.id),
+        storyId: remap(x.storyId),
+        player: remap(x.player),
+        partner: remap(x.partner),
+        sources: x.sources.map((ref) => ({
+          id: remap(ref.id),
+          versionId: remap(ref.versionId),
+        })),
+        replyIds: x.replyIds.map(remap),
+        status: x.status === "running" ? ("interrupted" as const) : x.status,
+        error:
+          x.status === "running"
+            ? "导入的回复尚未完成，可以重试本组。"
+            : x.error,
+      })),
+    );
+    await db.theaters.bulkAdd(
+      b.theaters.map((x) => ({
+        ...x,
+        id: remap(x.id),
+        storyId: remap(x.storyId),
+        eventId: remap(x.eventId),
+        sourceVersionId: remap(x.sourceVersionId),
+        previousId: x.previousId ? remap(x.previousId) : undefined,
+        density: x.density ?? "standard",
+        presets: x.presets.map((p) => ({
+          ...p,
+          id: theaterPresets.ids.get(p.id) || p.id,
+        })),
+        status: x.status === "running" ? ("interrupted" as const) : x.status,
+        error:
+          x.status === "running"
+            ? "导入的小剧场尚未完成，可以重新生成。"
+            : x.error,
+      })),
+    );
     await db.memories.bulkAdd(
       b.memories.map((x) => ({
         ...x,
