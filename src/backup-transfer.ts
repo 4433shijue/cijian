@@ -432,6 +432,7 @@ export async function commitStaged(
           if (
             table.name.startsWith("transfer") ||
             table.name === "roleDrafts" ||
+            table.name === "roleCompletionDrafts" ||
             (!apply && ["profiles", "preferences"].includes(table.name))
           )
             continue;

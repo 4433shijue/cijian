@@ -501,7 +501,7 @@ export async function importBackup(value: unknown, replace = false) {
     );
     if (replace)
       for (const table of db.tables)
-        if (table.name !== db.roleDrafts.name) await table.clear();
+        if (![db.roleDrafts.name, db.roleCompletionDrafts.name].includes(table.name)) await table.clear();
     await db.roles.bulkAdd(b.roles.map(r));
     await db.world.bulkAdd(
       b.world.map((x) => ({

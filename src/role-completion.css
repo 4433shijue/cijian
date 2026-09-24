@@ -1,0 +1,365 @@
+.role-completion {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+  padding-top: 22px;
+}
+.role-completion > *,
+.role-completion section,
+.role-completion article {
+  min-width: 0;
+}
+.completion-intro {
+  padding: 17px 20px;
+  background: linear-gradient(120deg, #e8efdebc, #f7f4e6a0);
+  border: 1px solid #e0e7d4;
+  border-radius: 4px 19px 7px 15px;
+}
+.completion-intro > p {
+  margin: 5px 0;
+  font-family: "Songti SC", "SimSun", serif;
+  font-size: 22px;
+  letter-spacing: 1px;
+}
+.completion-intro > span:last-child {
+  color: #73816b;
+  font-size: 12px;
+}
+.completion-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.completion-fields > .field:first-child {
+  margin-top: 0;
+}
+.role-completion textarea.completion-source {
+  min-height: 172px;
+}
+.completion-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.completion-mode > label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  border: 1px solid #dce3d0;
+  border-radius: 10px;
+  cursor: pointer;
+  background: #fffdf6;
+}
+.completion-mode > label.selected {
+  border-color: #83a180;
+  background: #edf3e5;
+}
+.completion-mode small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+}
+.completion-mode input {
+  flex: 0 0 auto;
+}
+.completion-input-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.completion-input-grid textarea {
+  min-height: 87px;
+}
+.completion-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+.completion-section-heading {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+.completion-section-heading h3 {
+  margin-top: 3px;
+  font-size: 21px;
+}
+.completion-section-heading .eyebrow,
+.completion-intro .eyebrow {
+  font-size: 10px;
+  letter-spacing: 1.6px;
+}
+.completion-candidates {
+  border-top: 1px solid #dce5d5;
+  padding-top: 21px;
+}
+.completion-candidate {
+  display: grid;
+  grid-template-columns: 19px minmax(0, 1fr) 32px;
+  gap: 10px;
+  align-items: start;
+  margin-top: 13px;
+}
+.completion-candidate > input {
+  margin-top: 13px;
+}
+.completion-candidate > button {
+  margin-top: 5px;
+  padding: 8px;
+}
+.completion-candidate textarea {
+  min-height: 63px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.completion-warning {
+  color: #86632d;
+  background: #faf2d9;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 12px;
+  font-size: 12px;
+}
+.completion-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  padding: 14px 16px;
+  border: 1px solid #ccdcc4;
+  background: #ecf3e5;
+  border-radius: 11px;
+}
+.completion-progress > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.completion-progress > small {
+  flex: 1 0 100%;
+}
+.completion-error {
+  padding: 13px 15px;
+  border: 1px solid #ebd9c7;
+  border-radius: 9px;
+  background: #fff4e9;
+}
+.completion-error > button {
+  margin-top: 8px;
+}
+.completion-results {
+  display: grid;
+  gap: 16px;
+}
+.completion-results > .completion-section-heading {
+  margin-bottom: -7px;
+}
+.completion-card {
+  padding: 19px;
+  border: 1px solid #dce4d2;
+  border-radius: 13px 5px 15px 7px;
+  background: #fffef7;
+  box-shadow: 0 4px 14px #455b3310;
+}
+.completion-card.is-saved {
+  background: #f3f7eb;
+}
+.completion-card-heading,
+.completion-card-heading > div {
+  display: flex;
+  gap: 11px;
+  align-items: center;
+}
+.completion-card-heading {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  padding-bottom: 13px;
+  margin-bottom: 16px;
+  border-bottom: 1px dashed #d8e1cb;
+}
+.completion-card-heading > div {
+  min-width: 0;
+}
+.completion-card-heading h3 {
+  overflow-wrap: anywhere;
+}
+.completion-avatar {
+  flex: 0 0 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  font:
+    20px "Songti SC",
+    "SimSun",
+    serif;
+  background: #e8efd9;
+  border-radius: 50% 42% 47% 44%;
+  color: #557b50;
+}
+.completion-select,
+.completion-saved {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: #5c7d59;
+}
+.completion-dimensions details {
+  padding: 0;
+  overflow: hidden;
+  background: #ffffff8f;
+}
+.completion-dimensions summary {
+  padding: 12px;
+  font-size: 13px;
+}
+.completion-dimensions summary > span:first-child {
+  margin-left: 3px;
+}
+.completion-basis {
+  display: inline-block;
+  margin-left: 9px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 10px;
+  background: #eef2e9;
+  color: #6b8064;
+  vertical-align: middle;
+}
+.completion-basis.basis-created {
+  color: #846454;
+  background: #f6eae0;
+}
+.completion-basis.basis-inferred,
+.completion-basis.basis-mixed {
+  color: #827132;
+  background: #f5efd8;
+}
+.completion-basis.basis-unknown {
+  color: #7a7d76;
+  background: #eceee8;
+}
+.completion-dimensions textarea {
+  display: block;
+  width: calc(100% - 24px);
+  min-height: 145px;
+  margin: 0 12px 12px;
+  font-size: 13px;
+}
+.completion-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  background: #f1f4eace;
+  color: #7a856f;
+  font-size: 11px;
+}
+.completion-evidence strong {
+  font-weight: 500;
+  color: #63755c;
+}
+.completion-save-bar {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  background: #eaf0df;
+  border-radius: 10px;
+  font-size: 12px;
+}
+.completion-save-bar > div {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.completion-raw {
+  margin: 0;
+}
+.completion-raw pre {
+  overflow: auto;
+  max-height: 250px;
+}
+.completion-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid #dce5d5;
+}
+.completion-footer button {
+  font-size: 12px;
+}
+.role-completion-entry {
+  margin: 15px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.roles-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+@media (max-width: 540px) {
+  .role-completion {
+    gap: 17px;
+  }
+  .completion-intro {
+    padding: 14px;
+  }
+  .completion-intro > p {
+    font-size: 19px;
+    letter-spacing: 0;
+  }
+  .completion-input-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .completion-input-grid .field + .field {
+    margin-top: 0;
+  }
+  .completion-mode > label {
+    padding: 10px 7px;
+    gap: 5px;
+    font-size: 12px;
+  }
+  .completion-mode small {
+    font-size: 10px;
+  }
+  .completion-card {
+    padding: 13px;
+  }
+  .completion-save-bar > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .completion-actions > button {
+    flex: 1 1 auto;
+  }
+  .completion-section-heading h3 {
+    font-size: 19px;
+  }
+  .completion-basis {
+    margin-left: 6px;
+    padding: 2px 5px;
+  }
+  .roles-heading-actions {
+    width: 100%;
+  }
+  .roles-heading-actions > button {
+    flex: 1 1 auto;
+  }
+}

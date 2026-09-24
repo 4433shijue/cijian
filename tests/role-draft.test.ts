@@ -9,6 +9,8 @@ import {
   saveRoleDraft,
 } from "../src/role-draft";
 import { uid, type Role } from "../src/types";
+import { emptyCompletionDraft } from "../src/role-completion-types";
+import { commitStaged, exportBackupBlob, stageBackup } from "../src/backup-transfer";
 
 const role = (): Role => ({
   id: uid(),
@@ -74,8 +76,24 @@ it("leaves an unfinished draft intact when importing a replacement backup", asyn
   const backup = await exportBackup();
   const draft = role();
   await saveRoleDraft(draft);
+  const completion = emptyCompletionDraft();
+  completion.input.source = "还没生成完的故事素材";
+  await db.roleCompletionDrafts.put(completion);
   await importBackup(backup, true);
   expect(await loadRoleDraft()).toEqual(draft);
+  expect(await db.roleCompletionDrafts.get(completion.id)).toEqual(completion);
+  expect(await db.roles.count()).toBe(1);
+});
+
+it("preserves local completion material during a streamed replacement import", async () => {
+  await db.roles.put(role());
+  const output = await exportBackupBlob("completion-backup");
+  const completion = emptyCompletionDraft();
+  completion.input.source = "替换资料时保留的补全素材";
+  await db.roleCompletionDrafts.put(completion);
+  await stageBackup(output.blob, "completion-import");
+  await commitStaged("completion-import", { replace: true, applySettings: false });
+  expect(await db.roleCompletionDrafts.get(completion.id)).toEqual(completion);
   expect(await db.roles.count()).toBe(1);
 });
 
@@ -108,6 +126,7 @@ it("upgrades existing browser data without losing saved roles or settings", asyn
     expect(await upgraded.roles.get(saved.id)).toEqual(saved);
     expect(await upgraded.preferences.get("preferences")).toEqual(preferences);
     expect(await upgraded.roleDrafts.count()).toBe(0);
+    expect(await upgraded.roleCompletionDrafts.count()).toBe(0);
   } finally {
     await upgraded.delete();
   }

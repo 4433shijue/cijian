@@ -6,6 +6,8 @@ export interface GenerationOptions {
   theater?: boolean;
   stablePrefix?: string;
   messages?: PromptMessage[];
+  schema?: Record<string, unknown>;
+  schemaName?: string;
 }
 function nativeSchema(p: Profile) {
   const host = new URL(p.url).hostname;
@@ -125,14 +127,14 @@ export function requestSpec(
           };
   }
   const mode = p.outputMode || "auto";
-  if (options.kind && mode !== "compatible") {
+  if ((options.kind || options.schema) && mode !== "compatible") {
     const schemaMode =
       mode === "schema" || (mode === "auto" && nativeSchema(p));
-    const schema = options.kind === "novel" && options.theater ? novelTheaterSchema : outputSchemas[options.kind];
+    const schema = options.schema || (options.kind === "novel" && options.theater ? novelTheaterSchema : outputSchemas[options.kind!]);
     const format = schemaMode
       ? {
           type: "json_schema",
-          name: "cijian_" + options.kind,
+          name: options.schemaName || "cijian_" + (options.kind || "custom"),
           strict: true,
           schema,
         }

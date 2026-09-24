@@ -61,9 +61,10 @@ it("upgrades an existing version 5 database without altering saved prose", async
   const upgraded = new SceneDB(name);
   try {
     await upgraded.open();
-    expect(upgraded.verno).toBe(6);
+    expect(upgraded.verno).toBe(7);
     expect((await upgraded.events.get("old-prose"))?.text).toBe("旧正文不会变化");
     expect(await upgraded.theaters.count()).toBe(0);
+    expect(await upgraded.roleCompletionDrafts.count()).toBe(0);
   } finally { await upgraded.delete(); }
 });
 

@@ -31,6 +31,7 @@ import { db, makeStory, deleteStory, reviseEvent, setTimelineMode, ensureStoryRo
 import { sharedTimeline, visibleText } from "./timeline";
 import { loadRoleDraft, saveRoleDraft, saveCreatedRole } from "./role-draft";
 import { InspirationAssistant } from "./InspirationAssistant";
+import { RoleCompletionAssistant } from "./RoleCompletionAssistant";
 import { TheaterPanel, EventRawOutput } from "./TheaterPanel";
 import { StoryTheaterSettings, TheaterPresetSettings } from "./TheaterSettings";
 import { inspirationCount, chooseInspiration } from "./inspiration";
@@ -445,11 +446,13 @@ function RoleEditor({
   onSave,
   onClose,
   onDraftChange,
+  onComplete,
 }: {
   value: Role;
   onSave: (r: Role) => Promise<void>;
   onClose: () => void;
   onDraftChange?: (r: Role) => Promise<unknown>;
+  onComplete?: (r: Role) => void;
 }) {
   const [r, setR] = useState(() => structuredClone(value));
   const current = useRef(r);
@@ -555,6 +558,7 @@ function RoleEditor({
           </p>
         )}
         <fieldset className="role-editor-fields" disabled={busy}>
+          {onComplete && <div className="role-completion-entry"><button type="button" disabled={busy || reading} onClick={() => onComplete(current.current)}><Feather size={16} />用这些设定帮我补全</button><span className="hint">写下人物或故事，AI 帮你整理成详细角色卡。</span></div>}
           <div className="role-top">
             <Avatar role={r} size={68} />
             <Field label="头像">
@@ -659,6 +663,7 @@ function RolesPage({ notify }: { notify: Notice }) {
   const roles = useLiveQuery(() => db.roles.toArray(), []) || [];
   const [editing, setEditing] = useState<{ role: Role; creating: boolean }>();
   const [opening, setOpening] = useState(false);
+  const [completion, setCompletion] = useState<{ source?: string }>();
   return (
     <div className="page">
       <header className="page-heading">
@@ -667,6 +672,8 @@ function RolesPage({ notify }: { notify: Notice }) {
           <h1>与你相遇的人</h1>
           <p>名字之外，他们还有许多没说出口的事情。</p>
         </div>
+        <div className="roles-heading-actions">
+        <button onClick={() => setCompletion({})}><Feather size={17} />帮我补全</button>
         <button
           className="primary"
           disabled={opening}
@@ -696,6 +703,7 @@ function RolesPage({ notify }: { notify: Notice }) {
           <Plus size={18} />
           添加角色
         </button>
+        </div>
       </header>
       <div className="role-grid">
         {roles.map((r) => (
@@ -727,10 +735,18 @@ function RolesPage({ notify }: { notify: Notice }) {
           </article>
         ))}
       </div>
-      {editing && (
+      {editing && !completion && (
         <RoleEditor
           value={editing.role}
           onDraftChange={editing.creating ? saveRoleDraft : undefined}
+          onComplete={editing.creating ? (role) => {
+            setEditing({ ...editing, role });
+            setCompletion({ source: [
+              role.name ? `人物名字：${role.name}` : "",
+              role.bio ? `公开简介：\n${role.bio}` : "",
+              role.persona ? `完整人设：\n${role.persona}` : "",
+            ].filter(Boolean).join("\n\n") });
+          } : undefined}
           onClose={() => setEditing(undefined)}
           onSave={async (r) => {
             if (editing.creating) await saveCreatedRole(r);
@@ -739,6 +755,7 @@ function RolesPage({ notify }: { notify: Notice }) {
           }}
         />
       )}
+      {completion && <RoleCompletionAssistant initialSource={completion.source} notify={notify} onClose={() => setCompletion(undefined)} />}
     </div>
   );
 }

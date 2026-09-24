@@ -2,6 +2,7 @@ import Dexie, { type Table } from "dexie";
 import { sharedTimeline } from "./timeline";
 import { withStoryLock } from "./locks";
 import { isBusy } from "./generation-state";
+import type { CompletionDraft } from "./role-completion-types";
 import { numberedRounds, roundWindow } from "./rounds";
 import type {
   TransferRecord,
@@ -26,6 +27,7 @@ import {
 export class SceneDB extends Dexie {
   roles!: Table<Role, string>;
   roleDrafts!: Table<{ id: string; role: Role }, string>;
+  roleCompletionDrafts!: Table<CompletionDraft, string>;
   stories!: Table<Story, string>;
   world!: Table<WorldEntry, string>;
   events!: Table<SceneEvent, string>;
@@ -63,6 +65,7 @@ export class SceneDB extends Dexie {
     this.version(6).stores({
       theaters: "id,storyId,eventId,[eventId+sourceVersionId],status",
     });
+    this.version(7).stores({ roleCompletionDrafts: "id" });
   }
 }
 export const db = new SceneDB();
