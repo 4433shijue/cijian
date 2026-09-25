@@ -1,10 +1,21 @@
 export type Protocol = "chat" | "responses" | "claude" | "gemini";
 export type PromptKind =
   "novel" | "chat" | "facts" | "memory" | "inspiration" | "theater";
+export type TheaterPresentation =
+  | "dialogue"
+  | "detail-list"
+  | "subtext-card"
+  | "forum"
+  | "body-status"
+  | "evidence-board"
+  | "relationship-card"
+  | "scene-board"
+  | "custom";
 export interface TheaterPreset {
   id: string;
   name: string;
   prompt: string;
+  presentation?: TheaterPresentation;
 }
 export type TheaterDensity = "light" | "standard" | "rich";
 export type TheaterStatus = "running" | "complete" | "failed" | "interrupted";

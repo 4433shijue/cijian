@@ -94,6 +94,9 @@ async function seed(page: Page) {
 }
 
 async function openAssistant(page: Page) {
+  // A previous close persists the draft asynchronously; wait for the modal
+  // to leave the DOM before targeting the page-level entry button.
+  await expect(assistant(page)).toHaveCount(0);
   await page.getByRole("button", { name: "帮我补全", exact: true }).click();
   await expect(assistant(page)).toBeVisible();
   await expect(

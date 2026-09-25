@@ -20,6 +20,8 @@ import {
   allTheaterPresets,
   builtInTheaterPresets,
   normalizeTheaterDensity,
+  presentationInstruction,
+  presetPresentationLabel,
   selectedTheaterPresets,
   theaterDensityInstruction,
   theaterInstruction,
@@ -188,6 +190,29 @@ it("uses standard density by default and keeps density guidance separate from HT
   );
   expect(instruction).toContain("本节写法要求");
   expect(instruction).toContain("不使用 Markdown 围栏");
+});
+
+it("assigns presentation structures to built-in theater presets", () => {
+  expect(builtInTheaterPresets.map((preset) => preset.presentation)).toEqual([
+    "dialogue",
+    "detail-list",
+    "subtext-card",
+    "forum",
+    "body-status",
+  ]);
+  expect(presetPresentationLabel("forum")).toBe("论坛楼层");
+  expect(presetPresentationLabel("body-status")).toBe("身体状态卡");
+  expect(presetPresentationLabel(undefined)).toBe("自定义展示");
+
+  const forum = presentationInstruction("forum");
+  expect(forum).toContain("楼主首楼");
+  expect(forum).toContain("楼中楼");
+  expect(forum).toContain("当前回合已公开内容");
+  expect(forum).toContain("猜测不得写成结论");
+
+  const body = presentationInstruction("body-status");
+  expect(body).toContain("身体部位分项");
+  expect(body).toContain("本回合未提及");
 });
 
 it("extracts readable HTML text without code, resource URLs, hidden metadata, or entity artifacts", () => {

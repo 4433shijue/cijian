@@ -135,6 +135,24 @@ it.each(["legacy", "stream"])("exports density snapshots and defaults missing le
   expect(copiedTheater.density).toBe("standard");
 });
 
+it.each(["legacy", "stream"])("defaults missing theater presentation to custom through %s", async (method) => {
+  const { theater } = await fixture();
+  const value: any = structuredClone(await exportBackup());
+  delete value.preferences[0].theaterPresets[0].presentation;
+  delete value.theaters[0].presets[0].presentation;
+  expect(validateBackup(value).preferences[0].theaterPresets[0].presentation).toBe("custom");
+  expect(validateBackup(value).theaters[0].presets[0].presentation).toBe("custom");
+  if (method === "legacy") await importBackup(value);
+  else {
+    const summary = await stageBackup(blob(value), uid());
+    await commitStaged(summary.session, { replace: false, applySettings: false });
+  }
+  const copied = (await db.stories.toArray()).find((story) => story.id !== theater.storyId)!;
+  const saved = (await db.preferences.get("preferences"))!.theaterPresets!;
+  expect(saved.find((preset) => preset.id === "my-theater")?.presentation).toBe("custom");
+  expect((await db.theaters.where("storyId").equals(copied.id).first())?.presets[0].presentation).toBe("custom");
+});
+
 it("uses the story density snapshot when starting a new theater attempt and defaults old stories to standard", async () => {
   const { story, event } = await fixture();
   await db.stories.update(story.id, { theaterDensity: "rich" });
@@ -299,7 +317,7 @@ it("rejects broken source versions and fallback links before import and rolls ca
 
 it.each(["legacy", "stream"])("preserves an old story's implicit default preset override through single-story export and %s import", async (method) => {
   const { story } = await fixture();
-  const override = { id: "theater-roast", name: "茶馆吐槽", prompt: "沿用这部作品的茶馆口气。" };
+  const override = { id: "theater-roast", name: "茶馆吐槽", prompt: "沿用这部作品的茶馆口气。", presentation: "custom" as const };
   await db.stories.update(story.id, { theaterPresetIds: undefined });
   await db.preferences.update("preferences", { theaterPresets: [override] });
   const output = await exportBackupBlob(uid(), story.id);

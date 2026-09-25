@@ -1,6 +1,6 @@
 import Dexie, { type Table } from "dexie";
 import { db } from "./db";
-import { recordSchemas, mergeTheaterPresets } from "./backup";
+import { recordSchemas, mergeTheaterPresets, normalizeTheaterPreset } from "./backup";
 import { samplingParameters } from "./sampling";
 import { uid, type Preferences, type Role, type Story } from "./types";
 import { BackupParser, READ_CHUNK_BYTES } from "./backup-parser";
@@ -369,7 +369,10 @@ export function backupRemapper() {
             sourceVersionId: id(x.sourceVersionId),
             previousId: x.previousId ? id(x.previousId) : undefined,
             density: x.density ?? "standard",
-            presets: x.presets.map((preset: any) => ({ ...preset, id: theaterPresetIds.get(preset.id) || preset.id })),
+            presets: x.presets.map((preset: any) => ({
+              ...normalizeTheaterPreset(preset),
+              id: theaterPresetIds.get(preset.id) || preset.id,
+            })),
             status: x.status === "running" ? "interrupted" : x.status,
             error: x.status === "running" ? "导入的小剧场尚未完成，可以重新生成。" : x.error,
           };

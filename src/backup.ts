@@ -32,10 +32,27 @@ const version = z.object({
   visibility: z.enum(["inherit", "author", "facts"]).optional(),
 });
 const theaterStatus = z.enum(["running", "complete", "failed", "interrupted"]);
+const theaterPresentation = z.enum([
+  "dialogue",
+  "detail-list",
+  "subtext-card",
+  "forum",
+  "body-status",
+  "evidence-board",
+  "relationship-card",
+  "scene-board",
+  "custom",
+  "freeform", // Legacy value written by an intermediate 2.2.0 build.
+  "body-card", // Legacy alias accepted during the unpublished transition.
+  "evidence",
+  "relationship",
+]);
+type TheaterPresentation = z.infer<typeof theaterPresentation>;
 const theaterPreset = z.object({
   id: str.min(1),
   name: str.min(1),
   prompt: str,
+  presentation: theaterPresentation.default("custom"),
 });
 const theater = z.object({
   id: str,
@@ -244,6 +261,22 @@ const schema = z.object({
   title: str.optional(),
 });
 export type Backup = z.infer<typeof schema>;
+
+export function normalizeTheaterPreset(preset: TheaterPreset) {
+  const value = (preset as TheaterPreset & { presentation?: unknown }).presentation;
+  const parsed = theaterPresentation.safeParse(value);
+  return {
+    ...preset,
+    presentation: (parsed.success
+      ? parsed.data === "freeform" ? "custom"
+        : parsed.data === "body-card" ? "body-status"
+          : parsed.data === "evidence" ? "evidence-board"
+            : parsed.data === "relationship" ? "relationship-card"
+              : parsed.data
+      : "custom") as TheaterPresentation,
+  } as unknown as TheaterPreset;
+}
+
 export function validateBackup(raw: unknown) {
   const b = schema.parse(raw);
   if (
@@ -393,7 +426,7 @@ export function mergeTheaterPresets(
   existing: TheaterPreset[],
   imported: TheaterPreset[],
 ) {
-  const presets = [...existing];
+  const presets = existing.map(normalizeTheaterPreset);
   const ids = new Map<string, string>();
   const builtIns = new Set([
     "theater-roast",
@@ -402,12 +435,14 @@ export function mergeTheaterPresets(
     "theater-audience",
     "theater-body",
   ]);
-  for (const preset of imported) {
+  for (const source of imported) {
+    const preset = normalizeTheaterPreset(source);
     const current = presets.find((p) => p.id === preset.id);
     if (
       current &&
       current.name === preset.name &&
-      current.prompt === preset.prompt
+      current.prompt === preset.prompt &&
+      (current as TheaterPreset & { presentation?: unknown }).presentation === preset.presentation
     )
       continue;
     const id = current || builtIns.has(preset.id) ? uid() : preset.id;
@@ -454,12 +489,16 @@ export async function exportBackup() {
         ...p,
         remember: false,
       })),
-      preferences: await db.preferences.toArray(),
+      preferences: (await db.preferences.toArray()).map((preferences) => ({
+        ...preferences,
+        theaterPresets: preferences.theaterPresets?.map(normalizeTheaterPreset),
+      })),
       chatBatches: (await db.chatBatches.toArray()).map(
         ({ request, ...batch }) => batch,
       ),
       theaters: (await db.theaters.toArray()).map((theater) => ({
         ...theater,
+        presets: theater.presets.map(normalizeTheaterPreset),
         density: theater.density ?? "standard",
       })),
     }),
@@ -497,7 +536,7 @@ export async function importBackup(value: unknown, replace = false) {
       replace
         ? []
         : (await db.preferences.get("preferences"))?.theaterPresets || [],
-      b.preferences[0]?.theaterPresets || [],
+      (b.preferences[0]?.theaterPresets || []) as unknown as TheaterPreset[],
     );
     if (replace)
       for (const table of db.tables)
@@ -594,7 +633,7 @@ export async function importBackup(value: unknown, replace = false) {
         presets: x.presets.map((p) => ({
           ...p,
           id: theaterPresets.ids.get(p.id) || p.id,
-        })),
+        })) as unknown as TheaterPreset[],
         status: x.status === "running" ? ("interrupted" as const) : x.status,
         error:
           x.status === "running"

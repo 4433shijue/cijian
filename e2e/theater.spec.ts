@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { readStore, seedJourney } from "./fixtures";
 
-const mockHtml = `<style>.stage{padding:23px;border:1px solid #c8d7bf;border-radius:16px;background:linear-gradient(135deg,#fffdf0,#edf4e6)}.eyebrow{font-size:11px;letter-spacing:.18em;color:#8c9279}.stage h2{font-family:serif;font-size:24px;color:#435d45;margin:5px 0 18px}.line{display:grid;grid-template-columns:44px 1fr;gap:12px;margin:12px 0}.name{padding-top:8px;font-size:12px;color:#6d7d61}.bubble{padding:10px 15px;background:#ffffffb5;border-radius:3px 15px 15px;font-size:15px}.note{border-top:1px dashed #bdcbae;margin-top:18px;padding-top:14px;font-size:13px;color:#7d886d}@media(max-width:420px){.stage{padding:15px}.line{grid-template-columns:34px 1fr;gap:8px}}</style><section class="stage"><div class="eyebrow">MOCK · 仅用于界面验证</div><h2>伞柄上的那点心思</h2><div class="line"><span class="name">周屿</span><div class="bubble">我只是顺手递把伞。为什么你们都看着我？</div></div><div class="line"><span class="name">许知</span><div class="bubble">那你倒是先松手呀。</div></div><div class="note">观众席 · 一把伞，已经忙不过来了。</div></section>`;
+const mockHtml = `<style>.stage{padding:23px;border:1px solid #c8d7bf;border-radius:16px;background:linear-gradient(135deg,#fffdf0,#edf4e6)}.eyebrow{font-size:11px;letter-spacing:.18em;color:#8c9279}.stage h2{font-family:serif;font-size:24px;color:#435d45;margin:5px 0 18px}.line{display:grid;grid-template-columns:44px 1fr;gap:12px;margin:12px 0}.name{padding-top:8px;font-size:12px;color:#6d7d61}.bubble{padding:10px 15px;background:#ffffffb5;border-radius:3px 15px 15px;font-size:15px}.note{border-top:1px dashed #bdcbae;margin-top:18px;padding-top:14px;font-size:13px;color:#7d886d}@media(max-width:420px){.stage{padding:15px}.line{grid-template-columns:34px 1fr;gap:8px}}</style><section class="stage" data-theater-template="forum"><div class="eyebrow" data-forum-board>MOCK · 仅用于界面验证</div><h2 data-forum-title>伞柄上的那点心思</h2><article class="line" data-floor="1" data-certainty="visible"><div data-forum-meta><span class="name" data-forum-author>周屿</span><span data-forum-badge>楼主 · 细节党</span></div><p class="bubble" data-floor-body>我只是顺手递把伞。为什么你们都看着我？</p></article><article class="line" data-floor="2" data-reply-to="1" data-certainty="inference"><div data-forum-meta><span class="name" data-forum-author>许知</span><span data-forum-badge>角色厨</span></div><p class="bubble" data-floor-body>那你倒是先松手呀。</p></article><div class="note" data-forum-rule>观众席 · 仅讨论当前回合已公开内容。</div></section>`;
 
 async function seed(page: Page, options: { saved?: boolean; automatic?: boolean; html?: string; developer?: boolean } = {}) {
   await seedJourney(page);
@@ -19,7 +19,7 @@ async function seed(page: Page, options: { saved?: boolean; automatic?: boolean;
       facts: [], versions: [{ id: "theater-source", text, input: "周屿递伞。", facts: [], created: 1 }], versionId: "theater-source", status: "complete", raw: "", error: "", review: false, deleted: false, created: 1,
       ...(saved ? { theater: { id: "theater-saved", sourceVersionId: "theater-source", status: "complete" } } : {}),
     });
-    if (saved) tx.objectStore("theaters").put({ id: "theater-saved", storyId: "fixture-story", eventId: "theater-event", sourceVersionId: "theater-source", presets: [{ id: "theater-roast", name: "主角们的吐槽", prompt: "mock" }, { id: "theater-audience", name: "来自第四面墙的观众", prompt: "mock" }], html, text: "MOCK 界面验证", raw: JSON.stringify({ html }), status: "complete", error: "", created: 1, updated: 1 });
+    if (saved) tx.objectStore("theaters").put({ id: "theater-saved", storyId: "fixture-story", eventId: "theater-event", sourceVersionId: "theater-source", presets: [{ id: "theater-roast", name: "主角们的吐槽", prompt: "mock", presentation: "dialogue" }, { id: "theater-audience", name: "来自第四面墙的观众", prompt: "mock", presentation: "forum" }], html, text: "MOCK 界面验证", raw: JSON.stringify({ html }), status: "complete", error: "", created: 1, updated: 1 });
     tx.objectStore("profiles").put({ id: "theater-profile", name: "小剧场 mock 接口", protocol: "chat", url: "https://theater.fixture.test/v1", model: "fixture-model", stream: true, context: 20000, maxOutput: 4096, timeout: 15, remember: true, key: "fixture-key", prefixReuse: "off" });
     tx.objectStore("preferences").put({ id: "preferences", activeProfile: "theater-profile", developer: !!developer, prompts: {} });
     await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); });
@@ -250,7 +250,9 @@ test("developer presets support create, edit, restore, selection and order; auto
   await settings.getByRole("button", { name: "新建小剧场预设" }).click();
   await settings.getByLabel("小剧场预设名称").fill("伞的独白");
   await settings.getByLabel("小剧场内容要求").fill("以这把伞的口吻，说两句旁白。");
+  await settings.getByLabel("小剧场专属展示样式").selectOption("forum");
   await settings.getByRole("button", { name: "保存小剧场预设" }).click();
+  await expect(settings.locator("article").filter({ has: page.getByText("伞的独白", { exact: true }) })).toContainText("论坛");
   await settings.locator("article").filter({ has: page.getByText("伞的独白", { exact: true }) }).getByRole("button", { name: "复制", exact: true }).click();
   await expect(settings.getByLabel("小剧场预设名称")).toHaveValue("伞的独白（副本）");
   await expect(settings.getByLabel("小剧场内容要求")).toHaveValue("以这把伞的口吻，说两句旁白。");

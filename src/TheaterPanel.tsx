@@ -2,16 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { ChevronDown, ChevronUp, Drama, RefreshCw, Square } from "lucide-react";
 import { db } from "./db";
-import type { SceneEvent } from "./types";
+import type { SceneEvent, TheaterPresentation } from "./types";
 import { generateTheater, pendingTheater, stopTheater } from "./theater";
 import { stop } from "./generation-state";
 import { theaterDocument } from "./theater-render";
+import { presetPresentationLabel } from "./theater-presets";
 
-function TheaterFrame({ html }: { html: string }) {
+function TheaterFrame({ html, presentations = [] }: { html: string; presentations?: TheaterPresentation[] }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const observer = useRef<ResizeObserver | undefined>(undefined);
   const [height, setHeight] = useState(120);
-  const document = useMemo(() => theaterDocument(html), [html]);
+  const document = useMemo(() => theaterDocument(html, presentations), [html, presentations.join("|")]);
   useEffect(() => () => observer.current?.disconnect(), []);
   function loaded() {
     observer.current?.disconnect();
@@ -45,18 +46,18 @@ function TheaterContent({ event }: { event: SceneEvent }) {
   const failed = current.status === "failed" || current.status === "interrupted";
   const shown = current.status !== "complete" && previous ? previous : current;
   return <>
-    <p className="theater-presets-label">{shown.presets.map((preset) => preset.name).join(" · ")}</p>
+    <p className="theater-presets-label">{shown.presets.map((preset) => `${preset.name} · ${presetPresentationLabel(preset.presentation)}`).join(" · ")}</p>
     {shown.sourceVersionId !== event.versionId && current.sourceVersionId === event.versionId &&
       <p className="review">上一次的小剧场对应修改前的正文，暂时保留供参考。</p>}
     {current.error && <p className="error" role="alert">{current.error}</p>}
     {failed && previous && <p className="hint">这次没能完成，先保留上一次的小剧场。</p>}
     {failed && !previous && shown.html && <p className="hint">这是已经收到的部分内容。</p>}
-    {shown.html ? <TheaterFrame html={shown.html} /> : <p className="hint" role="status">
+    {shown.html ? <TheaterFrame html={shown.html} presentations={shown.presets.map((preset) => preset.presentation).filter(Boolean) as TheaterPresentation[]} /> : <p className="hint" role="status">
       {current.status === "running" ? "小剧场正在布置，收到内容就会在这里显示。" : "还没有可显示的小剧场，可以重新生成。"}
     </p>}
     {current.status === "running" && previous && current.html && <>
       <p className="hint">这次的小剧场正在生成，完成后会替换上面的内容。</p>
-      <TheaterFrame html={current.html} />
+      <TheaterFrame html={current.html} presentations={current.presets.map((preset) => preset.presentation).filter(Boolean) as TheaterPresentation[]} />
     </>}
   </>;
 }
