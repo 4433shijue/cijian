@@ -12,6 +12,7 @@ import {
   theaterInstruction,
 } from "./theater-presets";
 import { theaterText } from "./theater-text";
+import { normalizeTheaterData, parseStreamingTheater, structuredTheaterHtml, structuredTheaterText } from "./theater-data";
 import {
   uid,
   type ContextReport,
@@ -45,6 +46,7 @@ export function buildTheaterContext(
   prefs: Preferences,
   profile: Profile,
   presets = selectedTheaterPresets(story, prefs),
+  interaction?: { instruction: string; material: string },
 ): ContextReport {
   if (
     event.storyId !== story.id ||
@@ -114,12 +116,13 @@ export function buildTheaterContext(
     priority: 100,
     sources: [{ id: event.id, versionId: event.versionId }],
   });
+  if (interaction) add("theater-interaction", "当前栏目的番外讨论 · 不属于正式经历", interaction.material);
   return assemble(
     prompt("theater", prefs),
     "只为给出的目标正文生成小剧场。当前没有提供其他回合，不补全前后剧情，也不把番外当作正式经历。\n\n" +
       theaterDensityInstruction(story.theaterDensity) +
       "\n\n" +
-      theaterInstruction(presets),
+      theaterInstruction(presets) + (interaction ? "\n\n" + interaction.instruction : ""),
     materials,
     profile.context,
     profile.maxOutput,
@@ -212,10 +215,12 @@ export async function updateTheaterAttempt(
   await db.transaction("rw", tables, async () => {
     const record = await db.theaters.get(recordId);
     if (!record || record.status !== "running") return;
+    const data = parseStreamingTheater(raw, record.presets);
     await db.theaters.update(recordId, {
       raw,
       html,
-      text: theaterText(html),
+      ...(data ? { data } : {}),
+      text: data ? structuredTheaterText(data) : theaterText(html),
       updated: Date.now(),
     });
   });
@@ -232,12 +237,21 @@ export async function finishTheaterAttempt(
     if (!record || record.status !== "running") return false;
     const current = await db.events.get(event.id);
     let validationError = "";
+    let data = record.data;
     try {
-      html = validateTheaterHtml(html);
+      let parsed;
+      try { parsed = parseJSON(raw); } catch { /* Legacy callers may retain plain raw text. */ }
+      if (parsed?.theater !== undefined) {
+        data = normalizeTheaterData(parsed.theater, record.presets);
+        html = structuredTheaterHtml(data);
+      } else {
+        data = undefined;
+        html = validateTheaterHtml(html);
+      }
     } catch (error) {
       validationError = String(error);
     }
-    const text = theaterText(html);
+    const text = data ? structuredTheaterText(data) : theaterText(html);
     const valid =
       !!current &&
       !current.deleted &&
@@ -252,6 +266,7 @@ export async function finishTheaterAttempt(
       !!(await db.stories.get(record.storyId));
     const next: TheaterRecord = {
       ...record,
+      data,
       html,
       text,
       raw,
@@ -436,7 +451,8 @@ export function generateTheater(eventId: string): Promise<Outcome> {
         if (!result.complete)
           throw Error("小剧场未完整结束 · " + result.reason);
         const parsed = parseJSON(raw);
-        html = validateTheaterHtml(parsed?.theaterHtml);
+        if (parsed?.theater !== undefined) normalizeTheaterData(parsed.theater, presets);
+        else html = validateTheaterHtml(parsed?.theaterHtml);
         return await db.transaction(
           "rw",
           [...tables, db.world],
@@ -474,9 +490,9 @@ export function generateTheater(eventId: string): Promise<Outcome> {
               );
               return "interrupted";
             }
-            return (await finishTheaterAttempt(attempt!.id, event, html, raw))
-              ? "saved"
-              : "stale";
+            const saved = await finishTheaterAttempt(attempt!.id, event, html, raw);
+            if (control.signal.aborted) throw Error("已停止小剧场生成，收到的内容已保留。");
+            return saved ? "saved" : "stale";
           },
         );
       } catch (error) {

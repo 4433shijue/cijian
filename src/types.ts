@@ -19,6 +19,45 @@ export interface TheaterPreset {
 }
 export type TheaterDensity = "light" | "standard" | "rich";
 export type TheaterStatus = "running" | "complete" | "failed" | "interrupted";
+export interface TheaterItem {
+  id: string;
+  author: string;
+  badge: string;
+  title: string;
+  text: string;
+  quote: string;
+  certainty: "observed" | "inferred" | "unknown" | "fiction";
+  replyTo: string;
+  group: string;
+  status: "unmentioned" | "stable" | "subtle" | "clear" | "impact" | "";
+  fields: { label: string; value: string }[];
+  origin?: "user" | "ai";
+}
+export interface TheaterSection {
+  id: string;
+  title: string;
+  presentation: TheaterPresentation;
+  theme: "paper" | "forest" | "night";
+  items: TheaterItem[];
+  html?: string;
+}
+export interface TheaterData {
+  version: 1;
+  sections: TheaterSection[];
+}
+export interface TheaterInteraction {
+  id: string;
+  sectionId: string;
+  itemId?: string;
+  userItemId?: string;
+  kind: "reply" | "expand";
+  input: string;
+  status: TheaterStatus;
+  raw: string;
+  error: string;
+  created: number;
+  updated: number;
+}
 export interface TheaterRecord {
   id: string;
   storyId: string;
@@ -34,6 +73,13 @@ export interface TheaterRecord {
   created: number;
   updated: number;
   previousId?: string;
+  data?: TheaterData;
+  likes?: string[];
+  bookmarks?: string[];
+  reading?: { clarity: boolean; fontSize: number };
+  replyDrafts?: Record<string, string>;
+  interaction?: TheaterInteraction;
+  revision?: number;
 }
 export interface StylePreset {
   id: string;

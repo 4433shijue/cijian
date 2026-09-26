@@ -66,6 +66,9 @@ export class SceneDB extends Dexie {
       theaters: "id,storyId,eventId,[eventId+sourceVersionId],status",
     });
     this.version(7).stores({ roleCompletionDrafts: "id" });
+    this.version(8).stores({
+      theaters: "id,storyId,eventId,[eventId+sourceVersionId],status,interaction.status",
+    });
   }
 }
 export const db = new SceneDB();
@@ -206,6 +209,23 @@ export async function initialize() {
             await db.events.update(event.id, {
               theater: { ...event.theater, status: "interrupted" },
             });
+        }
+        for (const theater of await db.theaters
+          .where("interaction.status")
+          .equals("running")
+          .filter((record) => record.storyId === id)
+          .toArray()) {
+          if (!theater.interaction) continue;
+          const updated = Date.now();
+          await db.theaters.update(theater.id, {
+            interaction: {
+              ...theater.interaction,
+              status: "interrupted",
+              error: "上次小剧场追加已中断，已有内容保留，可以手动重试。",
+              updated,
+            },
+            updated,
+          });
         }
         for (const batch of await db.chatBatches
           .where("storyId")

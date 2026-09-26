@@ -3,13 +3,13 @@ import Dexie from "dexie";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { strFromU8, unzipSync } from "fflate";
 import { db, SceneDB, initialize, deleteStory, makeStory } from "../src/db";
-import { exportBackup, importBackup, validateBackup } from "../src/backup";
+import { exportBackup, importBackup, mergeTheaterPresets, validateBackup } from "../src/backup";
 import { stageBackup, commitStaged, exportBackupBlob } from "../src/backup-transfer";
 import { TransferControl } from "../src/transfer-store";
 import { exportWork } from "../src/work-export";
 import { createTheaterAttempt } from "../src/theater";
 import type { WorkOptions } from "../src/transfer-types";
-import { uid, type SceneEvent, type TheaterRecord } from "../src/types";
+import { uid, type SceneEvent, type TheaterItem, type TheaterRecord } from "../src/types";
 
 beforeEach(async () => {
   await db.delete();
@@ -43,6 +43,37 @@ async function fixture() {
   await db.theaters.put(theater);
   return { story, event, theater, preset };
 }
+async function interactiveFixture() {
+  const value = await fixture();
+  const item = (id: string, patch: Partial<TheaterItem> = {}): TheaterItem => ({
+    id, author: "窗边读者", badge: "细节党", title: "门口的停顿", text: "她是不是有话没说。",
+    quote: "她停在门口。", certainty: "inferred", replyTo: "", group: "观众讨论", status: "",
+    fields: [], origin: "ai", ...patch,
+  });
+  const theater: TheaterRecord = {
+    ...value.theater,
+    data: {
+      version: 1,
+      sections: [{ id: value.preset.id, title: "门口发生了什么", presentation: "forum", theme: "paper", html: "", items: [
+        item("post"),
+        item("reader-reply", { author: "我", origin: "user", text: "也可能只是收伞吧。", quote: "", replyTo: "post" }),
+        item("reply", { text: "收伞也没写出来，先别急着下判断。", replyTo: "reader-reply" }),
+      ] }],
+    },
+    likes: [value.preset.id + "/post"],
+    bookmarks: [value.preset.id + "/reply"],
+    reading: { clarity: true, fontSize: 19 },
+    replyDrafts: { [value.preset.id]: "我还注意到她没敲门。" },
+    interaction: {
+      id: "reply-attempt", sectionId: value.preset.id, itemId: "post", userItemId: "reader-reply",
+      kind: "reply", input: "也可能只是收伞吧。", status: "running", raw: "未完的追加", error: "", created: 3, updated: 3,
+    },
+    revision: 3,
+  };
+  await db.theaters.put(theater);
+  return { ...value, theater };
+}
+
 const blob = (data: unknown) => new Blob([JSON.stringify(data)]);
 const options = (storyId: string, patch: Partial<WorkOptions> = {}): WorkOptions => ({
   storyId, content: "novel", range: "all", from: 1, to: 1, background: false,
@@ -61,10 +92,27 @@ it("upgrades an existing version 5 database without altering saved prose", async
   const upgraded = new SceneDB(name);
   try {
     await upgraded.open();
-    expect(upgraded.verno).toBe(7);
+    expect(upgraded.verno).toBe(8);
     expect((await upgraded.events.get("old-prose"))?.text).toBe("旧正文不会变化");
     expect(await upgraded.theaters.count()).toBe(0);
     expect(await upgraded.roleCompletionDrafts.count()).toBe(0);
+  } finally { await upgraded.delete(); }
+});
+
+it("adds the interaction status index to a version 7 database without rewriting saved results", async () => {
+  const { theater } = await interactiveFixture();
+  const name = "theater-interaction-upgrade-" + uid();
+  const old = new Dexie(name);
+  old.version(7).stores({ theaters: "id,storyId,eventId,[eventId+sourceVersionId],status", roleCompletionDrafts: "id" });
+  await old.open();
+  await old.table("theaters").put(theater);
+  old.close();
+  const upgraded = new SceneDB(name);
+  try {
+    await upgraded.open();
+    expect(upgraded.verno).toBe(8);
+    expect(await upgraded.theaters.where("interaction.status").equals("running").count()).toBe(1);
+    expect(await upgraded.theaters.get(theater.id)).toEqual(theater);
   } finally { await upgraded.delete(); }
 });
 
@@ -87,6 +135,67 @@ it("recovers interrupted attempts and their summaries while preserving the last 
   expect(await db.theaters.count()).toBe(0);
 });
 
+it("recovers a running follow-up without loading unrelated completed HTML or discarding content and reader state", async () => {
+  const { story, event, theater } = await interactiveFixture();
+  const untouched = { ...theater, id: uid(), interaction: undefined };
+  await db.theaters.add(untouched);
+  await db.jobs.add({ id: "running-theater-job", storyId: story.id, kind: "theater", eventId: event.id,
+    inputVersion: event.versionId, status: "running", created: 3, error: "" });
+  const loadedIds: string[] = [];
+  const observe = (record: TheaterRecord) => { loadedIds.push(record.id); return record; };
+  db.theaters.hook("reading", observe);
+  try { await initialize(); }
+  finally { db.theaters.hook("reading").unsubscribe(observe); }
+  expect(loadedIds).toContain(theater.id);
+  expect(loadedIds).not.toContain(untouched.id);
+  const recovered = (await db.theaters.get(theater.id))!;
+  expect(recovered.status).toBe("complete");
+  expect(recovered.interaction).toMatchObject({ ...theater.interaction, status: "interrupted", error: expect.stringMatching(/已有内容保留/), updated: expect.any(Number) });
+  for (const key of ["html", "text", "raw", "data", "likes", "bookmarks", "reading", "replyDrafts", "revision"] as const)
+    expect(recovered[key]).toEqual(theater[key]);
+  expect((await db.events.get(event.id))?.theater?.status).toBe("complete");
+  expect((await db.jobs.get("running-theater-job"))?.status).toBe("interrupted");
+  await deleteStory(story.id);
+  expect(await db.theaters.count()).toBe(0);
+  expect(await db.jobs.count()).toBe(0);
+});
+
+it.each(["legacy", "stream"])("preserves interactions and local reader state while remapping conflicting preset sections through %s", async (method) => {
+  const { story, event, theater, preset } = await interactiveFixture();
+  const value = method === "legacy"
+    ? await exportBackup()
+    : JSON.parse(await (await exportBackupBlob(uid(), story.id)).blob.text());
+  expect(value.theaters[0]).toMatchObject({ data: theater.data, likes: theater.likes, bookmarks: theater.bookmarks,
+    reading: theater.reading, replyDrafts: theater.replyDrafts, interaction: theater.interaction, revision: 3 });
+  await initialize();
+  await db.preferences.update("preferences", { theaterPresets: [{ ...preset, prompt: "本机已有的不同预设" }] });
+  if (method === "legacy") await importBackup(value);
+  else {
+    const summary = await stageBackup(blob(value), uid());
+    await commitStaged(summary.session, { replace: false, applySettings: false });
+  }
+  const copiedStory = (await db.stories.toArray()).find((row) => row.id !== story.id)!;
+  const copied = (await db.theaters.where("storyId").equals(copiedStory.id).first())!;
+  const newPresetId = copiedStory.theaterPresetIds![0];
+  expect(newPresetId).not.toBe(preset.id);
+  expect(copied.id).not.toBe(theater.id);
+  expect(copied.eventId).not.toBe(event.id);
+  expect(copied.sourceVersionId).not.toBe(event.versionId);
+  expect(copied.presets[0].id).toBe(newPresetId);
+  expect(copied.data).toEqual({ ...theater.data, sections: [{ ...theater.data!.sections[0], id: newPresetId }] });
+  expect(copied.likes).toEqual([newPresetId + "/post"]);
+  expect(copied.bookmarks).toEqual([newPresetId + "/reply"]);
+  expect(copied.replyDrafts).toEqual({ [newPresetId]: theater.replyDrafts![preset.id] });
+  expect(copied.reading).toEqual(theater.reading);
+  expect(copied.revision).toBe(3);
+  expect(copied.status).toBe("complete");
+  expect(copied.interaction).toMatchObject({ ...theater.interaction, sectionId: newPresetId, status: "interrupted", error: expect.stringMatching(/已有内容保留/) });
+  expect(copied.html).toBe(theater.html);
+  expect(copied.text).toBe(theater.text);
+  expect(await db.jobs.count()).toBe(0);
+  validateBackup(await exportBackup());
+});
+
 it.each(["legacy", "stream"])("imports v1 backups without theaters through %s", async (method) => {
   await fixture();
   const value: any = await exportBackup();
@@ -104,6 +213,28 @@ it.each(["legacy", "stream"])("imports v1 backups without theaters through %s", 
   }
   expect(await db.stories.count()).toBe(2);
   expect(await db.theaters.count()).toBe(1);
+});
+
+it.each(["legacy", "stream"])("imports version 2 HTML-only backups and exports the new version 3 format through %s", async (method) => {
+  const { story, theater } = await fixture();
+  const value = { ...await exportBackup(), version: 2 };
+  expect(validateBackup(value).version).toBe(2);
+  if (method === "legacy") await importBackup(value);
+  else {
+    const summary = await stageBackup(blob(value), uid());
+    await commitStaged(summary.session, { replace: false, applySettings: false });
+  }
+  const copy = (await db.stories.toArray()).find((row) => row.id !== story.id)!;
+  const copied = (await db.theaters.where("storyId").equals(copy.id).first())!;
+  expect(copied.html).toBe(theater.html);
+  expect(copied.data).toBeUndefined();
+  expect((await exportBackup()).version).toBe(3);
+  expect(JSON.parse(await (await exportBackupBlob(uid(), copy.id)).blob.text()).version).toBe(3);
+  for (const version of [2, 3]) {
+    const broken = { ...value, version, theaters: undefined };
+    expect(() => validateBackup(broken)).toThrow(/theaters/);
+    await expect(stageBackup(blob(broken), uid())).rejects.toThrow(/theaters/);
+  }
 });
 
 it.each(["legacy", "stream"])("exports density snapshots and defaults missing legacy density to standard through %s", async (method) => {
@@ -153,6 +284,30 @@ it.each(["legacy", "stream"])("defaults missing theater presentation to custom t
   expect((await db.theaters.where("storyId").equals(copied.id).first())?.presets[0].presentation).toBe("custom");
 });
 
+it.each(["legacy", "stream"])("normalizes intermediate presentation aliases in both settings and snapshots through %s", async (method) => {
+  const { story, theater } = await fixture();
+  const value: any = await exportBackup();
+  const aliases = [
+    ["freeform", "custom"], ["body-card", "body-status"], ["evidence", "evidence-board"], ["relationship", "relationship-card"],
+  ];
+  value.preferences[0].theaterPresets = aliases.map(([presentation], index) => ({ id: "legacy-" + index, name: presentation, prompt: "旧版要求", presentation }));
+  value.stories[0].theaterPresetIds = value.preferences[0].theaterPresets.map((preset: any) => preset.id);
+  value.theaters[0].presets = value.preferences[0].theaterPresets;
+  const normalized = validateBackup(value);
+  expect(normalized.theaters[0].presets.map((preset) => preset.presentation)).toEqual(aliases.map(([, canonical]) => canonical));
+  if (method === "legacy") await importBackup(value);
+  else {
+    const summary = await stageBackup(blob(value), uid());
+    await commitStaged(summary.session, { replace: false, applySettings: false });
+  }
+  const copy = (await db.stories.toArray()).find((row) => row.id !== story.id)!;
+  const imported = (await db.theaters.where("storyId").equals(copy.id).first())!;
+  expect(imported.id).not.toBe(theater.id);
+  expect(imported.presets.map((preset) => preset.presentation)).toEqual(aliases.map(([, canonical]) => canonical));
+  const saved = (await db.preferences.get("preferences"))!.theaterPresets!;
+  expect(saved.filter((preset) => preset.id.startsWith("legacy-")).map((preset) => preset.presentation)).toEqual(aliases.map(([, canonical]) => canonical));
+});
+
 it("uses the story density snapshot when starting a new theater attempt and defaults old stories to standard", async () => {
   const { story, event } = await fixture();
   await db.stories.update(story.id, { theaterDensity: "rich" });
@@ -183,13 +338,49 @@ it.each(["legacy", "stream"])("blocks %s imports during a manual theater request
   expect(after.theaters).toEqual(before.theaters);
 });
 
+it.each(["legacy", "stream"])("blocks %s imports while a completed theater has an active follow-up and no job", async (method) => {
+  await interactiveFixture();
+  expect(await db.jobs.count()).toBe(0);
+  const before = await exportBackup();
+  if (method === "legacy") await expect(importBackup(before, true)).rejects.toThrow(/先停止/);
+  else {
+    const summary = await stageBackup(blob(before), uid());
+    await expect(commitStaged(summary.session, { replace: true, applySettings: true })).rejects.toThrow(/先停止/);
+  }
+  const after = await exportBackup();
+  expect(after.stories).toEqual(before.stories);
+  expect(after.events).toEqual(before.events);
+  expect(after.theaters).toEqual(before.theaters);
+});
+
+it("rejects broken interactive references before either import path changes existing content", async () => {
+  await interactiveFixture();
+  const value = await exportBackup();
+  const patches = [
+    { likes: ["foreign/post"] },
+    { bookmarks: ["my-theater/missing"] },
+    { replyDrafts: { foreign: "没有对应栏目" } },
+    { interaction: { ...value.theaters[0].interaction!, sectionId: "foreign" } },
+    { interaction: { ...value.theaters[0].interaction!, itemId: "missing" } },
+    { interaction: { ...value.theaters[0].interaction!, userItemId: "missing" } },
+    { data: { ...value.theaters[0].data!, sections: [{ ...value.theaters[0].data!.sections[0], id: "foreign" }] } },
+  ];
+  for (const patch of patches) {
+    const broken = structuredClone(value);
+    Object.assign(broken.theaters[0], patch);
+    expect(() => validateBackup(broken)).toThrow(/小剧场/);
+    await expect(stageBackup(blob(broken), uid())).rejects.toThrow(/小剧场/);
+  }
+  expect((await exportBackup()).theaters).toEqual(value.theaters);
+});
+
 it.each(["legacy", "stream"])("round-trips theater versions, fallback IDs, preset conflicts and interrupted status through %s", async (method) => {
   const { story, event, theater, preset } = await fixture();
   const attempt = { ...theater, id: uid(), status: "running" as const, previousId: theater.id, updated: 3 };
   await db.theaters.put(attempt);
   await db.events.update(event.id, { theater: { id: attempt.id, sourceVersionId: event.versionId, status: "running", previousId: theater.id } });
   const value = await exportBackup();
-  expect(value.version).toBe(2);
+  expect(value.version).toBe(3);
   await initialize();
   await db.preferences.update("preferences", { theaterPresets: [{ ...preset, prompt: "本机刚修改的要求" }] });
   if (method === "legacy") await importBackup(value);
@@ -282,7 +473,7 @@ it("single-story backups carry selected and historical presets but omit unrelate
   await db.stories.add(other);
   const output = await exportBackupBlob(uid(), story.id);
   const value = JSON.parse(await output.blob.text());
-  expect(value.version).toBe(2);
+  expect(value.version).toBe(3);
   expect(value.stories.map((s: any) => s.id)).toEqual([story.id]);
   expect(value.theaters).toHaveLength(1);
   expect(value.preferences[0].theaterPresets.map((p: any) => p.id).sort()).toEqual([preset.id, historical.id].sort());
@@ -335,6 +526,16 @@ it.each(["legacy", "stream"])("preserves an old story's implicit default preset 
   expect(copy.theaterPresetIds![0]).not.toBe("theater-roast");
   expect((await db.preferences.get("preferences"))!.theaterPresets!.find((p) => p.id === copy.theaterPresetIds![0]))
     .toEqual({ ...override, id: copy.theaterPresetIds![0] });
+});
+
+it.each(["theater-relationship", "theater-scene", "theater-props"])("keeps imported overrides of %s private to their copied story", (id) => {
+  const imported = { id, name: "导入的专属预设", prompt: "本书自己的提示词", presentation: "custom" as const };
+  const merged = mergeTheaterPresets([], [imported]);
+  const copiedId = merged.ids.get(id);
+  expect(copiedId).toBeTruthy();
+  expect(copiedId).not.toBe(id);
+  expect(merged.presets).toEqual([{ ...imported, id: copiedId }]);
+  expect(mergeTheaterPresets([imported], [imported])).toEqual({ presets: [imported], ids: new Map() });
 });
 
 it.each(["txt", "md", "docx", "epub", "print"] as const)("exports optional current completed theater text safely in %s", async (format) => {

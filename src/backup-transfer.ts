@@ -1,6 +1,6 @@
 import Dexie, { type Table } from "dexie";
 import { db } from "./db";
-import { recordSchemas, mergeTheaterPresets, normalizeTheaterPreset } from "./backup";
+import { recordSchemas, mergeTheaterPresets, normalizeTheaterPreset, remapTheaterContent } from "./backup";
 import { samplingParameters } from "./sampling";
 import { uid, type Preferences, type Role, type Story } from "./types";
 import { BackupParser, READ_CHUNK_BYTES } from "./backup-parser";
@@ -363,6 +363,7 @@ export function backupRemapper() {
         case "theaters":
           return {
             ...x,
+            ...remapTheaterContent(x, theaterPresetIds),
             id: id(x.id),
             storyId: id(x.storyId),
             eventId: id(x.eventId),
@@ -404,6 +405,7 @@ export async function commitStaged(
         (await db.jobs.where("status").equals("running").count()) ||
         (await db.chatBatches.where("status").equals("running").count()) ||
         (await db.theaters.where("status").equals("running").count()) ||
+        (await db.theaters.where("interaction.status").equals("running").count()) ||
         (await db.stories.filter((s) => s.memoryState === "running").count())
       )
         throw Error(
@@ -522,7 +524,7 @@ export async function exportBackupBlob(
       await writer.write(
         JSON.stringify({
           format: "little-scene",
-          version: 2,
+          version: 3,
           created: new Date().toISOString(),
           scope: s ? "story" : "library",
           ...(s ? { title: s.title } : {}),

@@ -1,8 +1,8 @@
 import { expect, type Page } from "@playwright/test";
 
 /** Test data belongs to the isolated browser context, never to production seeds. */
-export async function seedJourney(page: Page) {
-  await page.goto("/");
+export async function seedJourney(page: Page, basePath = "/") {
+  await page.goto(basePath);
   await expect(
     page.getByRole("heading", { name: "故事在此间生长" }),
   ).toBeVisible();

@@ -150,7 +150,9 @@ it("keeps built-in order while overriding preset names and content, deduplicatin
       { id: "custom-a", name: "雨伞旁白", prompt: "写雨伞眼中的这一幕。" },
     ],
   };
-  expect(allTheaterPresets(changed)).toHaveLength(6);
+  expect(allTheaterPresets(changed)).toHaveLength(
+    builtInTheaterPresets.length + 1,
+  );
   expect(allTheaterPresets(changed)[0].name).toBe("大家偷偷说");
   expect(
     selectedTheaterPresets(
@@ -199,6 +201,9 @@ it("assigns presentation structures to built-in theater presets", () => {
     "subtext-card",
     "forum",
     "body-status",
+    "relationship-card",
+    "scene-board",
+    "evidence-board",
   ]);
   expect(presetPresentationLabel("forum")).toBe("论坛楼层");
   expect(presetPresentationLabel("body-status")).toBe("身体状态卡");

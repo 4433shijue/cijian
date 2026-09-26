@@ -41,7 +41,7 @@ test("real provider automatic and manual theater", async ({ page }) => {
   expect(requests).toHaveLength(1);
   expect(await page.locator("iframe.theater-frame").count()).toBe(0);
   await page.locator(".theater-toggle").click();
-  await expect(page.frameLocator("iframe.theater-frame").locator("body")).not.toBeEmpty();
+  await expect(page.locator(".theater-structured-section")).toHaveCount(2);
   await page.screenshot({ path: "work/v2-theater-qa/live-auto-desktop.png", fullPage: true });
   await page.getByRole("button", { name: "重新生成小剧场", exact: true }).click();
   await expect.poll(async () => (await readStore(page, "theaters")).length, { timeout: 10000 }).toBe(2);
@@ -50,6 +50,7 @@ test("real provider automatic and manual theater", async ({ page }) => {
   const theaters = await readStore(page, "theaters");
   const manual = theaters.find((row) => row.id !== events[0]?.theater?.id);
   expect(manual?.status).toBe("complete");
+  expect(manual?.data?.sections).toHaveLength(2);
   expect(requests).toHaveLength(2);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "work/v2-theater-qa/live-manual-mobile.png", fullPage: true });

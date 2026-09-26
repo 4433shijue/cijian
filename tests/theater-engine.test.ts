@@ -47,8 +47,9 @@ describe("separate streaming fields", () => {
     const combined = JSON.stringify(requestSpec(p, "fixture", "system", "user", { kind: "novel", theater: true }).body);
     const manual = JSON.stringify(requestSpec(p, "fixture", "system", "user", { kind: "theater" }).body);
     expect(plain).not.toContain("theaterHtml");
-    expect(combined).toContain("theaterHtml");
-    expect(manual).toContain("theaterHtml");
+    expect(combined).toContain('"theater"');
+    expect(manual).toContain('"theater"');
+    expect(combined).toContain('"replyTo"');
   });
 });
 
@@ -59,7 +60,7 @@ describe("one-request automatic theater", () => {
     await run(id, "novel", "他放下伞。");
     expect(fetcher).toHaveBeenCalledTimes(1);
     const sent = JSON.parse(String(fetcher.mock.calls[0][1]?.body));
-    expect(sent.messages[0].content).toContain("theaterHtml");
+    expect(sent.messages[0].content).toContain("theater");
     const e = (await db.events.where("storyId").equals(id).toArray())[0];
     expect(e.text).toBe(body);
     expect(e.raw).not.toContain("番外独有标记");

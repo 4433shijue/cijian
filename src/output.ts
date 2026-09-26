@@ -1,4 +1,5 @@
 import type { PromptKind } from "./types";
+import { theaterOutputSchema } from "./theater-data";
 
 const unwrap = (raw: string) =>
   raw
@@ -57,7 +58,10 @@ export function parseJSON(raw: string): any {
 
 /** Read one top-level JSON string, including a safely decoded streaming prefix.
  * Never mistake a nested property or HTML's quoted text for a response field. */
-export function topLevelString(raw: string, key: string): { value: string; complete: boolean } | undefined {
+export function topLevelString(
+  raw: string,
+  key: string,
+): { value: string; complete: boolean } | undefined {
   const source = unwrap(raw);
   const start = source.indexOf("{");
   if (start < 0) return;
@@ -75,12 +79,22 @@ export function topLevelString(raw: string, key: string): { value: string; compl
       if (next === undefined) return { value, complete: false, end: i };
       if (next === "u") {
         const hex = source.slice(i + 1, i + 5);
-        if (hex.length < 4) return { value, complete: false, end: source.length };
+        if (hex.length < 4)
+          return { value, complete: false, end: source.length };
         if (!/^[\da-f]{4}$/i.test(hex)) return;
         value += String.fromCharCode(parseInt(hex, 16));
         i += 4;
       } else {
-        const escapes: Record<string, string> = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
+        const escapes: Record<string, string> = {
+          '"': '"',
+          "\\": "\\",
+          "/": "/",
+          b: "\b",
+          f: "\f",
+          n: "\n",
+          r: "\r",
+          t: "\t",
+        };
         if (!(next in escapes)) return;
         value += escapes[next];
       }
@@ -130,7 +144,8 @@ export function draftText(raw: string): string {
     const field = topLevelString(raw, "text");
     if (field) return field.value;
     // Plain prose is recoverable; protocol objects and broken JSON stay in raw details.
-    return /^[\[{]/.test(text) || /"(?:text|messages|error|theaterHtml)"\s*:/.test(text)
+    return /^[\[{]/.test(text) ||
+      /"(?:text|messages|error|theaterHtml|theater)"\s*:/.test(text)
       ? ""
       : text;
   }
@@ -186,10 +201,14 @@ const object = (properties: Record<string, unknown>) => ({
   additionalProperties: false,
 });
 const fact = object({ quote: string, knownBy: array(string) });
-export const novelTheaterSchema = object({ text: string, facts: array(fact), theaterHtml: string });
+export const novelTheaterSchema = object({
+  text: string,
+  facts: array(fact),
+  theater: theaterOutputSchema,
+});
 export const outputSchemas: Record<PromptKind, ReturnType<typeof object>> = {
   novel: object({ text: string, facts: array(fact) }),
-  theater: object({ theaterHtml: string }),
+  theater: object({ theater: theaterOutputSchema }),
   chat: object({ messages: array(string) }),
   facts: object({ facts: array(fact) }),
   memory: object({ text: string }),

@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { db } from "./db";
-import { uid, type TheaterPreset } from "./types";
+import { uid, type TheaterPreset, type TheaterRecord } from "./types";
 import { samplingParameters } from "./sampling";
+import { builtInTheaterPresets, normalizeTheaterPresentation } from "./theater-presets";
+import { theaterDataSchema } from "./theater-data";
 const str = z.string(),
   ids = z.array(str),
   aud = z.enum(["all", "roles", "author"]);
@@ -46,8 +48,7 @@ const theaterPresentation = z.enum([
   "body-card", // Legacy alias accepted during the unpublished transition.
   "evidence",
   "relationship",
-]);
-type TheaterPresentation = z.infer<typeof theaterPresentation>;
+]).transform(normalizeTheaterPresentation);
 const theaterPreset = z.object({
   id: str.min(1),
   name: str.min(1),
@@ -69,6 +70,42 @@ const theater = z.object({
   updated: z.number(),
   previousId: str.optional(),
   density: z.enum(["light", "standard", "rich"]).optional(),
+  data: theaterDataSchema.optional(),
+  likes: ids.optional(),
+  bookmarks: ids.optional(),
+  replyDrafts: z.record(str).optional(),
+  reading: z.object({ clarity: z.boolean(), fontSize: z.number().finite().min(12).max(32) }).optional(),
+  interaction: z.object({
+    id: str.min(1),
+    sectionId: str.min(1),
+    itemId: str.min(1).optional(),
+    userItemId: str.min(1).optional(),
+    kind: z.enum(["reply", "expand"]),
+    input: str,
+    status: theaterStatus,
+    raw: str,
+    error: str,
+    created: z.number().finite(),
+    updated: z.number().finite(),
+  }).optional(),
+  revision: z.number().int().nonnegative().safe().optional(),
+}).superRefine((record, context) => {
+  const sections = record.data?.sections ?? [];
+  const presetIds = new Set(record.presets.map((preset) => preset.id));
+  if (sections.some((section) => !presetIds.has(section.id)))
+    context.addIssue({ code: "custom", message: "小剧场栏目与预设关联无效", path: ["data"] });
+  const itemKeys = new Set(sections.flatMap((section) => section.items.map((item) => section.id + "/" + item.id)));
+  for (const field of ["likes", "bookmarks"] as const)
+    if (record[field]?.some((key) => !itemKeys.has(key)))
+      context.addIssue({ code: "custom", message: "小剧场互动标记关联无效", path: [field] });
+  if (record.replyDrafts && Object.keys(record.replyDrafts).some((id) => !sections.some((section) => section.id === id)))
+    context.addIssue({ code: "custom", message: "小剧场回复草稿关联无效", path: ["replyDrafts"] });
+  if (record.interaction) {
+    const interaction = record.interaction;
+    const section = sections.find((section) => section.id === interaction.sectionId);
+    if (!section || [interaction.itemId, interaction.userItemId].some((id) => id && !section.items.some((item) => item.id === id)))
+      context.addIssue({ code: "custom", message: "小剧场追加内容关联无效", path: ["interaction"] });
+  }
 });
 const story = z.object({
   id: str,
@@ -245,7 +282,7 @@ export const recordSchemas = {
 };
 const schema = z.object({
   format: z.literal("little-scene"),
-  version: z.union([z.literal(1), z.literal(2)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   created: str,
   roles: z.array(role),
   stories: z.array(story),
@@ -262,25 +299,50 @@ const schema = z.object({
 });
 export type Backup = z.infer<typeof schema>;
 
-export function normalizeTheaterPreset(preset: TheaterPreset) {
-  const value = (preset as TheaterPreset & { presentation?: unknown }).presentation;
-  const parsed = theaterPresentation.safeParse(value);
+export function normalizeTheaterPreset(
+  preset: Omit<TheaterPreset, "presentation"> & { presentation?: unknown },
+): TheaterPreset {
   return {
     ...preset,
-    presentation: (parsed.success
-      ? parsed.data === "freeform" ? "custom"
-        : parsed.data === "body-card" ? "body-status"
-          : parsed.data === "evidence" ? "evidence-board"
-            : parsed.data === "relationship" ? "relationship-card"
-              : parsed.data
-      : "custom") as TheaterPresentation,
-  } as unknown as TheaterPreset;
+    presentation: normalizeTheaterPresentation(preset.presentation),
+  };
+}
+
+// Item IDs and reply links live inside each saved result. Only preset/section
+// identities change when a copied backup keeps a conflicting local preset.
+export function remapTheaterContent(
+  record: Pick<TheaterRecord, "data" | "likes" | "bookmarks" | "replyDrafts" | "interaction">,
+  presetIds: ReadonlyMap<string, string>,
+) {
+  const sectionId = (id: string) => presetIds.get(id) || id;
+  const itemKeys = new Map(record.data?.sections.flatMap((section) =>
+    section.items.map((item) => [section.id + "/" + item.id, sectionId(section.id) + "/" + item.id] as const),
+  ));
+  return {
+    data: record.data && {
+      ...record.data,
+      sections: record.data.sections.map((section) => ({ ...section, id: sectionId(section.id) })),
+    },
+    likes: record.likes?.map((key) => itemKeys.get(key) || key),
+    bookmarks: record.bookmarks?.map((key) => itemKeys.get(key) || key),
+    replyDrafts: record.replyDrafts && Object.fromEntries(
+      Object.entries(record.replyDrafts).map(([id, value]) => [sectionId(id), value]),
+    ),
+    interaction: record.interaction && {
+      ...record.interaction,
+      sectionId: sectionId(record.interaction.sectionId),
+      status: record.interaction.status === "running" ? "interrupted" as const : record.interaction.status,
+      error: record.interaction.status === "running"
+        ? "导入的小剧场追加已中断，已有内容保留，可以手动重试。"
+        : record.interaction.error,
+    },
+  };
 }
 
 export function validateBackup(raw: unknown) {
   const b = schema.parse(raw);
   if (
-    b.version === 2 &&
+    b.version >= 2 &&
     (!raw ||
       typeof raw !== "object" ||
       !Array.isArray((raw as { theaters?: unknown }).theaters))
@@ -428,13 +490,7 @@ export function mergeTheaterPresets(
 ) {
   const presets = existing.map(normalizeTheaterPreset);
   const ids = new Map<string, string>();
-  const builtIns = new Set([
-    "theater-roast",
-    "theater-details",
-    "theater-subtext",
-    "theater-audience",
-    "theater-body",
-  ]);
+  const builtIns = new Set(builtInTheaterPresets.map((preset) => preset.id));
   for (const source of imported) {
     const preset = normalizeTheaterPreset(source);
     const current = presets.find((p) => p.id === preset.id);
@@ -442,7 +498,7 @@ export function mergeTheaterPresets(
       current &&
       current.name === preset.name &&
       current.prompt === preset.prompt &&
-      (current as TheaterPreset & { presentation?: unknown }).presentation === preset.presentation
+      current.presentation === preset.presentation
     )
       continue;
     const id = current || builtIns.has(preset.id) ? uid() : preset.id;
@@ -467,7 +523,7 @@ export async function exportBackup() {
     ],
     async () => ({
       format: "little-scene",
-      version: 2,
+      version: 3,
       created: new Date().toISOString(),
       roles: await db.roles.toArray(),
       stories: (await db.stories.toArray()).map(
@@ -527,7 +583,8 @@ export async function importBackup(value: unknown, replace = false) {
     if (
       (await db.jobs.where("status").equals("running").count()) ||
       (await db.chatBatches.where("status").equals("running").count()) ||
-      (await db.theaters.where("status").equals("running").count())
+      (await db.theaters.where("status").equals("running").count()) ||
+      (await db.theaters.where("interaction.status").equals("running").count())
     )
       throw Error(
         "请先停止正在进行的生成或记忆整理，再导入备份。现有资料未改变。",
@@ -536,7 +593,7 @@ export async function importBackup(value: unknown, replace = false) {
       replace
         ? []
         : (await db.preferences.get("preferences"))?.theaterPresets || [],
-      (b.preferences[0]?.theaterPresets || []) as unknown as TheaterPreset[],
+      b.preferences[0]?.theaterPresets || [],
     );
     if (replace)
       for (const table of db.tables)
@@ -624,6 +681,7 @@ export async function importBackup(value: unknown, replace = false) {
     await db.theaters.bulkAdd(
       b.theaters.map((x) => ({
         ...x,
+        ...remapTheaterContent(x, theaterPresets.ids),
         id: remap(x.id),
         storyId: remap(x.storyId),
         eventId: remap(x.eventId),
@@ -633,7 +691,7 @@ export async function importBackup(value: unknown, replace = false) {
         presets: x.presets.map((p) => ({
           ...p,
           id: theaterPresets.ids.get(p.id) || p.id,
-        })) as unknown as TheaterPreset[],
+        })),
         status: x.status === "running" ? ("interrupted" as const) : x.status,
         error:
           x.status === "running"

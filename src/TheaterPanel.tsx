@@ -2,17 +2,21 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { ChevronDown, ChevronUp, Drama, RefreshCw, Square } from "lucide-react";
 import { db } from "./db";
-import type { SceneEvent, TheaterPresentation } from "./types";
+import type { SceneEvent, TheaterPresentation, TheaterRecord } from "./types";
 import { generateTheater, pendingTheater, stopTheater } from "./theater";
 import { stop } from "./generation-state";
-import { theaterDocument } from "./theater-render";
+import { theaterDocument, theaterReading } from "./theater-render";
 import { presetPresentationLabel } from "./theater-presets";
+import { saveTheaterReading } from "./theater-interactions";
+import { TheaterStructured } from "./TheaterStructured";
+import "./theater-interactive.css";
 
-function TheaterFrame({ html, presentations = [] }: { html: string; presentations?: TheaterPresentation[] }) {
+function TheaterFrame({ html, presentations = [], reading }: { html: string; presentations?: TheaterPresentation[]; reading?: TheaterRecord["reading"] }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const observer = useRef<ResizeObserver | undefined>(undefined);
   const [height, setHeight] = useState(120);
-  const document = useMemo(() => theaterDocument(html, presentations), [html, presentations.join("|")]);
+  const settings = theaterReading(reading);
+  const document = useMemo(() => theaterDocument(html, presentations, settings), [html, presentations.join("|"), settings.clarity, settings.fontSize]);
   useEffect(() => () => observer.current?.disconnect(), []);
   function loaded() {
     observer.current?.disconnect();
@@ -32,7 +36,8 @@ function TheaterFrame({ html, presentations = [] }: { html: string; presentation
     style={{ height }} onLoad={loaded} />;
 }
 
-function TheaterContent({ event }: { event: SceneEvent }) {
+function TheaterContent({ event, disabled, onBusyChange }: { event: SceneEvent; disabled: boolean; onBusyChange: (busy: boolean) => void }) {
+  const [readingError, setReadingError] = useState("");
   const record = useLiveQuery(async () => {
     if (!event.theater) return null;
     const current = await db.theaters.get(event.theater.id);
@@ -45,6 +50,17 @@ function TheaterContent({ event }: { event: SceneEvent }) {
   const { current, previous } = record;
   const failed = current.status === "failed" || current.status === "interrupted";
   const shown = current.status !== "complete" && previous ? previous : current;
+  const settings = theaterReading(shown.reading);
+  async function read(patch: Partial<NonNullable<TheaterRecord["reading"]>>) {
+    setReadingError("");
+    try { await saveTheaterReading(shown.id, patch); }
+    catch (cause) { setReadingError(cause instanceof Error ? cause.message : "没能保存阅读设置，请再试一次。"); }
+  }
+  function renderContent(value: TheaterRecord, canInteract: boolean) {
+    return value.data?.sections.length ? <TheaterStructured key={value.id} record={value} event={event} disabled={!canInteract} onBusyChange={onBusyChange}
+      renderHtml={(html, section) => <TheaterFrame html={html} presentations={[section.presentation]} reading={shown.reading} />} /> :
+      value.html ? <TheaterFrame html={value.html} presentations={value.presets.map((preset) => preset.presentation).filter(Boolean) as TheaterPresentation[]} reading={shown.reading} /> : null;
+  }
   return <>
     <p className="theater-presets-label">{shown.presets.map((preset) => `${preset.name} · ${presetPresentationLabel(preset.presentation)}`).join(" · ")}</p>
     {shown.sourceVersionId !== event.versionId && current.sourceVersionId === event.versionId &&
@@ -52,18 +68,28 @@ function TheaterContent({ event }: { event: SceneEvent }) {
     {current.error && <p className="error" role="alert">{current.error}</p>}
     {failed && previous && <p className="hint">这次没能完成，先保留上一次的小剧场。</p>}
     {failed && !previous && shown.html && <p className="hint">这是已经收到的部分内容。</p>}
-    {shown.html ? <TheaterFrame html={shown.html} presentations={shown.presets.map((preset) => preset.presentation).filter(Boolean) as TheaterPresentation[]} /> : <p className="hint" role="status">
+    <div className="theater-reading-tools" aria-label="小剧场阅读设置">
+      <label><input type="checkbox" checked={settings.clarity} onChange={(change) => void read({ clarity: change.target.checked })} />清晰阅读</label>
+      <label>字号<select aria-label="小剧场字号" value={settings.fontSize} onChange={(change) => void read({ fontSize: Number(change.target.value) })}>
+        {Array.from({ length: 9 }, (_, index) => index + 16).map((size) => <option key={size} value={size}>{size}</option>)}
+      </select></label>
+      <span>{settings.clarity ? "纸色底与深色字，旧内容也适用。" : "展示原有视觉主题。"}</span>
+    </div>
+    {readingError && <p className="error" role="alert">{readingError}</p>}
+    {shown.sourceVersionId !== event.versionId && shown.data && <p className="hint">旧版小剧场可以筛选和收藏，按当前正文重新生成后就能继续参与。</p>}
+    {shown.data?.sections.length || shown.html ? renderContent(shown, !disabled && shown.id === current.id && shown.status === "complete" && shown.sourceVersionId === event.versionId) : <p className="hint" role="status">
       {current.status === "running" ? "小剧场正在布置，收到内容就会在这里显示。" : "还没有可显示的小剧场，可以重新生成。"}
     </p>}
-    {current.status === "running" && previous && current.html && <>
+    {current.status === "running" && previous && (current.html || current.data?.sections.length) && <>
       <p className="hint">这次的小剧场正在生成，完成后会替换上面的内容。</p>
-      <TheaterFrame html={current.html} presentations={current.presets.map((preset) => preset.presentation).filter(Boolean) as TheaterPresentation[]} />
+      {renderContent(current, false)}
     </>}
   </>;
 }
 
 export function TheaterPanel({ event, blocked = false }: { event: SceneEvent; blocked?: boolean }) {
   const [open, setOpen] = useState(false);
+  const [interactionPending, setInteractionPending] = useState(false);
   const displayedSource = useRef({ versionId: event.versionId, theaterId: event.theater?.id });
   const replacedWithNewProse = displayedSource.current.versionId !== event.versionId &&
     displayedSource.current.theaterId !== event.theater?.id;
@@ -78,7 +104,7 @@ export function TheaterPanel({ event, blocked = false }: { event: SceneEvent; bl
   const [error, setError] = useState("");
   const pending = asking || event.theater?.status === "running" || !!pendingTheater(event.id);
   const stale = !!event.theater && event.theater.sourceVersionId !== event.versionId;
-  const canGenerate = event.status === "complete" && !blocked && !pending;
+  const canGenerate = event.status === "complete" && !blocked && !pending && !interactionPending;
   async function ask() {
     if (!canGenerate) return;
     setAsking(true);
@@ -91,7 +117,7 @@ export function TheaterPanel({ event, blocked = false }: { event: SceneEvent; bl
     setOpen(!expanded);
     if (!expanded && !event.theater && !error) void ask();
   }
-  const label = pending ? "正在生成" : stale ? "原文已更新" :
+  const label = interactionPending ? "正在补充" : pending ? "正在生成" : stale ? "原文已更新" :
     event.theater?.status === "failed" || event.theater?.status === "interrupted" ? "未完成" :
     event.theater ? "这一刻的幕间" : "点开生成";
   return <section className={"theater-panel" + (expanded ? " is-open" : "")} aria-label="本段小剧场">
@@ -104,7 +130,7 @@ export function TheaterPanel({ event, blocked = false }: { event: SceneEvent; bl
       {stale && <p className="review">正文已经修改，下面的小剧场仍对应旧版本。可以按当前正文重新生成。</p>}
       {pending && <p className="hint" role="status">正在生成小剧场，收起后仍会继续。</p>}
       {error && <p className="error" role="alert">{error}</p>}
-      <TheaterContent event={event} />
+      <TheaterContent event={event} disabled={blocked || pending || event.status !== "complete"} onBusyChange={setInteractionPending} />
       <div className="theater-actions">
         {pending ? <button onClick={() => event.status === "draft" ? stop(event.storyId) : stopTheater(event.id)}><Square size={14} />{event.status === "draft" ? "停止本次生成" : "停止生成"}</button> :
           event.status === "complete" && <button onClick={() => void ask()} disabled={!canGenerate}><RefreshCw size={14} />{event.theater ? "重新生成小剧场" : "生成小剧场"}</button>}

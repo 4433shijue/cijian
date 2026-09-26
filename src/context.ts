@@ -185,7 +185,7 @@ export function buildContext(
   const theaterPresets = autoTheater ? selectedTheaterPresets(s, prefs) : [];
   if (autoTheater && !theaterPresets.length) throw Error("请先为小剧场选择至少一个预设。");
   const system = prompt(kind, prefs, autoTheater) + (autoTheater
-    ? "\n\n【仅用于 theaterHtml 的番外要求】\n" + theaterDensityInstruction(s.theaterDensity) + "\n\n" + theaterInstruction(theaterPresets) +
+    ? "\n\n【仅用于 theater 的番外要求】\n" + theaterDensityInstruction(s.theaterDensity) + "\n\n" + theaterInstruction(theaterPresets) +
       (prefs.prompts.theater?.enabled ? "\n作者的附加小剧场偏好\n" + prefs.prompts.theater.text : "") : "");
   const report = assemble(system, task, mats, p.context, p.maxOutput);
   const memoryIds = new Set(selected.selected.map((m) => m.id));

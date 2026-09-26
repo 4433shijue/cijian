@@ -19,6 +19,7 @@ import { preparePrefix, commitPrefix } from "./prefix-cache";
 import { prompt } from "./prompts";
 import { parseJSON, draftText, missingQuotes, topLevelString } from "./output";
 import { selectedTheaterPresets } from "./theater-presets";
+import { normalizeTheaterData } from "./theater-data";
 import {
   createTheaterAttempt, updateTheaterAttempt, finishTheaterAttempt,
   failTheaterAttempt, rebindTheaterAttempt, validateTheaterHtml,
@@ -251,7 +252,11 @@ async function runUnlocked(
     let theaterHtml = "";
     let theaterError = "";
     if (theaterId) {
-      try { theaterHtml = validateTheaterHtml(parseJSON(result.text).theaterHtml); }
+      try {
+        const parsed = parseJSON(result.text);
+        if (parsed.theater !== undefined) normalizeTheaterData(parsed.theater, selectedTheaterPresets(s, prefs));
+        else theaterHtml = validateTheaterHtml(parsed.theaterHtml);
+      }
       catch (error) { theaterError = error instanceof Error ? error.message : "小剧场未完整生成，可以单独重试。"; }
     }
     let texts: string[];
