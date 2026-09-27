@@ -4,6 +4,7 @@ import { withStoryLock } from "./locks";
 import { isBusy } from "./generation-state";
 import type { CompletionDraft } from "./role-completion-types";
 import { numberedRounds, roundWindow } from "./rounds";
+import { resolveTheaterPreset } from "./theater-presets";
 import type {
   TransferRecord,
   TransferSession,
@@ -68,6 +69,17 @@ export class SceneDB extends Dexie {
     this.version(7).stores({ roleCompletionDrafts: "id" });
     this.version(8).stores({
       theaters: "id,storyId,eventId,[eventId+sourceVersionId],status,interaction.status",
+    });
+    this.version(9).stores({}).upgrade(async (transaction) => {
+      // Only editable configuration inherits a missing built-in presentation.
+      // Historical preset snapshots describe their saved HTML/data unchanged.
+      await transaction.table<Preferences, string>("preferences").toCollection().modify((preferences) => {
+        if (preferences.theaterPresets?.some((preset) => preset.presentation === undefined)) {
+          preferences.theaterPresets = preferences.theaterPresets.map((preset) =>
+            preset.presentation === undefined ? resolveTheaterPreset(preset) : preset,
+          );
+        }
+      });
     });
   }
 }

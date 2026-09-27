@@ -2,7 +2,7 @@ import { z } from "zod";
 import { db } from "./db";
 import { uid, type TheaterPreset, type TheaterRecord } from "./types";
 import { samplingParameters } from "./sampling";
-import { builtInTheaterPresets, normalizeTheaterPresentation } from "./theater-presets";
+import { builtInTheaterPresets, normalizeTheaterPresentation, resolveTheaterPreset } from "./theater-presets";
 import { theaterDataSchema } from "./theater-data";
 const str = z.string(),
   ids = z.array(str),
@@ -49,18 +49,21 @@ const theaterPresentation = z.enum([
   "evidence",
   "relationship",
 ]).transform(normalizeTheaterPresentation);
-const theaterPreset = z.object({
+// Configuration may inherit a built-in presentation; historical snapshots may
+// not. Resolve configuration while the original ID is still available.
+const theaterPresetSnapshot = z.object({
   id: str.min(1),
   name: str.min(1),
   prompt: str,
-  presentation: theaterPresentation.default("custom"),
+  presentation: theaterPresentation.optional(),
 });
+const theaterPresetConfig = theaterPresetSnapshot.transform(resolveTheaterPreset);
 const theater = z.object({
   id: str,
   storyId: str,
   eventId: str,
   sourceVersionId: str,
-  presets: z.array(theaterPreset),
+  presets: z.array(theaterPresetSnapshot),
   html: str,
   text: str,
   raw: str,
@@ -257,7 +260,7 @@ const prefs = z.object({
     )
     .optional(),
   theaterPresets: z
-    .array(theaterPreset)
+    .array(theaterPresetConfig)
     .refine(
       (presets) => new Set(presets.map((p) => p.id)).size === presets.length,
       "小剧场预设 ID 重复",
@@ -299,13 +302,13 @@ const schema = z.object({
 });
 export type Backup = z.infer<typeof schema>;
 
-export function normalizeTheaterPreset(
+export function normalizeTheaterPresetSnapshot(
   preset: Omit<TheaterPreset, "presentation"> & { presentation?: unknown },
 ): TheaterPreset {
-  return {
-    ...preset,
-    presentation: normalizeTheaterPresentation(preset.presentation),
-  };
+  const { presentation, ...snapshot } = preset;
+  return presentation === undefined
+    ? snapshot
+    : { ...snapshot, presentation: normalizeTheaterPresentation(presentation) };
 }
 
 // Item IDs and reply links live inside each saved result. Only preset/section
@@ -488,11 +491,11 @@ export function mergeTheaterPresets(
   existing: TheaterPreset[],
   imported: TheaterPreset[],
 ) {
-  const presets = existing.map(normalizeTheaterPreset);
+  const presets = existing.map(resolveTheaterPreset);
   const ids = new Map<string, string>();
   const builtIns = new Set(builtInTheaterPresets.map((preset) => preset.id));
   for (const source of imported) {
-    const preset = normalizeTheaterPreset(source);
+    const preset = resolveTheaterPreset(source);
     const current = presets.find((p) => p.id === preset.id);
     if (
       current &&
@@ -547,14 +550,14 @@ export async function exportBackup() {
       })),
       preferences: (await db.preferences.toArray()).map((preferences) => ({
         ...preferences,
-        theaterPresets: preferences.theaterPresets?.map(normalizeTheaterPreset),
+        theaterPresets: preferences.theaterPresets?.map(resolveTheaterPreset),
       })),
       chatBatches: (await db.chatBatches.toArray()).map(
         ({ request, ...batch }) => batch,
       ),
       theaters: (await db.theaters.toArray()).map((theater) => ({
         ...theater,
-        presets: theater.presets.map(normalizeTheaterPreset),
+        presets: theater.presets.map(normalizeTheaterPresetSnapshot),
         density: theater.density ?? "standard",
       })),
     }),

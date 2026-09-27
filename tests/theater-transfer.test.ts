@@ -92,7 +92,7 @@ it("upgrades an existing version 5 database without altering saved prose", async
   const upgraded = new SceneDB(name);
   try {
     await upgraded.open();
-    expect(upgraded.verno).toBe(8);
+    expect(upgraded.verno).toBe(9);
     expect((await upgraded.events.get("old-prose"))?.text).toBe("旧正文不会变化");
     expect(await upgraded.theaters.count()).toBe(0);
     expect(await upgraded.roleCompletionDrafts.count()).toBe(0);
@@ -110,7 +110,7 @@ it("adds the interaction status index to a version 7 database without rewriting 
   const upgraded = new SceneDB(name);
   try {
     await upgraded.open();
-    expect(upgraded.verno).toBe(8);
+    expect(upgraded.verno).toBe(9);
     expect(await upgraded.theaters.where("interaction.status").equals("running").count()).toBe(1);
     expect(await upgraded.theaters.get(theater.id)).toEqual(theater);
   } finally { await upgraded.delete(); }
@@ -266,13 +266,13 @@ it.each(["legacy", "stream"])("exports density snapshots and defaults missing le
   expect(copiedTheater.density).toBe("standard");
 });
 
-it.each(["legacy", "stream"])("defaults missing theater presentation to custom through %s", async (method) => {
+it.each(["legacy", "stream"])("defaults unknown custom config to custom while preserving missing snapshot presentation through %s", async (method) => {
   const { theater } = await fixture();
   const value: any = structuredClone(await exportBackup());
   delete value.preferences[0].theaterPresets[0].presentation;
   delete value.theaters[0].presets[0].presentation;
   expect(validateBackup(value).preferences[0].theaterPresets[0].presentation).toBe("custom");
-  expect(validateBackup(value).theaters[0].presets[0].presentation).toBe("custom");
+  expect(validateBackup(value).theaters[0].presets[0].presentation).toBeUndefined();
   if (method === "legacy") await importBackup(value);
   else {
     const summary = await stageBackup(blob(value), uid());
@@ -281,7 +281,66 @@ it.each(["legacy", "stream"])("defaults missing theater presentation to custom t
   const copied = (await db.stories.toArray()).find((story) => story.id !== theater.storyId)!;
   const saved = (await db.preferences.get("preferences"))!.theaterPresets!;
   expect(saved.find((preset) => preset.id === "my-theater")?.presentation).toBe("custom");
-  expect((await db.theaters.where("storyId").equals(copied.id).first())?.presets[0].presentation).toBe("custom");
+  expect((await db.theaters.where("storyId").equals(copied.id).first())?.presets[0].presentation).toBeUndefined();
+});
+
+it.each([1, 2, 3].flatMap((version) => ["legacy", "stream"].map((method) => ({ version, method }))))(
+  "resolves an old built-in config before conflict remapping in backup v$version through $method",
+  async ({ version, method }) => {
+    const { story, theater } = await fixture();
+    const override = { id: "theater-audience", name: "我改名的观众楼", prompt: "留住这段用户自己的提示词。" };
+    const oldCustom = { id: "reader-own", name: "私人番外", prompt: "保持静态内容。" };
+    const intentionalStatic = { id: "theater-body", name: "静态身体观察", prompt: "我选择自由 HTML。", presentation: "custom" as const };
+    const value: any = structuredClone(await exportBackup());
+    value.version = version;
+    value.preferences[0].theaterPresets = [override, oldCustom, intentionalStatic];
+    value.stories[0].theaterPresetIds = [override.id, oldCustom.id, intentionalStatic.id];
+    value.theaters[0].presets = [override];
+    const localOverride = { ...override, name: "本机论坛", prompt: "本机的要求", presentation: "forum" as const };
+    await db.preferences.update("preferences", { theaterPresets: [localOverride] });
+    const parsed = validateBackup(value);
+    expect(parsed.preferences[0].theaterPresets?.map((preset) => preset.presentation)).toEqual(["forum", "custom", "custom"]);
+    expect(parsed.theaters[0].presets[0]).toEqual(override);
+    if (method === "legacy") await importBackup(value);
+    else {
+      const summary = await stageBackup(blob(value), uid());
+      await commitStaged(summary.session, { replace: false, applySettings: false });
+    }
+    const copied = (await db.stories.toArray()).find((item) => item.id !== story.id)!;
+    const saved = (await db.preferences.get("preferences"))!.theaterPresets!;
+    const copiedForum = saved.find((preset) => preset.id === copied.theaterPresetIds?.[0])!;
+    expect(copiedForum.id).not.toBe(override.id);
+    expect(copiedForum).toEqual({ ...override, id: copiedForum.id, presentation: "forum" });
+    expect(saved.find((preset) => preset.id === localOverride.id)).toEqual(localOverride);
+    expect(saved.find((preset) => preset.id === copied.theaterPresetIds?.[1])?.presentation).toBe("custom");
+    expect(saved.find((preset) => preset.id === copied.theaterPresetIds?.[2])?.presentation).toBe("custom");
+    const historical = (await db.theaters.where("storyId").equals(copied.id).first())!;
+    expect(historical.presets).toEqual([{ ...override, id: copiedForum.id }]);
+    expect(historical.html).toBe(theater.html);
+    expect(historical.raw).toBe(theater.raw);
+    expect(historical.data).toBeUndefined();
+  },
+);
+
+it("serializes inherited built-in configuration in every export without upgrading saved snapshots", async () => {
+  const { story, theater } = await fixture();
+  const preset = { id: "theater-audience", name: "旧版观众席", prompt: "我写的内容要求。" };
+  const explicit = { id: "theater-body", name: "静态身体观察", prompt: "保留自由 HTML。", presentation: "custom" as const };
+  await db.preferences.update("preferences", { theaterPresets: [preset, explicit] });
+  await db.stories.update(story.id, { theaterPresetIds: [preset.id, explicit.id] });
+  await db.theaters.update(theater.id, { presets: [preset] });
+  const exports = [
+    await exportBackup(),
+    JSON.parse(await (await exportBackupBlob(uid())).blob.text()),
+    JSON.parse(await (await exportBackupBlob(uid(), story.id)).blob.text()),
+  ];
+  for (const output of exports) {
+    expect(output.version).toBe(3);
+    expect(output.preferences[0].theaterPresets).toEqual([{ ...preset, presentation: "forum" }, explicit]);
+    expect(output.theaters[0].presets).toEqual([preset]);
+    expect(output.theaters[0].html).toBe(theater.html);
+  }
+  expect((await db.theaters.get(theater.id))?.presets).toEqual([preset]);
 });
 
 it.each(["legacy", "stream"])("normalizes intermediate presentation aliases in both settings and snapshots through %s", async (method) => {

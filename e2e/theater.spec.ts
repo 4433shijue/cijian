@@ -1,6 +1,23 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { readStore, seedJourney } from "./fixtures";
+import type { TheaterData, TheaterItem } from "../src/types";
+
+const mockItem = (id: string, text: string, extra: Partial<TheaterItem> = {}): TheaterItem => ({
+  id, author: "檐下听雨", badge: "细节党", title: "", text, quote: "", certainty: "inferred", replyTo: "", group: "", status: "", fields: [], ...extra,
+});
+function mockTheater(title = "伞柄上的那点心思"): TheaterData {
+  return { version: 1, sections: [
+    { id: "theater-roast", title: "后台的两句闲话", presentation: "dialogue", theme: "paper", html: "", items: [
+      mockItem("d1", "我只是顺手递把伞。为什么你们都看着我？", { author: "周屿", certainty: "fiction" }),
+      mockItem("d2", "那你倒是先松手呀。", { author: "许知", certainty: "fiction", replyTo: "d1" }),
+    ] },
+    { id: "theater-audience", title, presentation: "forum", theme: "forest", html: "", items: [
+      mockItem("f1", "握着伞柄的手还向前伸了些，这个动作有点意思。", { quote: "握着伞柄的手稍稍向前伸了些", certainty: "observed" }),
+      mockItem("f2", "也可能只是怕她接不到，先别替他解释。", { author: "理性路人", replyTo: "f1" }),
+    ] },
+  ] };
+}
 
 const mockHtml = `<style>.stage{padding:23px;border:1px solid #c8d7bf;border-radius:16px;background:linear-gradient(135deg,#fffdf0,#edf4e6)}.eyebrow{font-size:11px;letter-spacing:.18em;color:#8c9279}.stage h2{font-family:serif;font-size:24px;color:#435d45;margin:5px 0 18px}.line{display:grid;grid-template-columns:44px 1fr;gap:12px;margin:12px 0}.name{padding-top:8px;font-size:12px;color:#6d7d61}.bubble{padding:10px 15px;background:#ffffffb5;border-radius:3px 15px 15px;font-size:15px}.note{border-top:1px dashed #bdcbae;margin-top:18px;padding-top:14px;font-size:13px;color:#7d886d}@media(max-width:420px){.stage{padding:15px}.line{grid-template-columns:34px 1fr;gap:8px}}</style><section class="stage" data-theater-template="forum"><div class="eyebrow" data-forum-board>MOCK · 仅用于界面验证</div><h2 data-forum-title>伞柄上的那点心思</h2><article class="line" data-floor="1" data-certainty="visible"><div data-forum-meta><span class="name" data-forum-author>周屿</span><span data-forum-badge>楼主 · 细节党</span></div><p class="bubble" data-floor-body>我只是顺手递把伞。为什么你们都看着我？</p></article><article class="line" data-floor="2" data-reply-to="1" data-certainty="inference"><div data-forum-meta><span class="name" data-forum-author>许知</span><span data-forum-badge>角色厨</span></div><p class="bubble" data-floor-body>那你倒是先松手呀。</p></article><div class="note" data-forum-rule>观众席 · 仅讨论当前回合已公开内容。</div></section>`;
 
@@ -52,10 +69,10 @@ test("manual click makes one request with only target prose and settings, then r
   const requests: any[] = [];
   await page.route("https://theater.fixture.test/**", async (route) => {
     requests.push(route.request().postDataJSON());
-    await route.fulfill({ contentType: "text/event-stream", body: "data: " + JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ theaterHtml: mockHtml }) }, finish_reason: "stop" }] }) + "\n\ndata: [DONE]\n\n" });
+    await route.fulfill({ contentType: "text/event-stream", body: "data: " + JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ theater: mockTheater() }) }, finish_reason: "stop" }] }) + "\n\ndata: [DONE]\n\n" });
   });
   await page.locator(".theater-toggle").click();
-  await expect(page.frameLocator(".theater-frame").getByText("伞柄上的那点心思")).toBeVisible();
+  await expect(page.locator(".theater-structured").getByText("伞柄上的那点心思", { exact: true })).toBeVisible();
   await expect.poll(async () => (await readStore(page, "theaters"))[0]?.status).toBe("complete");
   expect(requests).toHaveLength(1);
   const prompt = JSON.stringify(requests[0]);
@@ -64,7 +81,7 @@ test("manual click makes one request with only target prose and settings, then r
   expect(prompt).not.toContain("傍晚，许知来到书店门口");
   await page.getByRole("button", { name: "收起小剧场", exact: true }).click();
   await page.locator(".theater-toggle").click();
-  await expect(page.frameLocator(".theater-frame").getByText("伞柄上的那点心思")).toBeVisible();
+  await expect(page.locator(".theater-structured").getByText("伞柄上的那点心思", { exact: true })).toBeVisible();
   expect(requests).toHaveLength(1);
   expect((await readStore(page, "events"))[0].text).not.toContain("MOCK");
 });
@@ -74,7 +91,7 @@ test("automatic theater shares the prose request and stays collapsed until opene
   let requests = 0;
   await page.route("https://theater.fixture.test/**", async (route) => {
     requests++;
-    await route.fulfill({ contentType: "text/event-stream", body: "data: " + JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ text: "MOCK 新正文，周屿把伞递了过去。", facts: [], theaterHtml: mockHtml }) }, finish_reason: "stop" }] }) + "\n\ndata: [DONE]\n\n" });
+    await route.fulfill({ contentType: "text/event-stream", body: "data: " + JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ text: "MOCK 新正文，周屿把伞递了过去。", facts: [], theater: mockTheater() }) }, finish_reason: "stop" }] }) + "\n\ndata: [DONE]\n\n" });
   });
   await page.getByRole("button", { name: "扩写这一刻", exact: true }).click();
   await expect(page.locator(".prose-event").last().locator(".event-text")).toHaveText("MOCK 新正文，周屿把伞递了过去。");
@@ -85,7 +102,7 @@ test("automatic theater shares the prose request and stays collapsed until opene
   expect(events.find((event) => event.id !== "theater-event").raw).not.toContain("伞柄上的那点心思");
   expect((await readStore(page, "theaters"))[0].raw).toContain("伞柄上的那点心思");
   await page.locator(".prose-event").last().locator(".theater-toggle").click();
-  await expect(page.frameLocator(".theater-frame").getByText("伞柄上的那点心思")).toBeVisible();
+  await expect(page.locator(".theater-structured").getByText("伞柄上的那点心思", { exact: true })).toBeVisible();
   expect(requests).toBe(1);
 });
 
@@ -94,7 +111,7 @@ test("story theater density persists for ordinary users and is sent with the the
   let requestBody = "";
   await page.route("https://theater.fixture.test/**", async (route) => {
     requestBody = JSON.stringify(route.request().postDataJSON());
-    await route.fulfill({ contentType: "text/event-stream", body: "data: " + JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ theaterHtml: mockHtml }) }, finish_reason: "stop" }] }) + "\n\ndata: [DONE]\n\n" });
+    await route.fulfill({ contentType: "text/event-stream", body: "data: " + JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ theater: mockTheater() }) }, finish_reason: "stop" }] }) + "\n\ndata: [DONE]\n\n" });
   });
   await page.getByRole("button", { name: "故事设置", exact: true }).click();
   await expect(page.getByLabel("小剧场丰富度", { exact: true })).toHaveValue("standard");
@@ -102,7 +119,7 @@ test("story theater density persists for ordinary users and is sent with the the
   await expect.poll(async () => (await readStore(page, "stories")).find((story) => story.id === "fixture-story")?.theaterDensity).toBe("rich");
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.locator(".theater-toggle").click();
-  await expect(page.frameLocator(".theater-frame").getByText("伞柄上的那点心思")).toBeVisible();
+  await expect(page.locator(".theater-structured").getByText("伞柄上的那点心思", { exact: true })).toBeVisible();
   expect(requestBody).toContain("【小剧场丰富度：丰富】");
   await page.getByRole("button", { name: "故事设置", exact: true }).click();
   await expect(page.getByLabel("小剧场丰富度", { exact: true })).toHaveValue("rich");
@@ -113,7 +130,7 @@ test("automatic prose rewrite folds its new theater even when the previous theat
   let requests = 0;
   await page.route("https://theater.fixture.test/**", async (route) => {
     requests++;
-    await route.fulfill({ contentType: "text/event-stream", body: "data: " + JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ text: "MOCK 自动重写正文。周屿把伞递了过去。", facts: [], theaterHtml: "<section><h2>MOCK 自动重写的小剧场</h2><p>伞又有了新的说法。</p></section>" }) }, finish_reason: "stop" }] }) + "\n\ndata: [DONE]\n\n" });
+    await route.fulfill({ contentType: "text/event-stream", body: "data: " + JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ text: "MOCK 自动重写正文。周屿把伞递了过去。", facts: [], theater: mockTheater("MOCK 自动重写的小剧场") }) }, finish_reason: "stop" }] }) + "\n\ndata: [DONE]\n\n" });
   });
   await page.locator(".theater-toggle").click();
   await expect(page.frameLocator(".theater-frame").getByText("伞柄上的那点心思")).toBeVisible();
@@ -125,34 +142,36 @@ test("automatic prose rewrite folds its new theater even when the previous theat
   await expect(page.locator("iframe")).toHaveCount(0);
   expect(requests).toBe(1);
   await page.locator(".theater-toggle").click();
-  await expect(page.frameLocator(".theater-frame").getByText("MOCK 自动重写的小剧场")).toBeVisible();
+  await expect(page.locator(".theater-structured").getByText("MOCK 自动重写的小剧场", { exact: true })).toBeVisible();
 });
 
-test("manual HTML streams while open and finishes without remounting after collapse", async ({ page }) => {
+test("manual structured columns stream while open and finish without remounting after collapse", async ({ page }) => {
   await seed(page);
-  await page.evaluate(() => {
+  await page.evaluate((data) => {
     const original = window.fetch;
     window.fetch = async (input, init) => {
       if (!String(input).includes("theater.fixture.test")) return original(input, init);
       const encoder = new TextEncoder();
       const stream = new ReadableStream({ start(controller) {
         const send = (content: string, finished = false) => controller.enqueue(encoder.encode("data: " + JSON.stringify({ choices: [{ delta: { content }, ...(finished ? { finish_reason: "stop" } : {}) }] }) + "\n\n"));
-        send('{"theaterHtml":"<section>MOCK 流式第一段');
-        (window as any).__finishTheater = () => { send('，全部到齐。</section>"}', true); controller.close(); };
+        send('{"theater":{"version":1,"sections":[' + JSON.stringify(data.sections[0]) + ',');
+        (window as any).__finishTheater = () => { send(JSON.stringify(data.sections[1]) + ']}}', true); controller.close(); };
         init?.signal?.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")), { once: true });
       } });
       return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
     };
-  });
+  }, mockTheater("MOCK 流式内容全部到齐"));
   await page.locator(".theater-toggle").click();
-  await expect(page.frameLocator(".theater-frame").getByText("MOCK 流式第一段")).toBeVisible();
+  await expect(page.locator(".theater-structured").getByText("后台的两句闲话", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "收起小剧场", exact: true }).click();
   await expect(page.locator("iframe")).toHaveCount(0);
+  await expect(page.locator(".theater-structured")).toHaveCount(0);
   await page.evaluate(() => (window as any).__finishTheater());
   await expect.poll(async () => (await readStore(page, "theaters"))[0]?.status).toBe("complete");
   await expect(page.locator("iframe")).toHaveCount(0);
   await page.locator(".theater-toggle").click();
-  await expect(page.frameLocator(".theater-frame").getByText("MOCK 流式第一段，全部到齐。")).toBeVisible();
+  await expect(page.locator(".theater-structured").getByText("MOCK 流式内容全部到齐", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "发送并生成回复", exact: true })).toBeVisible();
 });
 
 test("stopping automatic output retains the draft and lazily exposes its original combined response", async ({ page }) => {
@@ -225,7 +244,7 @@ test("after prose edits a failed regeneration keeps old theater labelled stale u
       await route.fulfill({ status: 503, json: { error: { message: "MOCK 暂时不可用" } } });
       return;
     }
-    await route.fulfill({ contentType: "text/event-stream", body: "data: " + JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ theaterHtml: "<section><h2>MOCK 新版小剧场</h2><p>这一次，伞已经放在了桌上。</p></section>" }) }, finish_reason: "stop" }] }) + "\n\ndata: [DONE]\n\n" });
+    await route.fulfill({ contentType: "text/event-stream", body: "data: " + JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ theater: mockTheater("MOCK 新版小剧场") }) }, finish_reason: "stop" }] }) + "\n\ndata: [DONE]\n\n" });
   });
   await page.locator(".prose-event").getByRole("button", { name: "编辑", exact: true }).click();
   await page.getByRole("dialog", { name: "修改这一刻" }).getByLabel("正文 / 消息").fill("周屿把伞放在桌上，松开了手。");
@@ -236,7 +255,7 @@ test("after prose edits a failed regeneration keeps old theater labelled stale u
   await expect(page.getByText("这次没能完成，先保留上一次的小剧场。")).toBeVisible();
   await expect(page.frameLocator(".theater-frame").getByText("伞柄上的那点心思")).toBeVisible();
   await page.getByRole("button", { name: "重新生成小剧场", exact: true }).click();
-  await expect(page.frameLocator(".theater-frame").getByText("MOCK 新版小剧场")).toBeVisible();
+  await expect(page.locator(".theater-structured").getByText("MOCK 新版小剧场", { exact: true })).toBeVisible();
   await expect(page.getByText("上一次的小剧场对应修改前的正文，暂时保留供参考。")).toHaveCount(0);
   const records = await readStore(page, "theaters");
   expect(records.find((record) => record.id === "theater-saved").html).toBe(mockHtml);

@@ -117,6 +117,10 @@ const response = (data: unknown, finish_reason = "stop") =>
   );
 const html =
   "<section><h3>主角们的吐槽</h3><p>阿岚低头看了看鞋。今天的雨倒是准时。</p></section>";
+const interactiveReply = { theater: { version: 1, sections: [{
+  id: "theater-roast", title: "主角们的吐槽", presentation: "dialogue", theme: "paper", html: "",
+  items: [{ id: "line1", author: "阿岚", badge: "", title: "低头看了看鞋", text: "今天的雨倒是准时。", quote: "", certainty: "fiction", replyTo: "", group: "", status: "", fields: [] }],
+}] } };
 
 beforeEach(async () => {
   await db.delete();
@@ -322,7 +326,7 @@ it("snapshots the selected density on each manual attempt", async () => {
 });
 
 it("shares one request for concurrent manual clicks and keeps theater content out of prose and memories", async () => {
-  const fetcher = vi.fn().mockResolvedValue(response({ theaterHtml: html }));
+  const fetcher = vi.fn().mockResolvedValue(response(interactiveReply));
   vi.stubGlobal("fetch", fetcher);
   const first = generateTheater("prose-a");
   const second = generateTheater("prose-a");
@@ -343,7 +347,7 @@ it("shares one request for concurrent manual clicks and keeps theater content ou
 it("creates a fresh attempt for regeneration and preserves the last successful result after a malformed response", async () => {
   const fetcher = vi
     .fn()
-    .mockResolvedValueOnce(response({ theaterHtml: html }))
+    .mockResolvedValueOnce(response(interactiveReply))
     .mockResolvedValueOnce(
       response({ theaterHtml: "<style>p{color:red}</style>" }),
     );
@@ -355,7 +359,7 @@ it("creates a fresh attempt for regeneration and preserves the last successful r
   expect(latest.id).not.toBe(success.id);
   expect(latest.previousId).toBe(success.id);
   expect(latest.status).toBe("failed");
-  expect((await db.theaters.get(success.id))?.html).toBe(html);
+  expect((await db.theaters.get(success.id))?.data).toEqual(interactiveReply.theater);
   expect((await db.theaters.get(latest.id))?.raw).toContain("<style>");
 });
 
@@ -413,7 +417,7 @@ it.each(["version", "role", "world"])(
         roles: [{ ...role, persona: "人设已经修改" }],
       });
     else await db.world.update(world.id, { text: "世界规则已经修改" });
-    resolve(response({ theaterHtml: html }));
+    resolve(response(interactiveReply));
     expect(await work).toBe("stale");
     expect((await db.theaters.toArray())[0].status).toBe("failed");
     expect((await db.events.get("prose-a"))?.text).toBe(
@@ -436,7 +440,7 @@ it("keeps the selected preset snapshot while it is edited during a request", asy
   await db.preferences.update("preferences", {
     theaterPresets: [{ id: "theater-roast", name: "改名", prompt: "改稿" }],
   });
-  resolve(response({ theaterHtml: html }));
+  resolve(response(interactiveReply));
   expect(await work).toBe("saved");
   expect((await db.theaters.toArray())[0].presets[0].name).toBe("主角们的吐槽");
 });
@@ -448,8 +452,8 @@ it("supports auto-generation helpers inside an existing transaction and refuses 
       target,
       builtInTheaterPresets.slice(0, 1),
     );
-    await updateTheaterAttempt(record.id, "raw", html);
-    expect(await finishTheaterAttempt(record.id, target, html, "raw")).toBe(
+    await updateTheaterAttempt(record.id, JSON.stringify(interactiveReply), "");
+    expect(await finishTheaterAttempt(record.id, target, "", JSON.stringify(interactiveReply))).toBe(
       true,
     );
   });
@@ -524,7 +528,7 @@ it("keeps combined prose and theater as interrupted drafts when stopped during f
   }
 });
 
-it("streams prose and a separate theater prefix from the same response without a follow-up request", async () => {
+it("keeps streamed legacy HTML without declaring an interactive theater complete or making a follow-up request", async () => {
   await db.stories.update(story.id, { theaterAuto: true, autoMemory: false });
   await db.profiles.update(profile.id, { stream: true });
   let controller!: ReadableStreamDefaultController<Uint8Array>;
@@ -564,7 +568,8 @@ it("streams prose and a separate theater prefix from the same response without a
   await work;
   expect(fetcher).toHaveBeenCalledTimes(1);
   const complete = (await db.theaters.get(live.id))!;
-  expect(complete.status).toBe("complete");
+  expect(complete.status).toBe("failed");
+  expect(complete.error).toContain("交互格式");
   expect(complete.raw).toBe(prefix + tail);
   expect(complete.html).toBe("<section><p>窗边还有一滴水。</p></section>");
   expect((await db.events.get(live.eventId))?.text).toBe(draft.text);
@@ -581,7 +586,7 @@ it("does not show a wrapped theater-first JSON prefix as prose while streaming",
 it("preserves the last successful theater after a prose edit and failed regeneration", async () => {
   const fetcher = vi
     .fn()
-    .mockResolvedValueOnce(response({ theaterHtml: html }))
+    .mockResolvedValueOnce(response(interactiveReply))
     .mockResolvedValueOnce(
       response({ theaterHtml: "<style>p{color:red}</style>" }),
     );
@@ -599,5 +604,5 @@ it("preserves the last successful theater after a prose edit and failed regenera
   const saved = (await db.theaters.get(previous.id))!;
   expect(saved.status).toBe("complete");
   expect(saved.sourceVersionId).toBe("version-a");
-  expect(saved.html).toBe(html);
+  expect(saved.data).toEqual(interactiveReply.theater);
 });

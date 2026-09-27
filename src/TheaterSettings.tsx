@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { db } from "./db";
 import { uid, type Preferences, type Story, type TheaterDensity, type TheaterPresentation, type TheaterPreset } from "./types";
-import { allTheaterPresets, builtInTheaterPresets, normalizeTheaterPresentation, selectedTheaterPresets } from "./theater-presets";
+import { allTheaterPresets, builtInTheaterPresets, normalizeTheaterPresentation, resolveTheaterPreset, restoreBuiltInTheaterPresentation, selectedTheaterPresets } from "./theater-presets";
 
 type EditableTheaterPreset = Omit<TheaterPreset, "presentation"> & {
   presentation: TheaterPresentation;
@@ -21,7 +21,7 @@ const theaterPresentations: ReadonlyArray<{
   { value: "evidence-board", label: "证据板", hint: "用来源、线索和可信程度整理细节。" },
   { value: "relationship-card", label: "关系卡", hint: "展示角色关系、触发点和未解决的问题。" },
   { value: "scene-board", label: "场景声画", hint: "用光线、声音、气味和空间整理场景氛围。" },
-  { value: "custom", label: "自由 HTML", hint: "由 AI 自由设计安全的 HTML 小剧场。" },
+  { value: "custom", label: "自由 HTML", hint: "静态阅读形式。由 AI 设计安全 HTML，不提供论坛回帖或身体部位切换；需要这些交互时请选择对应展示样式。" },
 ];
 
 function editablePresentation(value: unknown): TheaterPresentation {
@@ -32,15 +32,16 @@ function editablePresentation(value: unknown): TheaterPresentation {
     : "custom";
 }
 
-function editableTheaterPreset(preset: TheaterPreset): EditableTheaterPreset {
+export function editableTheaterPreset(preset: TheaterPreset): EditableTheaterPreset {
+  const resolved = resolveTheaterPreset(preset);
   return {
-    id: preset.id,
-    name: preset.name,
-    prompt: preset.prompt,
-    presentation: editablePresentation(
-      (preset as TheaterPreset & { presentation?: unknown }).presentation,
-    ),
+    ...resolved,
+    presentation: editablePresentation(resolved.presentation),
   };
+}
+
+export function copiedTheaterPreset(preset: TheaterPreset): EditableTheaterPreset {
+  return { ...editableTheaterPreset(preset), id: uid(), name: preset.name + "（副本）" };
 }
 
 function theaterPresentationLabel(value: unknown) {
@@ -48,7 +49,7 @@ function theaterPresentationLabel(value: unknown) {
 }
 
 function theaterPresentationHint(value: unknown) {
-  return theaterPresentations.find((item) => item.value === editablePresentation(value))?.hint || "由 AI 自由设计安全的 HTML 小剧场。";
+  return theaterPresentations.find((item) => item.value === editablePresentation(value))!.hint;
 }
 
 export function StoryTheaterSettings({ story, prefs, update }: {
@@ -128,7 +129,7 @@ export function TheaterPresetSettings({ prefs, notify }: { prefs: Preferences; n
   async function persist(next: EditableTheaterPreset[], message: string) {
     setSaving(true);
     setError("");
-    try { await db.preferences.update("preferences", { theaterPresets: next as TheaterPreset[] }); notify(message); setEditing(undefined); }
+    try { await db.preferences.update("preferences", { theaterPresets: next.map(resolveTheaterPreset) }); notify(message); setEditing(undefined); }
     catch { setError("预设没能保存，请再试一次。"); }
     finally { setSaving(false); }
   }
@@ -159,14 +160,17 @@ export function TheaterPresetSettings({ prefs, notify }: { prefs: Preferences; n
       <button onClick={() => setEditing({ id: uid(), name: "", prompt: "", presentation: "custom" })}><Plus size={16} />新建小剧场预设</button></div>
     <div className="style-preset-grid">
       {allTheaterPresets(prefs).map((preset) => {
-        const builtin = builtInTheaterPresets.some((item) => item.id === preset.id);
+        const builtin = builtInTheaterPresets.find((item) => item.id === preset.id);
         const overridden = builtin && custom.some((item) => item.id === preset.id);
         return <article className="style-preset-card" key={preset.id}>
           <span className="tag">{builtin ? overridden ? "内置 · 已修改" : "内置" : "自定义"}</span>
           <strong>{preset.name}</strong><p className="theater-preset-description">{preset.prompt}</p>
-          <p className="hint">展示样式：{theaterPresentationLabel((preset as TheaterPreset & { presentation?: unknown }).presentation)}</p>
+          <p className="hint">展示样式：{theaterPresentationLabel(preset.presentation)}{preset.presentation === "custom" ? " · 静态阅读，不含论坛回帖或身体部位切换" : ""}</p>
           <div className="row"><button onClick={() => setEditing(editableTheaterPreset(preset))}>编辑</button>
-            <button onClick={() => setEditing({ ...editableTheaterPreset(preset), id: uid(), name: preset.name + "（副本）" })}>复制</button>
+            <button onClick={() => setEditing(copiedTheaterPreset(preset))}>复制</button>
+            {builtin && preset.presentation !== builtin.presentation && <button disabled={saving} onClick={() => void persist([
+              ...custom.filter((item) => item.id !== preset.id), editableTheaterPreset(restoreBuiltInTheaterPresentation(preset)),
+            ], "已使用内置交互形式，名称和内容要求已保留；下次生成生效")}>使用内置交互形式</button>}
             {overridden && <button disabled={saving} onClick={() => void persist(custom.filter((item) => item.id !== preset.id), "已恢复内置小剧场预设")}>恢复内置</button>}
             {!builtin && <button disabled={saving} onClick={() => void removePreset(preset.id)}>删除</button>}
           </div>
@@ -183,6 +187,7 @@ export function TheaterPresetSettings({ prefs, notify }: { prefs: Preferences; n
         {theaterPresentations.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
       </select></label>
       <p className="hint">{theaterPresentationHint(editing.presentation)}</p>
+      <p className="hint">展示样式修改后对下一次生成生效，已保存的小剧场不会自动重新生成。</p>
       <div className="row"><button className="primary" disabled={saving || !editing.name.trim() || !editing.prompt.trim()}
         onClick={() => void persist([...custom.filter((item) => item.id !== editing.id), {
           ...editing,

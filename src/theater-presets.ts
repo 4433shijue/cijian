@@ -65,13 +65,33 @@ export const builtInTheaterPresets: TheaterPreset[] = [
   },
 ];
 
+// Resolve editable configuration by its original ID before cloning or import
+// remapping. Saved result snapshots must not be passed through this fallback.
+export function resolveTheaterPreset(preset: TheaterPreset): TheaterPreset {
+  const builtin = builtInTheaterPresets.find((item) => item.id === preset.id);
+  return {
+    ...preset,
+    presentation: preset.presentation === undefined
+      ? builtin?.presentation ?? "custom"
+      : normalizeTheaterPresentation(preset.presentation),
+  };
+}
+
+export function restoreBuiltInTheaterPresentation(preset: TheaterPreset): TheaterPreset {
+  const builtin = builtInTheaterPresets.find((item) => item.id === preset.id);
+  return resolveTheaterPreset({
+    ...preset,
+    presentation: builtin?.presentation ?? preset.presentation,
+  });
+}
+
 export function allTheaterPresets(prefs: Preferences): TheaterPreset[] {
   const merged = new Map(
     builtInTheaterPresets.map((preset) => [preset.id, preset]),
   );
   for (const preset of prefs.theaterPresets || [])
-    merged.set(preset.id, preset);
-  return [...merged.values()];
+    merged.set(preset.id, resolveTheaterPreset(preset));
+  return [...merged.values()].map(resolveTheaterPreset);
 }
 
 export function selectedTheaterPresets(story: Story, prefs: Preferences) {

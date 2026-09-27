@@ -19,10 +19,9 @@ import { preparePrefix, commitPrefix } from "./prefix-cache";
 import { prompt } from "./prompts";
 import { parseJSON, draftText, missingQuotes, topLevelString } from "./output";
 import { selectedTheaterPresets } from "./theater-presets";
-import { normalizeTheaterData } from "./theater-data";
 import {
   createTheaterAttempt, updateTheaterAttempt, finishTheaterAttempt,
-  failTheaterAttempt, rebindTheaterAttempt, validateTheaterHtml,
+  failTheaterAttempt, rebindTheaterAttempt, validateTheaterResponse,
 } from "./theater";
 export { parseJSON, draftText, checkQuotes } from "./output";
 const novelSchema = z.object({
@@ -253,9 +252,7 @@ async function runUnlocked(
     let theaterError = "";
     if (theaterId) {
       try {
-        const parsed = parseJSON(result.text);
-        if (parsed.theater !== undefined) normalizeTheaterData(parsed.theater, selectedTheaterPresets(s, prefs));
-        else theaterHtml = validateTheaterHtml(parsed.theaterHtml);
+        theaterHtml = validateTheaterResponse(result.text, selectedTheaterPresets(s, prefs)).html;
       }
       catch (error) { theaterError = error instanceof Error ? error.message : "小剧场未完整生成，可以单独重试。"; }
     }

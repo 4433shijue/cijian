@@ -36,8 +36,9 @@ function TheaterFrame({ html, presentations = [], reading }: { html: string; pre
     style={{ height }} onLoad={loaded} />;
 }
 
-function TheaterContent({ event, disabled, onBusyChange }: { event: SceneEvent; disabled: boolean; onBusyChange: (busy: boolean) => void }) {
+function TheaterContent({ event, disabled, onBusyChange, requestError }: { event: SceneEvent; disabled: boolean; onBusyChange: (busy: boolean) => void; requestError: string }) {
   const [readingError, setReadingError] = useState("");
+  const [rawOpen, setRawOpen] = useState(false);
   const record = useLiveQuery(async () => {
     if (!event.theater) return null;
     const current = await db.theaters.get(event.theater.id);
@@ -65,9 +66,12 @@ function TheaterContent({ event, disabled, onBusyChange }: { event: SceneEvent; 
     <p className="theater-presets-label">{shown.presets.map((preset) => `${preset.name} · ${presetPresentationLabel(preset.presentation)}`).join(" · ")}</p>
     {shown.sourceVersionId !== event.versionId && current.sourceVersionId === event.versionId &&
       <p className="review">上一次的小剧场对应修改前的正文，暂时保留供参考。</p>}
-    {current.error && <p className="error" role="alert">{current.error}</p>}
+    {current.error && current.error !== requestError && <p className="error" role="alert">{current.error}</p>}
     {failed && previous && <p className="hint">这次没能完成，先保留上一次的小剧场。</p>}
-    {failed && !previous && shown.html && <p className="hint">这是已经收到的部分内容。</p>}
+    {failed && !previous && (shown.html || shown.data?.sections.length) && <p className="hint">这是已经收到的内容，尚未通过本次生成检查。</p>}
+    {!shown.data?.sections.length && shown.html && <p className="review" data-testid="theater-readonly-notice">
+      这份小剧场是仅阅读内容，不能回帖或切换部位。选择论坛或身体状态卡后重新生成，收到交互格式才能参与。
+    </p>}
     <div className="theater-reading-tools" aria-label="小剧场阅读设置">
       <label><input type="checkbox" checked={settings.clarity} onChange={(change) => void read({ clarity: change.target.checked })} />清晰阅读</label>
       <label>字号<select aria-label="小剧场字号" value={settings.fontSize} onChange={(change) => void read({ fontSize: Number(change.target.value) })}>
@@ -84,6 +88,10 @@ function TheaterContent({ event, disabled, onBusyChange }: { event: SceneEvent; 
       <p className="hint">这次的小剧场正在生成，完成后会替换上面的内容。</p>
       {renderContent(current, false)}
     </>}
+    {!!current.raw && <details className="theater-interaction-raw" onToggle={(change) => setRawOpen(change.currentTarget.open)}>
+      <summary>查看这次小剧场的模型原始输出</summary>
+      {rawOpen && <pre>{current.raw}</pre>}
+    </details>}
   </>;
 }
 
@@ -130,7 +138,7 @@ export function TheaterPanel({ event, blocked = false }: { event: SceneEvent; bl
       {stale && <p className="review">正文已经修改，下面的小剧场仍对应旧版本。可以按当前正文重新生成。</p>}
       {pending && <p className="hint" role="status">正在生成小剧场，收起后仍会继续。</p>}
       {error && <p className="error" role="alert">{error}</p>}
-      <TheaterContent event={event} disabled={blocked || pending || event.status !== "complete"} onBusyChange={setInteractionPending} />
+      <TheaterContent event={event} disabled={blocked || pending || event.status !== "complete"} onBusyChange={setInteractionPending} requestError={error} />
       <div className="theater-actions">
         {pending ? <button onClick={() => event.status === "draft" ? stop(event.storyId) : stopTheater(event.id)}><Square size={14} />{event.status === "draft" ? "停止本次生成" : "停止生成"}</button> :
           event.status === "complete" && <button onClick={() => void ask()} disabled={!canGenerate}><RefreshCw size={14} />{event.theater ? "重新生成小剧场" : "生成小剧场"}</button>}

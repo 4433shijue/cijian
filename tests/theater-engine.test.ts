@@ -12,7 +12,10 @@ const profile: Profile = {
   stream: false, context: 64000, maxOutput: 4096, timeout: 10, remember: false,
 };
 const body = "周屿把伞放在门边，等雨停下来。";
-const html = '<style>.aside{color:teal}</style><section class="aside"><h2>主角们的吐槽</h2><p>番外独有标记，他已经看了三次天气预报。</p></section>';
+const theaterData = { version: 1, sections: [{
+  id: "theater-roast", title: "主角们的吐槽", presentation: "dialogue", theme: "forest", html: "",
+  items: [{ id: "line1", author: "周屿", badge: "", title: "", text: "番外独有标记，他已经看了三次天气预报。", quote: "", certainty: "fiction", replyTo: "", group: "", status: "", fields: [] }],
+}] };
 const response = (raw: string, finish_reason = "stop") => new Response(JSON.stringify({
   choices: [{ message: { content: raw }, finish_reason }],
 }), { headers: { "content-type": "application/json" } });
@@ -56,7 +59,7 @@ describe("separate streaming fields", () => {
 describe("one-request automatic theater", () => {
   it("saves canonical prose separately and keeps side content out of future history", async () => {
     const id = await story();
-    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(response(JSON.stringify({ text: body, facts: [], theaterHtml: html })));
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(response(JSON.stringify({ text: body, facts: [], theater: theaterData })));
     await run(id, "novel", "他放下伞。");
     expect(fetcher).toHaveBeenCalledTimes(1);
     const sent = JSON.parse(String(fetcher.mock.calls[0][1]?.body));
@@ -66,7 +69,7 @@ describe("one-request automatic theater", () => {
     expect(e.raw).not.toContain("番外独有标记");
     const theater = await db.theaters.get(e.theater!.id);
     expect(theater?.status).toBe("complete");
-    expect(theater?.html).toBe(html);
+    expect(theater?.data).toEqual(theaterData);
     expect(theater?.sourceVersionId).toBe(e.versionId);
     expect(await db.promptSessions.count()).toBe(0);
     await db.stories.update(id, { theaterAuto: false });
@@ -104,7 +107,7 @@ describe("one-request automatic theater", () => {
   });
   it("binds successful rewrites to the final retained event and version", async () => {
     const id = await story();
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () => response(JSON.stringify({ text: body, facts: [], theaterHtml: html })));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => response(JSON.stringify({ text: body, facts: [], theater: theaterData })));
     await run(id, "novel", "他放下伞。");
     const initial = (await db.events.toArray())[0];
     await run(id, "novel", "他将伞靠在墙上。", initial.id);

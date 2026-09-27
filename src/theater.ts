@@ -7,6 +7,7 @@ import { parseJSON, topLevelString } from "./output";
 import { prompt } from "./prompts";
 import {
   normalizeTheaterDensity,
+  resolveTheaterPreset,
   selectedTheaterPresets,
   theaterDensityInstruction,
   theaterInstruction,
@@ -24,6 +25,7 @@ import {
   type TheaterDensity,
   type TheaterPreset,
   type TheaterRecord,
+  type TheaterData,
   type WorldEntry,
 } from "./types";
 
@@ -37,6 +39,24 @@ export function validateTheaterHtml(value: unknown): string {
       "小剧场没有完整的 HTML 和可阅读内容，收到的内容已保留，请重试。",
     );
   return value.trim();
+}
+
+/** Compatibility for saved HTML must not declare a new interactive request complete. */
+export function validateTheaterResponse(
+  raw: string,
+  presets: TheaterPreset[],
+  fallbackHtml?: string,
+): { data?: TheaterData; html: string; text: string } {
+  const parsed = parseJSON(raw);
+  const effective = presets.map(resolveTheaterPreset);
+  if (parsed?.theater !== undefined) {
+    const data = normalizeTheaterData(parsed.theater, effective);
+    return { data, html: structuredTheaterHtml(data), text: structuredTheaterText(data) };
+  }
+  const html = validateTheaterHtml(parsed?.theaterHtml ?? fallbackHtml);
+  if (effective.some((preset) => preset.presentation !== "custom"))
+    throw Error("模型这次返回了仅阅读的 HTML，所选栏目需要交互格式。内容和原始输出已保留，请点击重新生成小剧场重试。不会自动补发请求。");
+  return { html, text: theaterText(html) };
 }
 
 export function buildTheaterContext(
@@ -190,7 +210,7 @@ export async function createTheaterAttempt(
       storyId: event.storyId,
       eventId: event.id,
       sourceVersionId: event.versionId,
-      presets: structuredClone(presets),
+      presets: structuredClone(presets.map(resolveTheaterPreset)),
       density: normalizeTheaterDensity(density ?? story.theaterDensity),
       html: "",
       text: "",
@@ -239,15 +259,9 @@ export async function finishTheaterAttempt(
     let validationError = "";
     let data = record.data;
     try {
-      let parsed;
-      try { parsed = parseJSON(raw); } catch { /* Legacy callers may retain plain raw text. */ }
-      if (parsed?.theater !== undefined) {
-        data = normalizeTheaterData(parsed.theater, record.presets);
-        html = structuredTheaterHtml(data);
-      } else {
-        data = undefined;
-        html = validateTheaterHtml(html);
-      }
+      const result = validateTheaterResponse(raw, record.presets, html);
+      data = result.data;
+      html = result.html;
     } catch (error) {
       validationError = String(error);
     }
@@ -450,9 +464,9 @@ export function generateTheater(eventId: string): Promise<Outcome> {
         if (control.signal.aborted) throw Error("已停止小剧场生成");
         if (!result.complete)
           throw Error("小剧场未完整结束 · " + result.reason);
-        const parsed = parseJSON(raw);
-        if (parsed?.theater !== undefined) normalizeTheaterData(parsed.theater, presets);
-        else html = validateTheaterHtml(parsed?.theaterHtml);
+        // The streaming write already saved received HTML/raw for manual recovery.
+        const validated = validateTheaterResponse(raw, attempt.presets);
+        html = validated.html;
         return await db.transaction(
           "rw",
           [...tables, db.world],

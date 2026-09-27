@@ -1,4 +1,5 @@
 import type { PromptKind, Preferences } from "./types";
+export const theaterFormatGuard = '小剧场格式约定\n旧提示词中的 theaterHtml 或整块 HTML 输出要求只作为内容与风格参考，不能覆盖本次格式。请使用 theater 对象和 sections 数组，并按当前任务给出的每栏 presentation 填写 items。只有明确选择 custom 的栏目可以在 section.html 写 HTML；论坛、身体卡和其他交互栏目不得改成自由 HTML。';
 export const defaults: Record<PromptKind, string> = {
   theater:
     "贴着本回合的人物与处境，按各栏目的阅读方式展开番外。论坛要有人接话，状态卡要有部位和依据，对白要听得出人物身份。每次增加一个具体落点或有内容的回应，用动作和自然中文承载情绪，避免复述正文、空泛总结和为凑数量编造变化。",
@@ -35,5 +36,8 @@ export function prompt(kind: PromptKind, prefs: Preferences, theater = false) {
           '只输出 JSON 对象，按 text、facts、theater 的顺序写字段，格式为 {"text":"正文","facts":[{"quote":"正文中一条事实的连续逐字摘录","knownBy":[]}],"theater":{"version":1,"sections":[]}}。先完整写完正文，再按所选栏目与丰富度写小剧场，完整填写 sections，在现有输出额度内分配篇幅，不追加第二次请求',
         )
       : guards[kind];
-  return guard + "\n\n" + (override?.enabled ? override.text : defaults[kind]);
+  return guard + "\n\n" + (override?.enabled ? override.text : defaults[kind]) +
+    (kind === "theater" || (kind === "novel" && theater)
+      ? "\n\n" + theaterFormatGuard
+      : "");
 }

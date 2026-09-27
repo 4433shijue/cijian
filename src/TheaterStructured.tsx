@@ -71,7 +71,7 @@ function TheaterEntry({ item, section, record, event, canRequest, floor, onReply
       <button type="button" aria-pressed={liked} onClick={() => void react("likes")}><Heart size={14} fill={liked ? "currentColor" : "none"} />{liked ? "已赞" : "赞"}</button>
       <button type="button" aria-pressed={bookmarked} onClick={() => void react("bookmarks")}><Bookmark size={14} fill={bookmarked ? "currentColor" : "none"} />{bookmarked ? "已收藏" : "收藏"}</button>
       {onReply && <button type="button" onClick={() => onReply(item.id)} disabled={!canRequest}><MessageCircle size={14} />回复此楼</button>}
-      {item.origin !== "user" && item.status !== "unmentioned" && <button type="button" onClick={() => onExpand(item.id)} disabled={!canRequest}><Plus size={14} />细写此项 · AI</button>}
+      {section.presentation !== "custom" && item.origin !== "user" && item.status !== "unmentioned" && <button type="button" onClick={() => onExpand(item.id)} disabled={!canRequest}><Plus size={14} />细写此项 · AI</button>}
     </footer>
   </article>;
 }
@@ -245,7 +245,7 @@ function TheaterSectionView({ section, record, event, disabled, onBusyChange, re
       <div><span className="theater-note">留言和观众回复只留在小剧场里。</span><button type="submit" className="theater-primary" disabled={!canRequest || !draft.trim()}><MessageCircle size={15} />发送并生成回复</button></div>
     </form>}
 
-    {section.presentation === "custom" ? <p className="theater-note">本栏保留自由排版。选择论坛或卡片展示样式后，可以继续追加互动。</p> : <div className="theater-expand-tools">
+    {section.presentation === "custom" ? <p className="theater-note" data-testid="theater-custom-notice">本栏为自由 HTML，仅阅读。选择论坛或卡片展示样式并重新生成交互格式后，可以继续参与。</p> : <div className="theater-expand-tools">
       <details><summary>指定补充方向</summary><label>想多看一点什么<textarea rows={2} maxLength={2000} value={direction} onChange={(change) => setDirection(change.target.value)} placeholder={isBody ? "例如，细写双手的动作和呼吸，别补出未写明的伤势。" : "例如，让两位观众就刚才的动作再讨论几句。"} /></label></details>
       <button type="button" onClick={() => expand()} disabled={!canRequest}><Plus size={15} />{isForum ? "追加讨论 · AI" : "追加本栏 · AI"}</button>
       <span className="theater-note">点击生成才调用 AI，追加失败也会保留原内容。</span>

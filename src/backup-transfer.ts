@@ -1,6 +1,6 @@
 import Dexie, { type Table } from "dexie";
 import { db } from "./db";
-import { recordSchemas, mergeTheaterPresets, normalizeTheaterPreset, remapTheaterContent } from "./backup";
+import { recordSchemas, mergeTheaterPresets, normalizeTheaterPresetSnapshot, remapTheaterContent } from "./backup";
 import { samplingParameters } from "./sampling";
 import { uid, type Preferences, type Role, type Story } from "./types";
 import { BackupParser, READ_CHUNK_BYTES } from "./backup-parser";
@@ -371,7 +371,7 @@ export function backupRemapper() {
             previousId: x.previousId ? id(x.previousId) : undefined,
             density: x.density ?? "standard",
             presets: x.presets.map((preset: any) => ({
-              ...normalizeTheaterPreset(preset),
+              ...normalizeTheaterPresetSnapshot(preset),
               id: theaterPresetIds.get(preset.id) || preset.id,
             })),
             status: x.status === "running" ? "interrupted" : x.status,
