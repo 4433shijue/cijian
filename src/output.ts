@@ -1,5 +1,5 @@
 import type { PromptKind } from "./types";
-import { theaterOutputSchema } from "./theater-data";
+import { htmlOutputSchema } from "./theater-html";
 
 const unwrap = (raw: string) =>
   raw
@@ -204,11 +204,11 @@ const fact = object({ quote: string, knownBy: array(string) });
 export const novelTheaterSchema = object({
   text: string,
   facts: array(fact),
-  theater: theaterOutputSchema,
+  theater: htmlOutputSchema,
 });
 export const outputSchemas: Record<PromptKind, ReturnType<typeof object>> = {
   novel: object({ text: string, facts: array(fact) }),
-  theater: object({ theater: theaterOutputSchema }),
+  theater: object({ theater: htmlOutputSchema }),
   chat: object({ messages: array(string) }),
   facts: object({ facts: array(fact) }),
   memory: object({ text: string }),

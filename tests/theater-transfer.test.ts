@@ -228,8 +228,8 @@ it.each(["legacy", "stream"])("imports version 2 HTML-only backups and exports t
   const copied = (await db.theaters.where("storyId").equals(copy.id).first())!;
   expect(copied.html).toBe(theater.html);
   expect(copied.data).toBeUndefined();
-  expect((await exportBackup()).version).toBe(3);
-  expect(JSON.parse(await (await exportBackupBlob(uid(), copy.id)).blob.text()).version).toBe(3);
+  expect((await exportBackup()).version).toBe(4);
+  expect(JSON.parse(await (await exportBackupBlob(uid(), copy.id)).blob.text()).version).toBe(4);
   for (const version of [2, 3]) {
     const broken = { ...value, version, theaters: undefined };
     expect(() => validateBackup(broken)).toThrow(/theaters/);
@@ -335,7 +335,7 @@ it("serializes inherited built-in configuration in every export without upgradin
     JSON.parse(await (await exportBackupBlob(uid(), story.id)).blob.text()),
   ];
   for (const output of exports) {
-    expect(output.version).toBe(3);
+    expect(output.version).toBe(4);
     expect(output.preferences[0].theaterPresets).toEqual([{ ...preset, presentation: "forum" }, explicit]);
     expect(output.theaters[0].presets).toEqual([preset]);
     expect(output.theaters[0].html).toBe(theater.html);
@@ -439,7 +439,7 @@ it.each(["legacy", "stream"])("round-trips theater versions, fallback IDs, prese
   await db.theaters.put(attempt);
   await db.events.update(event.id, { theater: { id: attempt.id, sourceVersionId: event.versionId, status: "running", previousId: theater.id } });
   const value = await exportBackup();
-  expect(value.version).toBe(3);
+  expect(value.version).toBe(4);
   await initialize();
   await db.preferences.update("preferences", { theaterPresets: [{ ...preset, prompt: "本机刚修改的要求" }] });
   if (method === "legacy") await importBackup(value);
@@ -532,7 +532,7 @@ it("single-story backups carry selected and historical presets but omit unrelate
   await db.stories.add(other);
   const output = await exportBackupBlob(uid(), story.id);
   const value = JSON.parse(await output.blob.text());
-  expect(value.version).toBe(3);
+  expect(value.version).toBe(4);
   expect(value.stories.map((s: any) => s.id)).toEqual([story.id]);
   expect(value.theaters).toHaveLength(1);
   expect(value.preferences[0].theaterPresets.map((p: any) => p.id).sort()).toEqual([preset.id, historical.id].sort());

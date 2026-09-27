@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { db } from "./db";
-import { uid, type TheaterPreset, type TheaterRecord } from "./types";
+import { uid, type TheaterPreset, type TheaterRecord, type TheaterState } from "./types";
 import { samplingParameters } from "./sampling";
 import { builtInTheaterPresets, normalizeTheaterPresentation, resolveTheaterPreset } from "./theater-presets";
 import { theaterDataSchema } from "./theater-data";
+import { htmlPageSchema, validateHtmlState } from "./theater-html";
 const str = z.string(),
   ids = z.array(str),
   aud = z.enum(["all", "roles", "author"]);
@@ -56,6 +57,7 @@ const theaterPresetSnapshot = z.object({
   name: str.min(1),
   prompt: str,
   presentation: theaterPresentation.optional(),
+  experience: str.optional(),
 });
 const theaterPresetConfig = theaterPresetSnapshot.transform(resolveTheaterPreset);
 const theater = z.object({
@@ -92,11 +94,21 @@ const theater = z.object({
     updated: z.number().finite(),
   }).optional(),
   revision: z.number().int().nonnegative().safe().optional(),
+  htmlPages: z.array(htmlPageSchema).min(1).max(32).optional(),
+  htmlStates: z.record(z.custom<TheaterState>((value) => { try { validateHtmlState(value); return true; } catch { return false; } })).optional(),
+  htmlText: z.record(str.max(200000)).optional(),
+  htmlHistory: z.array(z.object({ pageId: str, html: str.max(2000000), requestId: str, created: z.number() })).optional(),
 }).superRefine((record, context) => {
   const sections = record.data?.sections ?? [];
   const presetIds = new Set(record.presets.map((preset) => preset.id));
   if (sections.some((section) => !presetIds.has(section.id)))
     context.addIssue({ code: "custom", message: "小剧场栏目与预设关联无效", path: ["data"] });
+  const pages = record.htmlPages || [];
+  const pageIds = new Set(pages.map((page) => page.id));
+  if (pageIds.size !== pages.length || pages.some((page) => !presetIds.has(page.id)) ||
+      Object.keys(record.htmlStates || {}).some((id) => !pageIds.has(id)) || Object.keys(record.htmlText || {}).some((id) => !pageIds.has(id)) ||
+      record.htmlHistory?.some((item) => !pageIds.has(item.pageId)))
+    context.addIssue({ code: "custom", message: "HTML 小剧场栏目或状态关联无效", path: ["htmlPages"] });
   const itemKeys = new Set(sections.flatMap((section) => section.items.map((item) => section.id + "/" + item.id)));
   for (const field of ["likes", "bookmarks"] as const)
     if (record[field]?.some((key) => !itemKeys.has(key)))
@@ -106,7 +118,7 @@ const theater = z.object({
   if (record.interaction) {
     const interaction = record.interaction;
     const section = sections.find((section) => section.id === interaction.sectionId);
-    if (!section || [interaction.itemId, interaction.userItemId].some((id) => id && !section.items.some((item) => item.id === id)))
+    if ((!section && !pageIds.has(interaction.sectionId)) || [interaction.itemId, interaction.userItemId].some((id) => id && !section?.items.some((item) => item.id === id)))
       context.addIssue({ code: "custom", message: "小剧场追加内容关联无效", path: ["interaction"] });
   }
 });
@@ -285,7 +297,7 @@ export const recordSchemas = {
 };
 const schema = z.object({
   format: z.literal("little-scene"),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
   created: str,
   roles: z.array(role),
   stories: z.array(story),
@@ -314,7 +326,7 @@ export function normalizeTheaterPresetSnapshot(
 // Item IDs and reply links live inside each saved result. Only preset/section
 // identities change when a copied backup keeps a conflicting local preset.
 export function remapTheaterContent(
-  record: Pick<TheaterRecord, "data" | "likes" | "bookmarks" | "replyDrafts" | "interaction">,
+  record: Pick<TheaterRecord, "data" | "likes" | "bookmarks" | "replyDrafts" | "interaction" | "htmlPages" | "htmlStates" | "htmlText" | "htmlHistory">,
   presetIds: ReadonlyMap<string, string>,
 ) {
   const sectionId = (id: string) => presetIds.get(id) || id;
@@ -322,6 +334,10 @@ export function remapTheaterContent(
     section.items.map((item) => [section.id + "/" + item.id, sectionId(section.id) + "/" + item.id] as const),
   ));
   return {
+    htmlPages: record.htmlPages?.map((page) => ({ ...page, id: sectionId(page.id) })),
+    htmlStates: record.htmlStates && Object.fromEntries(Object.entries(record.htmlStates).map(([id, value]) => [sectionId(id), value])),
+    htmlText: record.htmlText && Object.fromEntries(Object.entries(record.htmlText).map(([id, value]) => [sectionId(id), value])),
+    htmlHistory: record.htmlHistory?.map((item) => ({ ...item, pageId: sectionId(item.pageId) })),
     data: record.data && {
       ...record.data,
       sections: record.data.sections.map((section) => ({ ...section, id: sectionId(section.id) })),
@@ -526,7 +542,7 @@ export async function exportBackup() {
     ],
     async () => ({
       format: "little-scene",
-      version: 3,
+      version: 4,
       created: new Date().toISOString(),
       roles: await db.roles.toArray(),
       stories: (await db.stories.toArray()).map(

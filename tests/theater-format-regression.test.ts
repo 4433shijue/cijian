@@ -84,15 +84,15 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("fresh theater response format boundary", () => {
-  it.each(builtInTheaterPresets)("rejects legacy all-HTML output for $id", (preset) => {
-    const validate = () => validateTheaterResponse(JSON.stringify({ theaterHtml: legacyHtml }), [preset]);
-    expect(validate).toThrow("仅阅读");
-    expect(validate).toThrow("交互格式");
+  it.each(builtInTheaterPresets)("accepts free HTML output for $id", (preset) => {
+    const result = validateTheaterResponse(JSON.stringify({ theaterHtml: legacyHtml }), [preset]);
+    expect(result.htmlPages).toEqual([{id: preset.id, title: preset.name, html: legacyHtml}]);
   });
 
-  it("rejects all-HTML output when only one selected column needs interactions", () => {
-    expect(() => validateTheaterResponse(JSON.stringify({ theaterHtml: legacyHtml }), [custom, forum]))
-      .toThrow("交互格式");
+  it("preserves combined HTML fallback for mixed selections", () => {
+    const result = validateTheaterResponse(JSON.stringify({ theaterHtml: legacyHtml }), [custom, forum]);
+    expect(result.htmlPages?.[0].html).toBe(legacyHtml);
+    expect(result.htmlPages?.[0].title).toContain(forum.name);
   });
 
   it("accepts explicitly custom HTML both in the response envelope and as a caller-provided fallback", () => {
@@ -144,7 +144,7 @@ describe("automatic output retains canonical prose on theater failure", () => {
     await db.preferences.update("preferences", { prompts: { ...prefs.prompts, theater: { enabled: true, text: legacyOverride } } });
     const context = await preview(story.id, "novel", "他把伞放下。");
     expect(context.system).toContain(legacyOverride);
-    expect(context.system.lastIndexOf("小剧场格式约定")).toBeGreaterThan(context.system.lastIndexOf(legacyOverride));
+    expect(context.system.lastIndexOf("小剧场输出约定")).toBeGreaterThan(context.system.lastIndexOf(legacyOverride));
   });
 
   it.each<Protocol>(["chat", "responses", "claude", "gemini"])("keeps completed prose with one request on the %s protocol", async (protocol) => {
@@ -159,8 +159,8 @@ describe("automatic output retains canonical prose on theater failure", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(event).toMatchObject({ text: body, status: "complete" });
     expect(event.raw).not.toContain("仅阅读内容独有标记");
-    expect(theater.status).toBe("failed");
-    expect(theater.error).toContain("交互格式");
+    expect(theater.status).toBe("complete");
+    expect(theater.htmlPages?.[0].html).toBe(legacyHtml);
     expect(theater.raw).toContain("仅阅读内容独有标记");
     expect(await db.promptSessions.count()).toBe(0);
     const sent = JSON.parse(String(fetcher.mock.calls[0][1]?.body));
@@ -189,9 +189,9 @@ it("preserves a previously saved static record when new generation fails, and al
   const old = { id: "old-static", storyId: story.id, eventId: event.id, sourceVersionId: event.versionId, presets: [forum], html: legacyHtml, text: "旧版已保存内容", raw: JSON.stringify({ theaterHtml: legacyHtml }), status: "complete" as const, error: "", created: 1, updated: 1 };
   await db.theaters.put(old);
   const fetcher = vi.spyOn(globalThis, "fetch")
-    .mockResolvedValueOnce(response({ theaterHtml: legacyHtml }))
+    .mockResolvedValueOnce(response({ theaterHtml: "<style>body{color:red}</style>" }))
     .mockResolvedValueOnce(response({ theater: data() }));
-  await expect(generateTheater(event.id)).rejects.toThrow("交互格式");
+  await expect(generateTheater(event.id)).rejects.toThrow();
   expect(fetcher).toHaveBeenCalledTimes(1);
   const failed = await db.theaters.get((await db.events.get(event.id))!.theater!.id);
   expect(failed).toMatchObject({ status: "failed", previousId: old.id });

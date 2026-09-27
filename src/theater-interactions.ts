@@ -27,7 +27,7 @@ export async function saveTheaterReading(recordId: string, patch: Partial<{ clar
   await db.transaction("rw", db.theaters, async () => {
     const record = await db.theaters.get(recordId);
     if (!record) return;
-    const reading = { clarity: true, fontSize: 16, ...record.reading, ...patch };
+    const reading = { clarity: !record.htmlPages, fontSize: 16, ...record.reading, ...patch };
     reading.fontSize = Number.isFinite(reading.fontSize) ? Math.max(16, Math.min(24, Math.round(reading.fontSize))) : 16;
     await db.theaters.update(record.id, { reading });
   });
@@ -157,7 +157,7 @@ export function interactWithTheater(recordId: string, sectionId: string, kind: "
           await db.jobs.add({ id: interactionId, storyId: story.id, eventId: event!.id, inputVersion: event!.versionId, kind: "theater", status: "running", created: Date.now(), error: "" });
         });
         let last = 0;
-        const result = await generate(profile, key, context.system, context.user, control.signal, (value) => {
+        const result = await generate(profile, key, context.system + "\n本次正在维护旧版结构化栏目，按当前追加任务的 version:1 / items 格式返回，不改成 HTML。", context.user, control.signal, (value) => {
           raw = value;
           if (Date.now() - last < 200) return;
           last = Date.now();

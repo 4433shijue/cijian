@@ -13,7 +13,8 @@ import {
   theaterInstruction,
 } from "./theater-presets";
 import { theaterText } from "./theater-text";
-import { normalizeTheaterData, parseStreamingTheater, structuredTheaterHtml, structuredTheaterText } from "./theater-data";
+import { normalizeTheaterData, parseStreamingTheater, parseStreamingHtml, structuredTheaterHtml, structuredTheaterText } from "./theater-data";
+import { normalizeHtmlDocument, htmlPagesText } from "./theater-html";
 import {
   uid,
   type ContextReport,
@@ -26,6 +27,7 @@ import {
   type TheaterPreset,
   type TheaterRecord,
   type TheaterData,
+  type TheaterHtmlPage,
   type WorldEntry,
 } from "./types";
 
@@ -41,22 +43,27 @@ export function validateTheaterHtml(value: unknown): string {
   return value.trim();
 }
 
-/** Compatibility for saved HTML must not declare a new interactive request complete. */
+/** The envelope identifies columns; their HTML/JS/CSS is authored freely by the model. */
 export function validateTheaterResponse(
   raw: string,
   presets: TheaterPreset[],
   fallbackHtml?: string,
-): { data?: TheaterData; html: string; text: string } {
+): { data?: TheaterData; htmlPages?: TheaterHtmlPage[]; html: string; text: string } {
   const parsed = parseJSON(raw);
   const effective = presets.map(resolveTheaterPreset);
+  if (parsed?.theater?.version === 2) {
+    const { sections } = normalizeHtmlDocument(parsed.theater, effective);
+    return { htmlPages: sections, html: sections.map((page) => page.html).join("\n"), text: htmlPagesText(sections) };
+  }
   if (parsed?.theater !== undefined) {
     const data = normalizeTheaterData(parsed.theater, effective);
     return { data, html: structuredTheaterHtml(data), text: structuredTheaterText(data) };
   }
   const html = validateTheaterHtml(parsed?.theaterHtml ?? fallbackHtml);
-  if (effective.some((preset) => preset.presentation !== "custom"))
-    throw Error("模型这次返回了仅阅读的 HTML，所选栏目需要交互格式。内容和原始输出已保留，请点击重新生成小剧场重试。不会自动补发请求。");
-  return { html, text: theaterText(html) };
+  // Legacy whole-document replies also run in the new sandbox. They are one
+  // combined page, not guessed or split by prescribed tags or class names.
+  const htmlPages = [{ id: effective[0]?.id || "theater", title: effective.map((p) => p.name).join(" · ") || "小剧场", html }];
+  return { htmlPages, html, text: htmlPagesText(htmlPages) };
 }
 
 export function buildTheaterContext(
@@ -236,11 +243,13 @@ export async function updateTheaterAttempt(
     const record = await db.theaters.get(recordId);
     if (!record || record.status !== "running") return;
     const data = parseStreamingTheater(raw, record.presets);
+    const pages = parseStreamingHtml(raw, record.presets)?.sections;
     await db.theaters.update(recordId, {
       raw,
       html,
       ...(data ? { data } : {}),
-      text: data ? structuredTheaterText(data) : theaterText(html),
+      ...(pages ? { htmlPages: pages } : {}),
+      text: pages ? htmlPagesText(pages) : data ? structuredTheaterText(data) : theaterText(html),
       updated: Date.now(),
     });
   });
@@ -258,14 +267,16 @@ export async function finishTheaterAttempt(
     const current = await db.events.get(event.id);
     let validationError = "";
     let data = record.data;
+    let htmlPages = record.htmlPages;
     try {
       const result = validateTheaterResponse(raw, record.presets, html);
       data = result.data;
+      htmlPages = result.htmlPages;
       html = result.html;
     } catch (error) {
       validationError = String(error);
     }
-    const text = data ? structuredTheaterText(data) : theaterText(html);
+    const text = htmlPages ? htmlPagesText(htmlPages) : data ? structuredTheaterText(data) : theaterText(html);
     const valid =
       !!current &&
       !current.deleted &&
@@ -281,6 +292,7 @@ export async function finishTheaterAttempt(
     const next: TheaterRecord = {
       ...record,
       data,
+      htmlPages,
       html,
       text,
       raw,

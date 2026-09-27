@@ -183,9 +183,9 @@ it("uses standard density by default and keeps density guidance separate from HT
   expect(normalizeTheaterDensity("invalid")).toBe("standard");
   expect(normalizeTheaterDensity("light")).toBe("light");
   expect(normalizeTheaterDensity("rich")).toBe("rich");
-  expect(theaterDensityInstruction("light")).toContain("一个具体动作或台词");
+  expect(theaterDensityInstruction("light")).toContain("内容短而完整");
   expect(theaterDensityInstruction("rich")).toContain(
-    "关系位置、信息理解或情绪变化",
+    "逐层探索",
   );
   const instruction = theaterInstruction([
     builtInTheaterPresets[2],
@@ -194,11 +194,11 @@ it("uses standard density by default and keeps density guidance separate from HT
   expect(instruction.indexOf("【话外之音】")).toBeLessThan(
     instruction.indexOf("【主角们的吐槽】"),
   );
-  expect(instruction).toContain("本节写法要求");
+  expect(instruction).toContain("本栏编号");
   expect(instruction).toContain("不使用 Markdown 围栏");
 });
 
-it("assigns presentation structures to built-in theater presets", () => {
+it("retains legacy presentation metadata while suggesting free experiences", () => {
   expect(builtInTheaterPresets.map((preset) => preset.presentation)).toEqual([
     "dialogue",
     "detail-list",
@@ -214,14 +214,14 @@ it("assigns presentation structures to built-in theater presets", () => {
   expect(presetPresentationLabel(undefined)).toBe("自定义展示");
 
   const forum = presentationInstruction("forum");
-  expect(forum).toContain("楼主首楼");
-  expect(forum).toContain("楼中楼");
-  expect(forum).toContain("当前回合已公开内容");
-  expect(forum).toContain("猜测不得写成结论");
+  expect(forum).toContain("不同观众");
+  expect(forum).toContain("彼此回应");
+  expect(forum).toContain("界面与交互由你设计");
+  expect(forum).not.toContain("items");
 
   const body = presentationInstruction("body-status");
-  expect(body).toContain("身体部位分项");
-  expect(body).toContain("本回合未提及");
+  expect(body).toContain("逐部位");
+  expect(body).toContain("未确定之处");
 });
 
 it("extracts readable HTML text without code, resource URLs, hidden metadata, or entity artifacts", () => {
@@ -528,7 +528,7 @@ it("keeps combined prose and theater as interrupted drafts when stopped during f
   }
 });
 
-it("keeps streamed legacy HTML without declaring an interactive theater complete or making a follow-up request", async () => {
+it("accepts streamed HTML into the free runtime without a follow-up request", async () => {
   await db.stories.update(story.id, { theaterAuto: true, autoMemory: false });
   await db.profiles.update(profile.id, { stream: true });
   let controller!: ReadableStreamDefaultController<Uint8Array>;
@@ -568,8 +568,8 @@ it("keeps streamed legacy HTML without declaring an interactive theater complete
   await work;
   expect(fetcher).toHaveBeenCalledTimes(1);
   const complete = (await db.theaters.get(live.id))!;
-  expect(complete.status).toBe("failed");
-  expect(complete.error).toContain("交互格式");
+  expect(complete.status).toBe("complete");
+  expect(complete.htmlPages).toHaveLength(1);
   expect(complete.raw).toBe(prefix + tail);
   expect(complete.html).toBe("<section><p>窗边还有一滴水。</p></section>");
   expect((await db.events.get(live.eventId))?.text).toBe(draft.text);

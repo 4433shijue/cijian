@@ -52,7 +52,8 @@ describe("separate streaming fields", () => {
     expect(plain).not.toContain("theaterHtml");
     expect(combined).toContain('"theater"');
     expect(manual).toContain('"theater"');
-    expect(combined).toContain('"replyTo"');
+    expect(combined).toContain('"html"');
+    expect(combined).not.toContain('"replyTo"');
   });
 });
 

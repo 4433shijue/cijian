@@ -524,7 +524,7 @@ export async function exportBackupBlob(
       await writer.write(
         JSON.stringify({
           format: "little-scene",
-          version: 3,
+          version: 4,
           created: new Date().toISOString(),
           scope: s ? "story" : "library",
           ...(s ? { title: s.title } : {}),

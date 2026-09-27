@@ -347,17 +347,18 @@ it("uses strict complete object schemas for combined and manual output across pr
 });
 
 it("gives distinct density guidance, observable body evidence and one combined request", () => {
-  expect(theaterDensityInstruction("light")).toContain("4～5层");
-  expect(theaterDensityInstruction("standard")).toContain("7～9层");
-  expect(theaterDensityInstruction("rich")).toContain("10～14层");
+  expect(theaterDensityInstruction("light")).toContain("内容短而完整");
+  expect(theaterDensityInstruction("standard")).toContain("适量可展开");
+  expect(theaterDensityInstruction("rich")).toContain("逐层探索");
   expect(theaterWriting).not.toContain("短番外");
   const instruction = theaterInstruction([forum, body]);
-  expect(instruction).toContain('id="theater-audience"');
-  expect(instruction).toContain("replyTo");
-  expect(instruction).toContain("只讨论当前回合已公开内容");
+  expect(instruction).toContain('本栏编号 "theater-audience"');
+  expect(instruction).toContain("cijian.generate");
+  expect(instruction).not.toContain("replyTo");
+  expect(instruction).toContain("只能知道当前回合已经公开的内容");
   expect(instruction).toContain("左");
   expect(instruction).toContain("脚踝");
-  expect(instruction).toContain("不能把没提到写成正常");
+  expect(instruction).toContain("不能证明本回合没写到的部位处于正常状态");
   expect(instruction).not.toContain("theaterHtml");
   const prefs = {
     id: "preferences" as const,
@@ -369,6 +370,6 @@ it("gives distinct density guidance, observable body evidence and one combined r
   expect(prompt("novel", prefs, true)).toContain("不追加第二次请求");
   expect(prompt("novel", prefs, true)).not.toContain("简短的小剧场");
   expect(prompt("theater", prefs)).toContain(
-    '"theater":{"version":1,"sections":[]}',
+    '"theater":{"version":2,"sections":[]}',
   );
 });

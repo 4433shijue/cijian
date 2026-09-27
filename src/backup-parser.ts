@@ -166,10 +166,10 @@ export class BackupParser {
       throw Error("备份文件被截断，没有读到完整结尾");
     if (
       this.metadata.format !== "little-scene" ||
-      ![1, 2, 3].includes(this.metadata.version as number) ||
+      ![1, 2, 3, 4].includes(this.metadata.version as number) ||
       typeof this.metadata.created !== "string"
     )
-      throw Error("这不是支持的此间备份（需要 version 1、2 或 3）");
+      throw Error("这不是支持的此间备份（需要 version 1、2、3 或 4）");
     for (const key of backupTables.filter(
       (t) => t !== "chatBatches" && t !== "roleDrafts" && t !== "theaters",
     ))

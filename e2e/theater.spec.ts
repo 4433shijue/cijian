@@ -269,9 +269,9 @@ test("developer presets support create, edit, restore, selection and order; auto
   await settings.getByRole("button", { name: "新建小剧场预设" }).click();
   await settings.getByLabel("小剧场预设名称").fill("伞的独白");
   await settings.getByLabel("小剧场内容要求").fill("以这把伞的口吻，说两句旁白。");
-  await settings.getByLabel("小剧场专属展示样式").selectOption("forum");
+  await settings.getByLabel("视觉与交互偏好（可选）").fill("论坛式讨论，自由设计交互。");
   await settings.getByRole("button", { name: "保存小剧场预设" }).click();
-  await expect(settings.locator("article").filter({ has: page.getByText("伞的独白", { exact: true }) })).toContainText("论坛");
+  await expect(settings.locator("article").filter({ has: page.getByText("伞的独白", { exact: true }) })).toContainText("AI 自由设计 HTML 与交互");
   await settings.locator("article").filter({ has: page.getByText("伞的独白", { exact: true }) }).getByRole("button", { name: "复制", exact: true }).click();
   await expect(settings.getByLabel("小剧场预设名称")).toHaveValue("伞的独白（副本）");
   await expect(settings.getByLabel("小剧场内容要求")).toHaveValue("以这把伞的口吻，说两句旁白。");

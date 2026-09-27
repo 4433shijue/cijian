@@ -16,6 +16,7 @@ export interface TheaterPreset {
   name: string;
   prompt: string;
   presentation?: TheaterPresentation;
+  experience?: string;
 }
 export type TheaterDensity = "light" | "standard" | "rich";
 export type TheaterStatus = "running" | "complete" | "failed" | "interrupted";
@@ -45,6 +46,9 @@ export interface TheaterData {
   version: 1;
   sections: TheaterSection[];
 }
+export type TheaterState = null | boolean | number | string | TheaterState[] | { [key: string]: TheaterState };
+export interface TheaterHtmlPage { id: string; title: string; html: string }
+export interface TheaterHtmlDocument { version: 2; sections: TheaterHtmlPage[] }
 export interface TheaterInteraction {
   id: string;
   sectionId: string;
@@ -80,6 +84,10 @@ export interface TheaterRecord {
   replyDrafts?: Record<string, string>;
   interaction?: TheaterInteraction;
   revision?: number;
+  htmlPages?: TheaterHtmlPage[];
+  htmlStates?: Record<string, TheaterState>;
+  htmlText?: Record<string, string>;
+  htmlHistory?: { pageId: string; html: string; requestId: string; created: number }[];
 }
 export interface StylePreset {
   id: string;

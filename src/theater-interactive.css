@@ -101,3 +101,10 @@
   .theater-structured button, .theater-structured select, .theater-structured summary,
   .theater-local-tools label, .theater-reading-tools label { min-height: 44px; }
 }
+.free-theater { min-width: 0; display: grid; gap: 14px; }
+.free-theater-page { min-width: 0; }
+.theater-reload { margin: 6px 0; font-size: 13px; }
+.theater-html-tools { padding: 10px; border: 1px solid #ccd9c6; border-radius: 10px; }
+.theater-html-tools summary { cursor: pointer; color: #315d42; }
+.theater-html-tools textarea { min-height: 85px; }
+.free-theater pre { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

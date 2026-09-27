@@ -2,6 +2,7 @@ import { Zip, ZipDeflate, ZipPassThrough, strToU8 } from "fflate";
 import { db } from "./db";
 import { uid, type SceneEvent, type Story } from "./types";
 import { structuredTheaterText } from "./theater-data";
+import { htmlPagesText } from "./theater-html";
 import type { WorkOptions } from "./transfer-types";
 import {
   exportSnapshot,
@@ -271,7 +272,7 @@ export async function exportWork(
           const theaters = await db.theaters.where("[eventId+sourceVersionId]")
             .equals([e.id, e.versionId]).filter((t) => t.storyId === story.id && t.status === "complete").toArray();
           const theater = theaters.sort((a, b) => b.updated - a.updated || b.created - a.created || b.id.localeCompare(a.id))[0];
-          const theaterContent = theater?.data ? structuredTheaterText(theater.data, e.text) : theater?.text;
+          const theaterContent = theater?.htmlPages ? htmlPagesText(theater.htmlPages, theater.htmlText) : theater?.data ? structuredTheaterText(theater.data, e.text) : theater?.text;
           if (theaterContent?.trim()) await doc.block({
             kind: "theater",
             text: `【小剧场${theater!.presets.length ? " · " + theater!.presets.map((p) => p.name).join("、") : ""}】\n${theaterContent}`,

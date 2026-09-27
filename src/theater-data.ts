@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { TheaterData, TheaterItem, TheaterPreset } from "./types";
 import { normalizeTheaterPresentation } from "./theater-presets";
 import { theaterText } from "./theater-text";
+import { normalizeHtmlDocument } from "./theater-html";
 
 const presentations = [
   "dialogue",
@@ -408,6 +409,33 @@ export function parseStreamingTheater(
     } catch {
       return result;
     }
+    at = whitespace(source, section.end);
+    if (source[at] === "]" || at === source.length) return result;
+    if (source[at] !== ",") return result;
+    at = whitespace(source, at + 1);
+  }
+  return result;
+}
+
+export function parseStreamingHtml(raw: string, presets: TheaterPreset[]) {
+  const source = raw.trim().replace(/^```(?:json)?\s*/i, "");
+  if (!source.startsWith("{")) return;
+  const theater = members(source, 0)?.get("theater");
+  if (!theater || source[theater.start] !== "{") return;
+  const inner = members(source, theater.start);
+  const version = inner?.get("version"), sections = inner?.get("sections");
+  if (!version?.end || source.slice(version.start, version.end) !== "2" || !sections || source[sections.start] !== "[") return;
+  let at = whitespace(source, sections.start + 1);
+  const values: unknown[] = [];
+  let result: ReturnType<typeof normalizeHtmlDocument> | undefined;
+  while (at < source.length && source[at] !== "]") {
+    if (source[at] !== "{") return result;
+    const section = valueSpan(source, at);
+    if (section.invalid || section.end === undefined) return result;
+    try {
+      values.push(JSON.parse(source.slice(section.start, section.end)));
+      result = normalizeHtmlDocument({ version: 2, sections: values }, presets, true);
+    } catch { return result; }
     at = whitespace(source, section.end);
     if (source[at] === "]" || at === source.length) return result;
     if (source[at] !== ",") return result;

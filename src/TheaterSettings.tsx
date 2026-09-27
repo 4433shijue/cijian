@@ -2,34 +2,16 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { db } from "./db";
 import { uid, type Preferences, type Story, type TheaterDensity, type TheaterPresentation, type TheaterPreset } from "./types";
-import { allTheaterPresets, builtInTheaterPresets, normalizeTheaterPresentation, resolveTheaterPreset, restoreBuiltInTheaterPresentation, selectedTheaterPresets } from "./theater-presets";
+import { allTheaterPresets, builtInTheaterPresets, normalizeTheaterPresentation, resolveTheaterPreset, selectedTheaterPresets } from "./theater-presets";
 
 type EditableTheaterPreset = Omit<TheaterPreset, "presentation"> & {
   presentation: TheaterPresentation;
 };
 
-const theaterPresentations: ReadonlyArray<{
-  value: TheaterPresentation;
-  label: string;
-  hint: string;
-}> = [
-  { value: "forum", label: "论坛", hint: "主帖、回复和观众标签组成的讨论区。" },
-  { value: "body-status", label: "身体状态卡", hint: "按身体部位展示当前状态与变化。" },
-  { value: "dialogue", label: "对白拆解", hint: "把原话、表面意思和话外之音分开呈现。" },
-  { value: "detail-list", label: "细节清单", hint: "用正文落点和短余味整理容易忽略的细节。" },
-  { value: "subtext-card", label: "话外音卡", hint: "把原话、未说出口和留白分开呈现。" },
-  { value: "evidence-board", label: "证据板", hint: "用来源、线索和可信程度整理细节。" },
-  { value: "relationship-card", label: "关系卡", hint: "展示角色关系、触发点和未解决的问题。" },
-  { value: "scene-board", label: "场景声画", hint: "用光线、声音、气味和空间整理场景氛围。" },
-  { value: "custom", label: "自由 HTML", hint: "静态阅读形式。由 AI 设计安全 HTML，不提供论坛回帖或身体部位切换；需要这些交互时请选择对应展示样式。" },
-];
-
 function editablePresentation(value: unknown): TheaterPresentation {
   if (value === "freeform") return "custom";
   const normalized = normalizeTheaterPresentation(value);
-  return theaterPresentations.some((item) => item.value === normalized)
-    ? normalized
-    : "custom";
+  return normalized;
 }
 
 export function editableTheaterPreset(preset: TheaterPreset): EditableTheaterPreset {
@@ -42,14 +24,6 @@ export function editableTheaterPreset(preset: TheaterPreset): EditableTheaterPre
 
 export function copiedTheaterPreset(preset: TheaterPreset): EditableTheaterPreset {
   return { ...editableTheaterPreset(preset), id: uid(), name: preset.name + "（副本）" };
-}
-
-function theaterPresentationLabel(value: unknown) {
-  return theaterPresentations.find((item) => item.value === editablePresentation(value))?.label || "自由 HTML";
-}
-
-function theaterPresentationHint(value: unknown) {
-  return theaterPresentations.find((item) => item.value === editablePresentation(value))!.hint;
 }
 
 export function StoryTheaterSettings({ story, prefs, update }: {
@@ -165,12 +139,9 @@ export function TheaterPresetSettings({ prefs, notify }: { prefs: Preferences; n
         return <article className="style-preset-card" key={preset.id}>
           <span className="tag">{builtin ? overridden ? "内置 · 已修改" : "内置" : "自定义"}</span>
           <strong>{preset.name}</strong><p className="theater-preset-description">{preset.prompt}</p>
-          <p className="hint">展示样式：{theaterPresentationLabel(preset.presentation)}{preset.presentation === "custom" ? " · 静态阅读，不含论坛回帖或身体部位切换" : ""}</p>
+          <p className="hint">AI 自由设计 HTML 与交互</p>
           <div className="row"><button onClick={() => setEditing(editableTheaterPreset(preset))}>编辑</button>
             <button onClick={() => setEditing(copiedTheaterPreset(preset))}>复制</button>
-            {builtin && preset.presentation !== builtin.presentation && <button disabled={saving} onClick={() => void persist([
-              ...custom.filter((item) => item.id !== preset.id), editableTheaterPreset(restoreBuiltInTheaterPresentation(preset)),
-            ], "已使用内置交互形式，名称和内容要求已保留；下次生成生效")}>使用内置交互形式</button>}
             {overridden && <button disabled={saving} onClick={() => void persist(custom.filter((item) => item.id !== preset.id), "已恢复内置小剧场预设")}>恢复内置</button>}
             {!builtin && <button disabled={saving} onClick={() => void removePreset(preset.id)}>删除</button>}
           </div>
@@ -182,12 +153,10 @@ export function TheaterPresetSettings({ prefs, notify }: { prefs: Preferences; n
       <label className="field"><span>小剧场预设名称</span><input value={editing.name} maxLength={80} onChange={(event) => setEditing({ ...editing, name: event.target.value })} /></label>
       <label className="field"><span>小剧场内容要求</span><textarea className="long-text" value={editing.prompt}
         onChange={(event) => setEditing({ ...editing, prompt: event.target.value })} placeholder="写下这段小剧场想呈现的内容、语气或排版。" /></label>
-      <label className="field"><span>专属展示样式</span><select aria-label="小剧场专属展示样式" value={editing.presentation}
-        onChange={(event) => setEditing({ ...editing, presentation: editablePresentation(event.target.value) })}>
-        {theaterPresentations.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
-      </select></label>
-      <p className="hint">{theaterPresentationHint(editing.presentation)}</p>
-      <p className="hint">展示样式修改后对下一次生成生效，已保存的小剧场不会自动重新生成。</p>
+      <label className="field"><span>视觉与交互偏好（可选）</span><textarea value={editing.experience || ""}
+        onChange={(event) => setEditing({ ...editing, experience: event.target.value })}
+        placeholder="例如像一本可以翻页的手账，点开便签查看细节。留空由 AI 自由设计。" /></label>
+      <p className="hint">只描述希望出现的内容和体验，无需填写 HTML 标签、类名或固定布局。修改后对下一次生成生效。</p>
       <div className="row"><button className="primary" disabled={saving || !editing.name.trim() || !editing.prompt.trim()}
         onClick={() => void persist([...custom.filter((item) => item.id !== editing.id), {
           ...editing,

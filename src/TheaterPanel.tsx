@@ -9,6 +9,7 @@ import { theaterDocument, theaterReading } from "./theater-render";
 import { presetPresentationLabel } from "./theater-presets";
 import { saveTheaterReading } from "./theater-interactions";
 import { TheaterStructured } from "./TheaterStructured";
+import { FreeTheater } from "./FreeTheater";
 import "./theater-interactive.css";
 
 function TheaterFrame({ html, presentations = [], reading }: { html: string; presentations?: TheaterPresentation[]; reading?: TheaterRecord["reading"] }) {
@@ -39,6 +40,7 @@ function TheaterFrame({ html, presentations = [], reading }: { html: string; pre
 function TheaterContent({ event, disabled, onBusyChange, requestError }: { event: SceneEvent; disabled: boolean; onBusyChange: (busy: boolean) => void; requestError: string }) {
   const [readingError, setReadingError] = useState("");
   const [rawOpen, setRawOpen] = useState(false);
+  const [readingOverride, setReadingOverride] = useState<{ id: string; value: NonNullable<TheaterRecord["reading"]> }>();
   const record = useLiveQuery(async () => {
     if (!event.theater) return null;
     const current = await db.theaters.get(event.theater.id);
@@ -51,40 +53,43 @@ function TheaterContent({ event, disabled, onBusyChange, requestError }: { event
   const { current, previous } = record;
   const failed = current.status === "failed" || current.status === "interrupted";
   const shown = current.status !== "complete" && previous ? previous : current;
-  const settings = theaterReading(shown.reading);
+  const settings = readingOverride?.id === shown.id ? readingOverride.value : theaterReading(shown.reading || (shown.htmlPages ? { clarity: false } : undefined));
   async function read(patch: Partial<NonNullable<TheaterRecord["reading"]>>) {
     setReadingError("");
+    setReadingOverride({ id: shown.id, value: { ...settings, ...patch } });
     try { await saveTheaterReading(shown.id, patch); }
-    catch (cause) { setReadingError(cause instanceof Error ? cause.message : "没能保存阅读设置，请再试一次。"); }
+    catch (cause) { setReadingOverride(undefined); setReadingError(cause instanceof Error ? cause.message : "没能保存阅读设置，请再试一次。"); }
   }
   function renderContent(value: TheaterRecord, canInteract: boolean) {
+    if (value.htmlPages?.length) return <FreeTheater key={value.id} record={{ ...value, reading: settings }} disabled={!canInteract} onBusy={onBusyChange}
+      renderStatic={(html) => <TheaterFrame html={html} reading={{ ...settings, clarity: settings.clarity }} />} />;
     return value.data?.sections.length ? <TheaterStructured key={value.id} record={value} event={event} disabled={!canInteract} onBusyChange={onBusyChange}
       renderHtml={(html, section) => <TheaterFrame html={html} presentations={[section.presentation]} reading={shown.reading} />} /> :
       value.html ? <TheaterFrame html={value.html} presentations={value.presets.map((preset) => preset.presentation).filter(Boolean) as TheaterPresentation[]} reading={shown.reading} /> : null;
   }
   return <>
-    <p className="theater-presets-label">{shown.presets.map((preset) => `${preset.name} · ${presetPresentationLabel(preset.presentation)}`).join(" · ")}</p>
+    <p className="theater-presets-label">{shown.presets.map((preset) => shown.htmlPages ? preset.name : `${preset.name} · ${presetPresentationLabel(preset.presentation)}`).join(" · ")}</p>
     {shown.sourceVersionId !== event.versionId && current.sourceVersionId === event.versionId &&
       <p className="review">上一次的小剧场对应修改前的正文，暂时保留供参考。</p>}
     {current.error && current.error !== requestError && <p className="error" role="alert">{current.error}</p>}
     {failed && previous && <p className="hint">这次没能完成，先保留上一次的小剧场。</p>}
     {failed && !previous && (shown.html || shown.data?.sections.length) && <p className="hint">这是已经收到的内容，尚未通过本次生成检查。</p>}
-    {!shown.data?.sections.length && shown.html && <p className="review" data-testid="theater-readonly-notice">
-      这份小剧场是仅阅读内容，不能回帖或切换部位。选择论坛或身体状态卡后重新生成，收到交互格式才能参与。
+    {!shown.htmlPages && !shown.data?.sections.length && shown.html && <p className="review" data-testid="theater-readonly-notice">
+      这是旧版保存的静态内容。重新生成后，可以使用 AI 自由设计的页面与交互。
     </p>}
     <div className="theater-reading-tools" aria-label="小剧场阅读设置">
       <label><input type="checkbox" checked={settings.clarity} onChange={(change) => void read({ clarity: change.target.checked })} />清晰阅读</label>
       <label>字号<select aria-label="小剧场字号" value={settings.fontSize} onChange={(change) => void read({ fontSize: Number(change.target.value) })}>
         {Array.from({ length: 9 }, (_, index) => index + 16).map((size) => <option key={size} value={size}>{size}</option>)}
       </select></label>
-      <span>{settings.clarity ? "纸色底与深色字，旧内容也适用。" : "展示原有视觉主题。"}</span>
+      <span>{settings.clarity ? "清晰阅读会使用易读配色，HTML 页面脚本暂不运行。" : "保留 AI 原有设计与页面交互。"}</span>
     </div>
     {readingError && <p className="error" role="alert">{readingError}</p>}
     {shown.sourceVersionId !== event.versionId && shown.data && <p className="hint">旧版小剧场可以筛选和收藏，按当前正文重新生成后就能继续参与。</p>}
-    {shown.data?.sections.length || shown.html ? renderContent(shown, !disabled && shown.id === current.id && shown.status === "complete" && shown.sourceVersionId === event.versionId) : <p className="hint" role="status">
+    {shown.htmlPages?.length || shown.data?.sections.length || shown.html ? renderContent(shown, !disabled && shown.id === current.id && shown.status === "complete" && shown.sourceVersionId === event.versionId) : <p className="hint" role="status">
       {current.status === "running" ? "小剧场正在布置，收到内容就会在这里显示。" : "还没有可显示的小剧场，可以重新生成。"}
     </p>}
-    {current.status === "running" && previous && (current.html || current.data?.sections.length) && <>
+    {current.status === "running" && previous && (current.html || current.data?.sections.length || current.htmlPages?.length) && <>
       <p className="hint">这次的小剧场正在生成，完成后会替换上面的内容。</p>
       {renderContent(current, false)}
     </>}

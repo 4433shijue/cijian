@@ -56,7 +56,7 @@ test("an old renamed builtin keeps its name and prompt but requests a usable for
   await page.locator(".theater-toggle").click();
   await expect.poll(async () => (await readStore(page, "theaters"))[0]?.status).toBe("complete");
   const prompt = requests[0].messages.map((message: { content: string }) => message.content).join("\n");
-  expect(prompt).toContain('presentation="forum"');
+  expect(prompt).toContain("体验方向是虚构观众论坛");
   expect(prompt).toContain("我改过名字的观众席");
   expect(prompt).toContain("保留我的自定义要求，观众认真讨论伞柄上的动作。");
   const record = (await readStore(page, "theaters"))[0];
@@ -69,31 +69,26 @@ test("an old renamed builtin keeps its name and prompt but requests a usable for
 });
 
 for (const viewport of [{ name: "desktop", width: 1440, height: 1000 }, { name: "mobile", width: 390, height: 844 }, { name: "landscape", width: 844, height: 390 }]) {
-  test(`old HTML is retained with an explicit failure and recovers only on retry · ${viewport.name}`, async ({ page }, info) => {
+  test(`malformed output retains raw and recovers only on explicit retry · ${viewport.name}`, async ({ page }, info) => {
     await page.setViewportSize(viewport);
     const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
     await seed(page);
     let requests = 0;
     await page.route("https://theater.fixture.test/**", async (route) => {
       requests++;
-      await response(route, requests === 1 ? { theaterHtml: oldHtml } : { theater: forum });
+      await response(route, requests === 1 ? { theater: { version: 2, sections: [] } } : { theater: forum });
     });
     await page.getByRole("button", { name: "沉浸阅读", exact: true }).click();
     await page.locator(".theater-toggle").click();
     const panel = page.getByRole("region", { name: "本段小剧场" });
     await expect.poll(async () => (await readStore(page, "theaters"))[0]?.status).toBe("failed");
-    await expect(panel.getByRole("alert").first()).toContainText("交互格式");
-    await expect(panel.getByTestId("theater-readonly-notice")).toContainText("仅阅读");
-    await expect(page.frameLocator(".theater-frame").getByText("MOCK 旧格式论坛", { exact: true })).toBeVisible();
-    await expect(page.frameLocator(".theater-frame").locator("button")).toHaveCount(0);
-    await expect(panel.getByRole("button", { name: "发送并生成回复", exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("alert").first()).toBeVisible();
+    await expect(page.locator("iframe")).toHaveCount(0);
     const failed = (await readStore(page, "theaters"))[0];
-    expect(failed.html).toBe(oldHtml);
-    expect(failed.raw).toContain(oldHtml);
-    expect(failed.error).toContain("仅阅读");
+    expect(failed.raw).toContain('"sections":[]');
     expect((await readStore(page, "events"))[0].status).toBe("complete");
     await panel.getByText("查看这次小剧场的模型原始输出", { exact: true }).click();
-    await expect(panel.locator("details pre")).toContainText('"theaterHtml"');
+    await expect(panel.locator("details pre")).toContainText('"sections":[]');
     await panel.getByText("查看这次小剧场的模型原始输出", { exact: true }).click();
     await mkdir(capturePath, { recursive: true });
     await page.screenshot({ path: `${capturePath}/recovery-${viewport.name}-failed-full.png`, fullPage: true });
@@ -101,11 +96,11 @@ for (const viewport of [{ name: "desktop", width: 1440, height: 1000 }, { name: 
     await panel.getByRole("button", { name: "收起小剧场", exact: true }).click();
     await expect(page.locator("iframe, .theater-structured")).toHaveCount(0);
     await page.locator(".theater-toggle").click();
-    await expect(page.getByTestId("theater-readonly-notice")).toBeVisible();
+    await expect(panel.getByRole("alert").first()).toBeVisible();
     await page.reload();
     await page.getByRole("button", { name: "沉浸阅读", exact: true }).click();
     await page.locator(".theater-toggle").click();
-    await expect(page.getByTestId("theater-readonly-notice")).toBeVisible();
+    await expect(panel.getByRole("alert").first()).toBeVisible();
     expect(requests).toBe(1);
     await panel.getByRole("button", { name: "重新生成小剧场", exact: true }).click();
     await expect.poll(async () => (await readStore(page, "theaters")).find((record) => record.id !== failed.id)?.status).toBe("complete");
@@ -125,12 +120,12 @@ for (const viewport of [{ name: "desktop", width: 1440, height: 1000 }, { name: 
   });
 }
 
-test("automatic old HTML fails only the theater and leaves completed prose with one request", async ({ page }) => {
+test("automatic incomplete theater leaves completed prose with one request", async ({ page }) => {
   await seed(page, { automatic: true });
   let requests = 0;
   await page.route("https://theater.fixture.test/**", async (route) => {
     requests++;
-    await response(route, { text: "MOCK 新正文。许知把伞拿稳，周屿松开手。", facts: [], theaterHtml: oldHtml });
+    await response(route, { text: "MOCK 新正文。许知把伞拿稳，周屿松开手。", facts: [], theater: { version: 2, sections: [] } });
   });
   await page.getByRole("button", { name: "扩写这一刻", exact: true }).click();
   await expect.poll(async () => (await readStore(page, "events")).find((event) => event.id !== "recovery-event")?.status).toBe("complete");
@@ -141,20 +136,20 @@ test("automatic old HTML fails only the theater and leaves completed prose with 
   expect(event.theater.status).toBe("failed");
   await expect(page.locator("iframe")).toHaveCount(0);
   await page.locator(".prose-event").last().locator(".theater-toggle").click();
-  await expect(page.getByRole("alert").first()).toContainText("交互格式");
-  await expect(page.getByTestId("theater-readonly-notice")).toBeVisible();
+  await expect(page.getByRole("alert").first()).toBeVisible();
+  await expect(page.locator("iframe")).toHaveCount(0);
   expect(requests).toBe(1);
   expect(await readStore(page, "memories")).toHaveLength(0);
 });
 
-test("an explicit custom HTML preset remains supported and is labelled as read only", async ({ page }) => {
+test("a fresh custom HTML response uses the free sandbox", async ({ page }) => {
   await seed(page, { custom: true });
   let requests = 0;
   await page.route("https://theater.fixture.test/**", async (route) => { requests++; await response(route, { theaterHtml: oldHtml }); });
   await page.locator(".theater-toggle").click();
   await expect.poll(async () => (await readStore(page, "theaters"))[0]?.status).toBe("complete");
-  await expect(page.getByTestId("theater-readonly-notice")).toContainText("仅阅读");
-  await expect(page.frameLocator(".theater-frame").getByText("MOCK 旧格式论坛", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("theater-readonly-notice")).toHaveCount(0);
+  await expect(page.frameLocator(".theater-html-frame").frameLocator("iframe").getByText("MOCK 旧格式论坛", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "发送并生成回复", exact: true })).toHaveCount(0);
   expect(requests).toBe(1);
 });
@@ -164,7 +159,7 @@ test("stored legacy HTML remains readable after reload without silently regenera
   let requests = 0;
   await page.route("https://theater.fixture.test/**", async (route) => { requests++; await response(route, { theater: forum }); });
   await page.locator(".theater-toggle").click();
-  await expect(page.getByTestId("theater-readonly-notice")).toContainText("仅阅读");
+  await expect(page.getByTestId("theater-readonly-notice")).toContainText("旧版保存的静态内容");
   await expect(page.frameLocator(".theater-frame").getByText("MOCK 旧格式论坛", { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.locator("iframe")).toHaveCount(0);
@@ -174,37 +169,29 @@ test("stored legacy HTML remains readable after reload without silently regenera
   expect(requests).toBe(0);
 });
 
-test("restoring only a builtin presentation preserves custom wording and historical results without an AI request", async ({ page }) => {
+test("editing free experience preferences preserves wording and historical results without an AI request", async ({ page }) => {
   await seed(page, { saved: true, explicitCustom: true, developer: true });
   const before = (await readStore(page, "theaters"))[0];
   let requests = 0;
-  await page.route("https://theater.fixture.test/**", async (route) => { requests++; await response(route, { theater: forum }); });
+  await page.route("https://theater.fixture.test/**", async route => { requests++; await route.abort(); });
   await page.getByRole("link", { name: "设置", exact: true }).click();
-  const settings = page.locator(".theater-preset-settings");
-  const edited = settings.locator("article").filter({ has: page.getByText("我改过名字的观众席", { exact: true }) });
-  await expect(edited).toContainText("静态阅读");
-  await edited.getByRole("button", { name: "使用内置交互形式", exact: true }).click();
-  await expect.poll(async () => (await readStore(page, "preferences"))[0].theaterPresets.find((preset: { id: string }) => preset.id === "theater-audience")?.presentation).toBe("forum");
-  await expect(edited).toContainText("论坛");
-  const preset = (await readStore(page, "preferences"))[0].theaterPresets.find((preset: { id: string }) => preset.id === "theater-audience");
+  const edited = page.locator(".theater-preset-settings article").filter({ has: page.getByText("我改过名字的观众席", { exact: true }) });
+  await expect(edited).toContainText("AI 自由设计 HTML 与交互");
+  await edited.getByRole("button", { name: "编辑", exact: true }).click();
+  await page.getByLabel("视觉与交互偏好（可选）").fill("设计成可以翻阅的论坛，颜色温暖。");
+  await page.getByRole("button", { name: "保存小剧场预设", exact: true }).click();
+  await expect.poll(async () => (await readStore(page, "preferences"))[0].theaterPresets.find((p: any) => p.id === "theater-audience")?.experience).toBe("设计成可以翻阅的论坛，颜色温暖。");
+  const preset = (await readStore(page, "preferences"))[0].theaterPresets.find((p: any) => p.id === "theater-audience");
   expect(preset.name).toBe("我改过名字的观众席");
   expect(preset.prompt).toBe("保留我的自定义要求，观众认真讨论伞柄上的动作。");
   expect((await readStore(page, "theaters"))[0]).toEqual(before);
   expect(requests).toBe(0);
-  await page.goto(appPath + "#story/fixture-story");
-  await page.locator(".theater-toggle").click();
-  await expect(page.getByTestId("theater-readonly-notice")).toBeVisible();
-  expect(requests).toBe(0);
-  await page.getByRole("button", { name: "重新生成小剧场", exact: true }).click();
-  await expect.poll(async () => (await readStore(page, "theaters")).find((record) => record.id !== "recovery-saved")?.status).toBe("complete");
-  await expect(page.getByRole("button", { name: "发送并生成回复", exact: true })).toBeVisible();
-  expect(requests).toBe(1);
 });
 
-test("a fresh static response does not replace the previous successful interactive theater", async ({ page }) => {
+test("an invalid response does not replace the previous successful interactive theater", async ({ page }) => {
   await seed(page, { saved: true, structured: true });
   let requests = 0;
-  await page.route("https://theater.fixture.test/**", async (route) => { requests++; await response(route, { theaterHtml: oldHtml }); });
+  await page.route("https://theater.fixture.test/**", async (route) => { requests++; await response(route, { theater: { version: 2, sections: [] } }); });
   await page.locator(".theater-toggle").click();
   await page.getByRole("button", { name: "重新生成小剧场", exact: true }).click();
   await expect.poll(async () => (await readStore(page, "theaters")).find((record) => record.id !== "recovery-saved")?.status).toBe("failed");
