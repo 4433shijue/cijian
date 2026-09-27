@@ -8,15 +8,23 @@ import {
   saveCompletionCards,
   requestCompletionCandidates,
   requestCompletionCard,
+  recoverCompletionAttempt,
+  recoverLegacyCompletionRaw,
 } from "./role-completion";
+import {
+  CompletionRecovery,
+  CompletionParseNotice,
+} from "./CompletionRecovery";
 import {
   completionBasisLabels,
   completionSourceKey,
+  completionCardSourceKey as cardSourceKey,
   emptyCompletionDraft,
   type CompletionCard,
   type CompletionCandidate,
   type CompletionDraft,
   type CompletionInput,
+  type CompletionAttempt,
 } from "./role-completion-types";
 import "./role-completion.css";
 
@@ -28,17 +36,17 @@ type Props = {
 const messageOf = (error: unknown) =>
   error instanceof Error ? error.message : "暂时没能完成，请再试一次。";
 const nameKey = (name: string) => name.trim().replace(/\s+/g, "").toLowerCase();
-const cardSourceKey = (value: CompletionDraft) =>
-  JSON.stringify([
-    value.input,
-    value.candidates
-      .map(({ id, name, description }) => ({
-        id,
-        name,
-        description,
-      }))
-      .sort((left, right) => left.id.localeCompare(right.id)),
-  ]);
+const legacyAttempt = (snapshot: CompletionDraft): CompletionAttempt => ({
+  id: uid(),
+  stage: "card",
+  inputKey: snapshot.sourceKey,
+  sourceKey: snapshot.sourceKey,
+  raw: snapshot.raw,
+  state: "failed",
+  error: snapshot.error,
+  created: snapshot.updated,
+  updated: snapshot.updated,
+});
 
 export function RoleCompletionAssistant({
   onClose,
@@ -64,6 +72,8 @@ export function RoleCompletionAssistant({
   const closingRef = useRef(false);
   const persistence = useRef<Promise<unknown>>(Promise.resolve());
   const revision = useRef(0);
+  const activeAttempt = useRef<string | null>(null);
+  const streamSave = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function persist(value: CompletionDraft) {
     const edit = ++revision.current;
@@ -107,6 +117,96 @@ export function RoleCompletionAssistant({
     return next;
   }
 
+  function clearStreamSave() {
+    if (streamSave.current) clearTimeout(streamSave.current);
+    streamSave.current = null;
+  }
+
+  function beginAttempt(
+    stage: CompletionAttempt["stage"],
+    target?: CompletionCandidate,
+  ) {
+    clearStreamSave();
+    const snapshot = current.current;
+    const now = Date.now();
+    const attempt: CompletionAttempt = {
+      id: uid(),
+      stage,
+      target: target ? { ...target } : undefined,
+      inputKey: completionSourceKey(snapshot.input),
+      sourceKey:
+        stage === "card"
+          ? cardSourceKey(snapshot)
+          : completionSourceKey(snapshot.input),
+      raw: "",
+      state: "running",
+      error: "",
+      created: now,
+      updated: now,
+    };
+    const attempts = [...(snapshot.attempts || [])];
+    // Older drafts have one raw response but no independent request record.
+    // Preserve that response before a new request replaces draft.raw.
+    if (!attempts.length && snapshot.raw) {
+      attempts.push(legacyAttempt(snapshot));
+    }
+    activeAttempt.current = attempt.id;
+    update({ attempts: [...attempts, attempt], raw: "", error: "" });
+    return attempt.id;
+  }
+
+  function recordAttempt(
+    id: string,
+    patch: Partial<CompletionAttempt>,
+    save = false,
+  ) {
+    if (
+      activeAttempt.current !== id ||
+      !current.current.attempts?.some(
+        (attempt) => attempt.id === id && attempt.state === "running",
+      )
+    )
+      return;
+    update(
+      (value) => ({
+        ...(patch.raw !== undefined ? { raw: patch.raw } : {}),
+        attempts: value.attempts?.map((attempt) =>
+          attempt.id === id
+            ? { ...attempt, ...patch, updated: Date.now() }
+            : attempt,
+        ),
+      }),
+      save,
+    );
+    if (save) clearStreamSave();
+    else if (!streamSave.current) {
+      streamSave.current = setTimeout(() => {
+        streamSave.current = null;
+        if (activeAttempt.current === id) void persist(current.current);
+      }, 700);
+    }
+  }
+
+  function interruptAttempt(message: string) {
+    clearStreamSave();
+    const id = activeAttempt.current;
+    activeAttempt.current = null;
+    if (!id) return;
+    update((value) => ({
+      error: message,
+      attempts: value.attempts?.map((attempt) =>
+        attempt.id === id && attempt.state === "running"
+          ? {
+              ...attempt,
+              state: "interrupted",
+              error: message,
+              updated: Date.now(),
+            }
+          : attempt,
+      ),
+    }));
+  }
+
   useEffect(() => {
     let active = true;
     mounted.current = true;
@@ -148,6 +248,9 @@ export function RoleCompletionAssistant({
       active = false;
       mounted.current = false;
       controller.current?.abort();
+      interruptAttempt(
+        "窗口已关闭，已收到的内容保留在本机，可以检查后重新解析。",
+      );
     };
   }, [loadAttempt]);
 
@@ -156,7 +259,9 @@ export function RoleCompletionAssistant({
     controller.current = null;
     busyRef.current = false;
     setBusy("");
-    update({ error: "已停止生成。已完成的角色卡仍在这里，可以继续。" });
+    interruptAttempt(
+      "已停止生成。已完成的角色卡仍在这里，可以继续。已收到的内容也已保留。",
+    );
   }
 
   async function close() {
@@ -195,24 +300,56 @@ export function RoleCompletionAssistant({
       if (signal.aborted || !mounted.current) return;
       const target = targets[index];
       setBusy(`正在补全 ${target.name} · ${index + 1} / ${targets.length}`);
-      update({ raw: "", error: "" });
       const snapshot = current.current;
       const sourceKey = cardSourceKey(snapshot);
+      const attemptId = beginAttempt("card", target);
       const completed = snapshot.cards.filter(
         (card) =>
           card.candidateId !== target.id && card.sourceKey === sourceKey,
       );
-      const card = await requestCompletionCard(
-        snapshot.input,
-        snapshot.candidates,
-        target,
-        completed,
-        signal,
-        (raw) => {
-          if (!signal.aborted && mounted.current) update({ raw }, false);
-        },
-      );
-      if (signal.aborted || !mounted.current) return;
+      let card: CompletionCard;
+      try {
+        card = await requestCompletionCard(
+          snapshot.input,
+          snapshot.candidates,
+          target,
+          completed,
+          signal,
+          (raw) => {
+            if (!signal.aborted && mounted.current)
+              recordAttempt(attemptId, { raw });
+          },
+          (response) => {
+            if (!signal.aborted && mounted.current)
+              recordAttempt(
+                attemptId,
+                {
+                  complete: response.complete,
+                  finishReason: response.reason,
+                },
+                true,
+              );
+          },
+        );
+      } catch (error) {
+        if (!signal.aborted && mounted.current) {
+          recordAttempt(
+            attemptId,
+            { state: "failed", error: messageOf(error) },
+            true,
+          );
+          activeAttempt.current = null;
+        }
+        throw error;
+      }
+      if (
+        signal.aborted ||
+        !mounted.current ||
+        activeAttempt.current !== attemptId
+      )
+        return;
+      clearStreamSave();
+      activeAttempt.current = null;
       update((value) => ({
         cards: replaceCardId
           ? [
@@ -223,6 +360,17 @@ export function RoleCompletionAssistant({
               { ...card, sourceKey },
             ]
           : [...value.cards, { ...card, sourceKey }],
+        attempts: value.attempts?.map((attempt) =>
+          attempt.id === attemptId
+            ? {
+                ...attempt,
+                state: "parsed",
+                error: "",
+                parseInfo: card.parseInfo,
+                updated: Date.now(),
+              }
+            : attempt,
+        ),
         error: "",
       }));
     }
@@ -261,11 +409,45 @@ export function RoleCompletionAssistant({
       return;
     }
     void runTask(async (signal) => {
-      update({ raw: "" });
-      const found = await requestCompletionCandidates(input, signal, (raw) => {
-        if (!signal.aborted && mounted.current) update({ raw }, false);
-      });
-      if (signal.aborted || !mounted.current) return;
+      const attemptId = beginAttempt("candidates");
+      let found: CompletionCandidate[];
+      try {
+        found = await requestCompletionCandidates(
+          input,
+          signal,
+          (raw) => {
+            if (!signal.aborted && mounted.current)
+              recordAttempt(attemptId, { raw });
+          },
+          (response) => {
+            if (!signal.aborted && mounted.current)
+              recordAttempt(
+                attemptId,
+                {
+                  complete: response.complete,
+                  finishReason: response.reason,
+                },
+                true,
+              );
+          },
+        );
+      } catch (error) {
+        if (!signal.aborted && mounted.current) {
+          recordAttempt(
+            attemptId,
+            { state: "failed", error: messageOf(error) },
+            true,
+          );
+          activeAttempt.current = null;
+        }
+        throw error;
+      }
+      if (
+        signal.aborted ||
+        !mounted.current ||
+        activeAttempt.current !== attemptId
+      )
+        return;
       const sameSource =
         current.current.sourceKey === completionSourceKey(input);
       const candidates = found.map((candidate) => {
@@ -276,7 +458,18 @@ export function RoleCompletionAssistant({
           );
         return previous ? { ...previous } : candidate;
       });
-      update({ candidates, sourceKey: completionSourceKey(input), error: "" });
+      clearStreamSave();
+      activeAttempt.current = null;
+      update((value) => ({
+        candidates,
+        sourceKey: completionSourceKey(input),
+        attempts: value.attempts?.map((attempt) =>
+          attempt.id === attemptId
+            ? { ...attempt, state: "parsed", error: "", updated: Date.now() }
+            : attempt,
+        ),
+        error: "",
+      }));
       const specified = input.targets
         .split(/[,，、;；\n]+/)
         .map(nameKey)
@@ -363,6 +556,80 @@ export function RoleCompletionAssistant({
         card.id === id && !card.savedRoleId ? { ...card, ...patch } : card,
       ),
     }));
+  }
+
+  function editRecovery(attemptId: string | undefined, text: string) {
+    if (
+      busyRef.current ||
+      savingRoles.current ||
+      closingRef.current ||
+      loading ||
+      loadError
+    )
+      return;
+    update((value) => ({
+      attempts: attemptId
+        ? value.attempts?.map((attempt) =>
+            attempt.id === attemptId
+              ? { ...attempt, recoveryText: text, updated: Date.now() }
+              : attempt,
+          )
+        : [{ ...legacyAttempt(value), recoveryText: text }],
+    }));
+  }
+
+  function recoverRaw(attemptId?: string, editedText?: string) {
+    if (
+      busyRef.current ||
+      savingRoles.current ||
+      closingRef.current ||
+      loading ||
+      loadError
+    )
+      throw Error("请等当前操作结束后再重新解析。");
+    const snapshot = current.current;
+    const attempt = attemptId
+      ? snapshot.attempts?.find((item) => item.id === attemptId)
+      : undefined;
+    if (attemptId && !attempt)
+      throw Error("这次生成记录已不存在，请重新选择。");
+    if (attempt && (attempt.stage !== "card" || attempt.target)) {
+      update(recoverCompletionAttempt(snapshot, attempt.id, editedText));
+      return;
+    }
+    // Legacy responses do not have a target snapshot. Keep their original input
+    // signature and let the core recovery helper verify the current identity.
+    const legacy = attempt || legacyAttempt(snapshot);
+    const recovered = recoverLegacyCompletionRaw(
+      {
+        ...snapshot,
+        raw: legacy.raw,
+        sourceKey: legacy.inputKey,
+        attempts: undefined,
+      },
+      editedText,
+    );
+    const added = recovered.cards.find(
+      (card) => !snapshot.cards.some((old) => old.id === card.id),
+    );
+    const record: CompletionAttempt = {
+      ...legacy,
+      state: "recovered",
+      error: "",
+      recoveryText: editedText ?? legacy.recoveryText,
+      parseInfo: added?.parseInfo || recovered.attempts?.at(-1)?.parseInfo,
+      updated: Date.now(),
+    };
+    update({
+      ...recovered,
+      raw: snapshot.raw,
+      sourceKey: snapshot.sourceKey,
+      attempts: attempt
+        ? snapshot.attempts?.map((item) =>
+            item.id === attempt.id ? record : item,
+          )
+        : [...(snapshot.attempts || []), record],
+    });
   }
 
   async function saveCards(all = false) {
@@ -732,6 +999,7 @@ export function RoleCompletionAssistant({
                     这份卡片来自之前的素材或主角名单，仍可编辑保存。它不会作为本轮生成的关系依据。
                   </p>
                 )}
+                <CompletionParseNotice info={card.parseInfo} />
                 <fieldset
                   className="completion-fields"
                   disabled={disabled || !!card.savedRoleId}
@@ -857,12 +1125,12 @@ export function RoleCompletionAssistant({
             </div>
           </section>
         )}
-        {draft.raw && (
-          <details className="completion-raw">
-            <summary>查看本次模型原始输出</summary>
-            <pre>{draft.raw}</pre>
-          </details>
-        )}
+        <CompletionRecovery
+          draft={draft}
+          disabled={disabled}
+          onRecover={recoverRaw}
+          onEdit={editRecovery}
+        />
         <p className="hint">
           补全草稿只保存在当前浏览器。角色卡加入角色库后，才会随资料备份一起导出。
         </p>
@@ -887,14 +1155,15 @@ export function RoleCompletionAssistant({
                     draft.input.targets ||
                     draft.input.guidance ||
                     draft.candidates.length ||
+                    draft.attempts?.length ||
                     draft.raw ||
                     draft.cards.length) &&
                   !window.confirm(
-                    "开始一份新素材会清空本机这份素材、候选名单和卡片预览，已存入角色库的档案会保留。确定继续吗？",
+                    "开始一份新素材会清空本机这份素材、候选名单、卡片预览和生成记录，已存入角色库的档案会保留。确定继续吗？",
                   )
                 )
                   return;
-                update(emptyCompletionDraft());
+                update({ ...emptyCompletionDraft(), attempts: [] });
                 setBroughtSource(false);
               }}
             >

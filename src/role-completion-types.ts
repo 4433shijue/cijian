@@ -31,6 +31,33 @@ export interface CompletionCard {
   sections: CompletionSection[];
   selected: boolean;
   savedRoleId?: string;
+  parseInfo?: CompletionParseInfo;
+}
+export interface CompletionJSONRepair {
+  field: string;
+  line: number;
+  count: number;
+  kind?: "quote-escape" | "string-concat";
+}
+export interface CompletionParseInfo {
+  wrapper: "none" | "fenced" | "embedded";
+  repairs: CompletionJSONRepair[];
+}
+export interface CompletionAttempt {
+  id: string;
+  stage: "candidates" | "card";
+  target?: CompletionCandidate;
+  inputKey: string;
+  sourceKey: string;
+  raw: string;
+  state: "running" | "failed" | "interrupted" | "parsed" | "recovered";
+  error: string;
+  complete?: boolean;
+  finishReason?: string;
+  parseInfo?: CompletionParseInfo;
+  recoveryText?: string;
+  created: number;
+  updated: number;
 }
 export interface CompletionDraft {
   id: "role-completion";
@@ -41,6 +68,7 @@ export interface CompletionDraft {
   raw: string;
   error: string;
   updated: number;
+  attempts?: CompletionAttempt[];
 }
 export const completionDimensions = [
   "基础身份",
@@ -81,3 +109,12 @@ export function emptyCompletionDraft(): CompletionDraft {
 }
 export const completionSourceKey = (input: CompletionInput) =>
   JSON.stringify(input);
+export const completionCardSourceKey = (
+  value: Pick<CompletionDraft, "input" | "candidates">,
+) =>
+  JSON.stringify([
+    value.input,
+    value.candidates
+      .map(({ id, name, description }) => ({ id, name, description }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+  ]);

@@ -288,6 +288,135 @@
 .completion-raw pre {
   overflow: auto;
   max-height: 250px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  color: #304d45;
+  background: #fffef8;
+  border: 1px solid #dce4d2;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.completion-recovery {
+  padding: 18px;
+  border: 1px solid #d4dfcb;
+  border-radius: 12px 7px 13px 7px;
+  background: #f5f8ed;
+}
+.completion-recovery > .field {
+  margin-top: 13px;
+}
+.completion-recovery select {
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+.completion-recovery-meta,
+.completion-raw-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-bottom: 10px;
+}
+.completion-recovery-meta > strong {
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+.completion-attempt-state {
+  padding: 3px 8px;
+  border: 1px solid #d5dfc7;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #536c48;
+  background: #edf4e5;
+}
+.completion-attempt-state.state-failed,
+.completion-attempt-state.state-interrupted {
+  color: #83572d;
+  background: #fff0d9;
+  border-color: #ebd8b8;
+}
+.completion-recovery .hint {
+  color: #63745b;
+}
+.completion-recovery-actions {
+  align-items: stretch;
+  gap: 8px;
+}
+.completion-recovery-actions button {
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.completion-recovery-actions button > svg {
+  flex-shrink: 0;
+}
+.completion-recovery-editor {
+  margin-top: 16px;
+  padding: 14px;
+  background: #fffdf6;
+  border: 1px solid #d4dfcb;
+  border-radius: 8px;
+}
+.completion-recovery-editor > .field {
+  margin-top: 0;
+}
+.completion-recovery-editor textarea {
+  min-height: 280px;
+  max-height: 60vh;
+  font:
+    12px/1.7 "Cascadia Code",
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.completion-recovery-editor button {
+  margin-top: 9px;
+  font-size: 12px;
+}
+.completion-recovery-success {
+  margin-top: 12px;
+  padding: 10px 12px;
+  color: #38634d;
+  background: #e6f0df;
+  border-radius: 7px;
+  font-size: 12px;
+}
+.completion-recovery > .completion-raw {
+  margin-top: 14px;
+  background: #ffffff8f;
+}
+.completion-raw-toolbar {
+  justify-content: space-between;
+  margin: 10px 0;
+}
+.completion-raw-toolbar button {
+  padding: 6px 9px;
+  font-size: 11px;
+}
+.completion-format-note {
+  margin: 10px 0 14px;
+  color: #486a4e;
+  background: #edf4e8;
+  border-color: #cdddc3;
+  font-size: 12px;
+}
+.completion-format-note summary {
+  font-size: 12px;
+}
+.completion-format-note ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+.completion-format-note li + li {
+  margin-top: 5px;
+}
+.completion-format-note code {
+  font-size: 11px;
 }
 .completion-footer {
   display: flex;
@@ -341,6 +470,21 @@
   }
   .completion-card {
     padding: 13px;
+  }
+  .completion-recovery {
+    padding: 13px;
+  }
+  .completion-recovery-actions > button,
+  .completion-recovery-editor > button {
+    width: 100%;
+    justify-content: flex-start;
+    white-space: normal;
+  }
+  .completion-recovery-editor {
+    padding: 10px;
+  }
+  .completion-recovery-editor textarea {
+    min-height: 240px;
   }
   .completion-save-bar > div {
     display: grid;
