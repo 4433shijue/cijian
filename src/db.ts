@@ -85,6 +85,12 @@ export class SceneDB extends Dexie {
 }
 export const db = new SceneDB();
 export const sessionKeys = new Map<string, string>();
+/** Load only the world-book entries attached to a story. */
+export async function worldForStory(story: Pick<Story, "worldIds">) {
+  return story.worldIds.length
+    ? db.world.where("id").anyOf(story.worldIds).toArray()
+    : [];
+}
 export const keyFor = (p: Profile) =>
   sessionKeys.get(p.id) || (p.remember ? p.key : "") || "";
 export async function saveProfile(p: Profile, key: string) {
@@ -105,6 +111,7 @@ export function makeStory(
     background,
     created: Date.now(),
     updated: Date.now(),
+    archived: false,
     draft: "",
     chatDraft: "",
     player: roles[0]?.id || "",

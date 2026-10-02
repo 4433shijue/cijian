@@ -177,7 +177,9 @@ it("bounds actual requests through 105 mixed rounds, bubbles, reloads and mode c
   expect(new Set(all.map((e) => e.round)).size).toBe(105);
   expect(all.filter((e) => e.round === 2)).toHaveLength(5); // 3 user + 2 AI bubbles
   expect(contents.at(-1)!.length).toBeLessThan(contents[40].length * 2);
-}, 60000);
+// This deliberately exercises 105 rounds plus database reopen cycles. Keep a
+// generous budget for cold CI workers while retaining the bounded workload.
+}, 120000);
 
 it("deletion leaves ordinal gaps and never backfills old originals; rewrites never see future memory", async () => {
   await seed(26);

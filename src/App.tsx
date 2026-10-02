@@ -292,10 +292,20 @@ function StoriesPage({ notify }: { notify: Notice }) {
   const roles = useLiveQuery(() => db.roles.toArray(), []) || [];
   const world = useLiveQuery(() => db.world.toArray(), []) || [];
   const [create, setCreate] = useState(false),
+    [query, setQuery] = useState(""),
+    [showArchived, setShowArchived] = useState(false),
     [title, setTitle] = useState(""),
     [background, setBackground] = useState(""),
     [selected, setSelected] = useState<string[]>([]),
     [worldIds, setWorldIds] = useState<string[]>([]);
+  const needle = query.trim().toLocaleLowerCase();
+  const visibleStories = stories.filter((s) => {
+    if (!showArchived && s.archived) return false;
+    return !needle || [s.title, s.background, ...s.roles.map((r) => r.name)]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(needle);
+  });
   return (
     <div className="page">
       <header className="page-heading">
@@ -340,12 +350,23 @@ function StoriesPage({ notify }: { notify: Notice }) {
       )}
       <div className="section-title">
         <h2>
-          我的故事 <small>{stories.length}</small>
+          我的故事 <small>{visibleStories.length}</small>
         </h2>
-        <span>每一本，都有独立的记忆</span>
+        <div className="story-filters">
+          <input
+            aria-label="搜索故事"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="搜索故事或角色"
+          />
+          <label className="toggle compact">
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+            <span>显示归档</span>
+          </label>
+        </div>
       </div>
       <div className="story-grid">
-        {stories.map((s, i) => (
+        {visibleStories.map((s, i) => (
           <a className="story-card" key={s.id} href={"#story/" + s.id}>
             <div className={"cover cover-" + (i % 3)}>
               <span>STORY {String(i + 1).padStart(2, "0")}</span>
@@ -362,7 +383,15 @@ function StoriesPage({ notify }: { notify: Notice }) {
               <p>{s.background || "还没有写下开场，故事正等着你。"}</p>
               <footer>
                 <span>{date(s.updated)}</span>
-                <span>翻开故事 ↗</span>
+                <span>
+                  <button type="button" className="text-button" onClick={async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    await db.stories.update(s.id, { archived: !s.archived, updated: Date.now() });
+                    notify(s.archived ? "故事已恢复" : "故事已归档");
+                  }}>{s.archived ? "恢复" : "归档"}</button>
+                  <span aria-hidden="true"> · 翻开故事 ↗</span>
+                </span>
               </footer>
             </div>
           </a>

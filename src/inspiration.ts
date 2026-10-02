@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { db, keyFor } from "./db";
+import { db, keyFor, worldForStory } from "./db";
 import { generate } from "./model";
 import { parseJSON } from "./output";
 import {
@@ -40,13 +40,13 @@ async function readInputs(
   storyId: string,
 ): Promise<InspirationInputs | undefined> {
   return db.transaction("r", sourceTables, async () => {
-    const [story, events, memories, world, prefs] = await Promise.all([
+    const [story, events, memories, prefs] = await Promise.all([
       db.stories.get(storyId),
       db.events.where("storyId").equals(storyId).toArray(),
       db.memories.where("storyId").equals(storyId).toArray(),
-      db.world.toArray(),
       db.preferences.get("preferences"),
     ]);
+    const world = story ? await worldForStory(story) : [];
     return story
       ? {
           story,

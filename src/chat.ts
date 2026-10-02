@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { db, keyFor, reviseEvent, ensureStoryRounds, consumeMemorySelection } from "./db";
+import { db, keyFor, reviseEvent, ensureStoryRounds, consumeMemorySelection, worldForStory } from "./db";
 import { usableEvent } from "./timeline";
 import { active } from "./generation-state";
 import { withStoryLock } from "./locks";
@@ -82,7 +82,7 @@ async function contextFor(s: Story, batch: ChatBatch, rewrite = false, connectio
   const memories = (await db.memories.where("storyId").equals(s.id).toArray())
     .filter((m) => m.sources.every((source) => versions.get(source.id) === source.versionId));
   const pair = { ...s, player: batch.player, partner: batch.partner };
-  const world = await db.world.toArray();
+  const world = await worldForStory(s);
   const baseline = buildContext("chat", pair,
     events, memories, world, prefs, p, batch.messages.join("\n"),
     { chatMessages: batch.messages, rewrite });

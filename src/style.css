@@ -61,19 +61,19 @@ button {
 }
 button:hover {
   background-image:
-    linear-gradient(#dcebd39a, #dcebd39a), url("./assets/paper-button.png");
+    linear-gradient(#dcebd39a, #dcebd39a), url("./assets/paper-button.webp");
   background-size: cover;
   background-position: center;
 }
 button {
   background-image:
-    linear-gradient(#ffffff45, #ffffff45), url("./assets/paper-button.png");
+    linear-gradient(#ffffff45, #ffffff45), url("./assets/paper-button.webp");
   background-size: cover;
   background-position: center;
 }
 button.primary {
   background-image:
-    linear-gradient(#316d5dcc, #316d5dcc), url("./assets/paper-button.png");
+    linear-gradient(#316d5dcc, #316d5dcc), url("./assets/paper-button.webp");
   background-size: cover;
   background-position: center;
 }
@@ -89,7 +89,7 @@ button.primary {
 }
 button.primary:hover {
   background-image:
-    linear-gradient(#245747dd, #245747dd), url("./assets/paper-button.png");
+    linear-gradient(#245747dd, #245747dd), url("./assets/paper-button.webp");
   background-size: cover;
   background-position: center;
 }
@@ -201,7 +201,7 @@ small,
 }
 .sidebar nav a.active {
   background-image:
-    linear-gradient(#c5dfb090, #c5dfb090), url("./assets/leaf-corner-v1.png");
+    linear-gradient(#c5dfb090, #c5dfb090), url("./assets/leaf-corner-v1.webp");
   background-size: cover;
   background-position: left top;
   color: #365e49;
@@ -209,7 +209,7 @@ small,
 }
 .sidebar nav a:hover:not(.active) {
   background-image:
-    linear-gradient(#dcebd37d, #dcebd37d), url("./assets/paper-button.png");
+    linear-gradient(#dcebd37d, #dcebd37d), url("./assets/paper-button.webp");
   background-size: cover;
   background-position: center;
   color: #365e49;
@@ -324,6 +324,11 @@ main {
   font-size: 11px;
   color: #919a87;
 }
+.story-filters { display: flex; align-items: center; gap: 10px; }
+.story-filters input { min-width: 180px; }
+.toggle.compact { font-size: 12px; white-space: nowrap; }
+.text-button { border: 0; background: transparent; color: #316d5d; cursor: pointer; padding: 0; font: inherit; }
+.text-button:hover { text-decoration: underline; }
 .story-grid,
 .role-grid {
   display: grid;
@@ -1347,7 +1352,7 @@ details pre {
   }
   .sidebar nav a.active {
     background-image:
-      linear-gradient(#c5dfb090, #c5dfb090), url("./assets/leaf-corner-v1.png");
+      linear-gradient(#c5dfb090, #c5dfb090), url("./assets/leaf-corner-v1.webp");
     background-size: cover;
     color: #32674b;
   }

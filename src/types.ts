@@ -151,6 +151,7 @@ export interface Story {
   worldIds: string[];
   created: number;
   updated: number;
+  archived?: boolean;
   draft: string;
   chatDraft: string;
   player: string;

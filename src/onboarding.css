@@ -527,7 +527,7 @@
 .starter-celebration button.primary {
   background:
     linear-gradient(#3d7058ef, #3d7058ef),
-    url("./assets/paper-button.png") center/cover;
+    url("./assets/paper-button.webp") center/cover;
   border-color: #3d7058;
   color: #fffef2;
   border-radius: 9px;

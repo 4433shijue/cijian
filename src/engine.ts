@@ -2,7 +2,7 @@ import { withStoryLock } from "./locks";
 import { active, isBusy } from "./generation-state";
 export { isBusy, stop } from "./generation-state";
 import { z } from "zod";
-import { db, keyFor, reviseEvent, collapseEarlierProse, ensureStoryRounds, consumeMemorySelection } from "./db";
+import { db, keyFor, reviseEvent, collapseEarlierProse, ensureStoryRounds, consumeMemorySelection, worldForStory } from "./db";
 import { usableEvent } from "./timeline";
 import {
   uid,
@@ -70,7 +70,7 @@ async function report(
   );
   const memories = (await db.memories.where("storyId").equals(s.id).toArray()).filter((m) =>
     m.sources.every((source) => priorVersions.get(source.id) === source.versionId));
-  const world = await db.world.toArray();
+  const world = await worldForStory(s);
   const baseline = buildContext(
     kind,
     s,

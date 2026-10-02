@@ -1,4 +1,4 @@
-import { db, keyFor } from "./db";
+import { db, keyFor, worldForStory } from "./db";
 import { active as storyActive } from "./generation-state";
 import { withStoryLock } from "./locks";
 import { generate } from "./model";
@@ -102,11 +102,12 @@ export function interactWithTheater(recordId: string, sectionId: string, kind: "
       let writes = Promise.resolve();
       let writeError: unknown;
       try {
-        const [record, event, story, prefs, world] = await Promise.all([
+        const [record, event, story, prefs] = await Promise.all([
           db.theaters.get(recordId), db.events.get(initial.eventId), db.stories.get(initial.storyId),
-          db.preferences.get("preferences"), db.world.toArray(),
+          db.preferences.get("preferences"),
         ]);
         if (!record || !story || !prefs) throw Error("小剧场或故事已不存在。");
+        const world = await worldForStory(story);
         currentSource(record, event);
         if (record.interaction?.status === "running") throw Error("这个小剧场正在补充，请先停止或等待完成。");
         const section = record.data!.sections.find((section) => section.id === sectionId);
@@ -181,7 +182,7 @@ export function interactWithTheater(recordId: string, sectionId: string, kind: "
           const latest = await db.theaters.get(recordId);
           const source = await db.events.get(initial.eventId);
           const currentStory = await db.stories.get(story.id);
-          const currentWorld = await db.world.toArray();
+          const currentWorld = currentStory ? await worldForStory(currentStory) : [];
           if (!latest || !currentStory || !source) throw Error("故事已删除，未写入补充。");
           currentSource(latest, source);
           if (control.signal.aborted || latest.interaction?.id !== interactionId || latest.interaction.status !== "running" || latest.revision !== revision)

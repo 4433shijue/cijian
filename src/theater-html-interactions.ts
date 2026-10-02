@@ -1,4 +1,4 @@
-import { db, keyFor } from "./db";
+import { db, keyFor, worldForStory } from "./db";
 import { active as storyActive } from "./generation-state";
 import { withStoryLock } from "./locks";
 import { generate } from "./model";
@@ -103,14 +103,14 @@ export function generateHtmlPage(
       let saving = Promise.resolve();
       let storageError: unknown;
       try {
-        const [record, event, story, prefs, world] = await Promise.all([
+        const [record, event, story, prefs] = await Promise.all([
           db.theaters.get(id),
           db.events.get(initial.eventId),
           db.stories.get(initial.storyId),
           db.preferences.get("preferences"),
-          db.world.toArray(),
         ]);
         if (!record || !story || !prefs) throw Error("故事已不存在。");
+        const world = await worldForStory(story);
         current(record, event);
         const page = record.htmlPages!.find((page) => page.id === pageId);
         const sourcePreset = record.presets.find(
@@ -249,7 +249,7 @@ export function generateHtmlPage(
             db.theaters.get(id),
             db.events.get(event!.id),
             db.stories.get(story.id),
-            db.world.toArray(),
+            worldForStory(story),
           ]);
           if (!latest || !latestStory || !source) throw Error("故事已删除。");
           current(latest, source);

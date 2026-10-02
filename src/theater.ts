@@ -1,5 +1,5 @@
 import { assemble } from "./context";
-import { db, keyFor } from "./db";
+import { db, keyFor, worldForStory } from "./db";
 import { active as storyActive } from "./generation-state";
 import { withStoryLock } from "./locks";
 import { generate } from "./model";
@@ -415,12 +415,12 @@ export function generateTheater(eventId: string): Promise<Outcome> {
         html = "",
         last = 0;
       try {
-        const [story, event, world, prefs] = await Promise.all([
+        const [story, event, prefs] = await Promise.all([
           db.stories.get(initial.storyId),
           db.events.get(eventId),
-          db.world.toArray(),
           db.preferences.get("preferences"),
         ]);
+        const world = story ? await worldForStory(story) : [];
         if (
           !story ||
           !event ||
@@ -483,11 +483,11 @@ export function generateTheater(eventId: string): Promise<Outcome> {
           "rw",
           [...tables, db.world],
           async (): Promise<Outcome> => {
-            const [latestStory, latestEvent, latestWorld] = await Promise.all([
+            const [latestStory, latestEvent] = await Promise.all([
               db.stories.get(story.id),
               db.events.get(eventId),
-              db.world.toArray(),
             ]);
+            const latestWorld = latestStory ? await worldForStory(latestStory) : [];
             if (
               !latestStory ||
               !latestEvent ||

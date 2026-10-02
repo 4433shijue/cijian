@@ -130,6 +130,7 @@ const story = z.object({
   worldIds: ids,
   created: z.number(),
   updated: z.number(),
+  archived: z.boolean().optional(),
   draft: str,
   chatDraft: str,
   player: str,

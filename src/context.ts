@@ -101,8 +101,10 @@ export function buildContext(
     if (text) mats.push({ id, label, text, mandatory, priority, stable, sources, excerpt });
   };
   const present = viewer ? [s.player, s.partner] : s.roles.map((r) => r.id);
+  const worldById = new Map(world.map((entry) => [entry.id, entry]));
+  const roleById = new Map(s.roles.map((role) => [role.id, role]));
   const loadedWorld = s.worldIds.flatMap((id) => {
-    const w = world.find((entry) => entry.id === id);
+    const w = worldById.get(id);
     if (
       !w ||
       !w.enabled ||
@@ -162,7 +164,7 @@ export function buildContext(
       m.text, true, 90, false, m.sources);
   }
   for (const e of history) {
-    add(e.id, `第${e.round}回 / 消息顺序 ${e.seq} / ${e.id} / 版本 ${e.versionId} / ${e.kind === "novel" ? "正文" : (s.roles.find((r) => r.id === e.speaker)?.name || "角色") + " 发言"}`,
+    add(e.id, `第${e.round}回 / 消息顺序 ${e.seq} / ${e.id} / 版本 ${e.versionId} / ${e.kind === "novel" ? "正文" : (roleById.get(e.speaker)?.name || "角色") + " 发言"}`,
       visibleEvent(e, viewer, s), true, 120, false, [{ id: e.id, versionId: e.versionId }]);
   }
   let task = input;
@@ -178,7 +180,7 @@ export function buildContext(
     task = "正文和手机聊天发生在同一条时间线上。所给正文是已经发生的共同经历，沿着最后的状态继续聊天；较晚的明确变化覆盖旧状态。回合记忆是摘要，细节以窗口内原文为准。不要把旁白或别人的心理描写当成自己说过的话。\n" + task;
   const pending = kind === "novel" ? events.filter((e) => e.chatPending && usableEvent(e, s)).sort((a, b) => a.seq - b.seq) : [];
   if (pending.length) task = "已发送、尚未获得聊天回复的本次补充（不算已完成回合）\n" + JSON.stringify(pending.map((e) => ({
-    speaker: s.roles.find((r) => r.id === e.speaker)?.name, order: e.seq, text: e.text,
+    speaker: roleById.get(e.speaker)?.name, order: e.seq, text: e.text,
   }))) + "\n" + task;
   task = `本次${options.rewrite ? "重写历史回合" : `生成第${s.nextRound || Math.max(0, ...selected.rounds.map((r) => r.number)) + 1}回`}。参考按回合编号由早到晚排列，编号空缺不代表事件连续发生。较晚的有效原文覆盖旧状态；记忆与原文重叠时以原文为准。${selected.gaps.length ? `较早的${roundLabel(selected.gaps)}未被所选记忆完整覆盖，不要将缺失内容自行补成事实。` : ""}\n` + task;
   const autoTheater = kind === "novel" && !!s.theaterAuto;
