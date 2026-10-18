@@ -13,7 +13,7 @@ const cancellations = typeof window !== "undefined" && typeof BroadcastChannel !
 cancellations?.addEventListener("message", (event) => {
   if (typeof event.data === "string") active.get(event.data)?.control.abort();
 });
-const tables = [db.theaters, db.events, db.stories, db.jobs];
+const tables = () => [db.theaters, db.events, db.stories, db.jobs];
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 function currentSource(record: TheaterRecord, event: SceneEvent | undefined) {
@@ -145,7 +145,7 @@ export function interactWithTheater(recordId: string, sectionId: string, kind: "
         const context = buildTheaterContext(story, event!, world, prefs, profile, [preset], { instruction, material });
         if (control.signal.aborted) return;
         const revision = (record.revision || 0) + 1;
-        await db.transaction("rw", tables, async () => {
+        await db.transaction("rw", tables(), async () => {
           const latest = await db.theaters.get(recordId);
           const source = await db.events.get(initial.eventId);
           if (!latest || !(await db.stories.get(story.id))) throw Error("故事已删除，未发送请求。");
@@ -178,7 +178,7 @@ export function interactWithTheater(recordId: string, sectionId: string, kind: "
         if (!result.complete) throw Error("这次补充未完整结束，原内容已保留。" + result.reason);
         const parsed = parseJSON(raw);
         const data = mergeTheaterAddition({ ...record, data: nextData }, sectionId, parsed.theater);
-        await db.transaction("rw", [...tables, db.world], async () => {
+        await db.transaction("rw", [...tables(), db.world, db.storyWorld], async () => {
           const latest = await db.theaters.get(recordId);
           const source = await db.events.get(initial.eventId);
           const currentStory = await db.stories.get(story.id);

@@ -125,7 +125,7 @@ const interactiveReply = { theater: { version: 1, sections: [{
 beforeEach(async () => {
   await db.delete();
   await db.open();
-  story = makeStory(
+  story = makeStory("novel",
     "雨城番外",
     [role],
     [world.id],
@@ -133,7 +133,7 @@ beforeEach(async () => {
   );
   story.draft = "未来回合尚未写出的秘密";
   await db.stories.put(story);
-  await db.world.put(world);
+  await db.storyWorld.put({...world,storyId:story.id});
   await db.preferences.put(prefs);
   await db.profiles.put(profile);
   await db.events.put(event());
@@ -416,7 +416,7 @@ it.each(["version", "role", "world"])(
       await db.stories.update(story.id, {
         roles: [{ ...role, persona: "人设已经修改" }],
       });
-    else await db.world.update(world.id, { text: "世界规则已经修改" });
+    else await db.storyWorld.update(world.id, { text: "世界规则已经修改" });
     resolve(response(interactiveReply));
     expect(await work).toBe("stale");
     expect((await db.theaters.toArray())[0].status).toBe("failed");

@@ -156,7 +156,7 @@ export function buildTheaterContext(
   );
 }
 
-const tables = [db.events, db.theaters, db.stories];
+const tables = () => [db.events, db.theaters, db.stories];
 function summary(record: TheaterRecord): NonNullable<SceneEvent["theater"]> {
   return {
     id: record.id,
@@ -194,7 +194,7 @@ export async function createTheaterAttempt(
   presets: TheaterPreset[],
   density?: TheaterDensity,
 ): Promise<TheaterRecord> {
-  return db.transaction("rw", tables, async () => {
+  return db.transaction("rw", tables(), async () => {
     const current = await db.events.get(event.id);
     const story = await db.stories.get(event.storyId);
     if (
@@ -202,7 +202,7 @@ export async function createTheaterAttempt(
       current.deleted ||
       current.kind !== "novel" ||
       current.versionId !== event.versionId ||
-      !story
+      (!story || story.kind!=="novel")
     )
       throw Error("正文已经变化，请重新打开小剧场");
     const existing =
@@ -239,7 +239,7 @@ export async function updateTheaterAttempt(
   raw: string,
   html: string,
 ) {
-  await db.transaction("rw", tables, async () => {
+  await db.transaction("rw", tables(), async () => {
     const record = await db.theaters.get(recordId);
     if (!record || record.status !== "running") return;
     const data = parseStreamingTheater(raw, record.presets);
@@ -261,7 +261,7 @@ export async function finishTheaterAttempt(
   html: string,
   raw: string,
 ): Promise<boolean> {
-  return db.transaction("rw", tables, async () => {
+  return db.transaction("rw", tables(), async () => {
     const record = await db.theaters.get(recordId);
     if (!record || record.status !== "running") return false;
     const current = await db.events.get(event.id);
@@ -313,7 +313,7 @@ export async function failTheaterAttempt(
   error: unknown,
   status: "failed" | "interrupted" = "failed",
 ) {
-  await db.transaction("rw", tables, async () => {
+  await db.transaction("rw", tables(), async () => {
     const record = await db.theaters.get(recordId);
     if (!record || record.status !== "running") return;
     const next: TheaterRecord = {
@@ -331,7 +331,7 @@ export async function rebindTheaterAttempt(
   recordId: string,
   finalEvent: SceneEvent,
 ): Promise<boolean> {
-  return db.transaction("rw", tables, async () => {
+  return db.transaction("rw", tables(), async () => {
     const record = await db.theaters.get(recordId);
     const current = await db.events.get(finalEvent.id);
     if (
@@ -422,7 +422,7 @@ export function generateTheater(eventId: string): Promise<Outcome> {
         ]);
         const world = story ? await worldForStory(story) : [];
         if (
-          !story ||
+          !story || story.kind!=="novel" ||
           !event ||
           event.deleted ||
           event.versionId !== initial.versionId ||
@@ -481,7 +481,7 @@ export function generateTheater(eventId: string): Promise<Outcome> {
         html = validated.html;
         return await db.transaction(
           "rw",
-          [...tables, db.world],
+          [...tables(), db.world, db.storyWorld],
           async (): Promise<Outcome> => {
             const [latestStory, latestEvent] = await Promise.all([
               db.stories.get(story.id),

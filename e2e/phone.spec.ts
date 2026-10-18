@@ -1,7 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
-import { seedJourney, readStore } from "./fixtures";
+import { seedJourney, readStore, seedPhone } from "./fixtures";
 async function open(page: Page) {
-  await page.goto("/#story/fixture-story");
+  await seedPhone(page);
+  await page.goto("/#story/fixture-story-phone");
   await page.getByRole("button", { name: "角色手机", exact: true }).click();
   await page.getByRole("button", { name: "联系人", exact: true }).click();
   await page.getByRole("button", { name: "发消息", exact: true }).click();
@@ -255,9 +256,9 @@ test("group composition, moments visibility and backup restore", async ({
   await page.getByRole("button", { name: "作为副本合并" }).click();
   await expect
     .poll(async () => (await readStore(page, "stories")).length)
-    .toBe(2);
+    .toBe(4);
   const copied = (await readStore(page, "stories")).find(
-    (s) => s.id !== "fixture-story",
+    (s) => s.kind === "phone" && s.id !== "fixture-story-phone",
   );
   expect(
     (await readStore(page, "phoneRecords")).filter(

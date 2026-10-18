@@ -1,3 +1,4 @@
+import { requireStory } from "./story-service";
 import { mainlineEvents } from "./mainline";
 import { z } from "zod";
 import { db, ensureStoryRounds, keyFor } from "./db";
@@ -248,6 +249,7 @@ async function summarize(
 }
 
 export async function memoryDue(s: Story) {
+  if (s.kind !== "novel") return false;
   const prefs = await db.preferences.get("preferences");
   if (!prefs) return false;
   const events = await db.events.where("storyId").equals(s.id).toArray();
@@ -267,6 +269,7 @@ export async function organizeMemory(
     active.set(storyId, control);
     let started = false;
     try {
+      await requireStory(storyId, "novel");
       const s = await ensureStoryRounds(storyId);
       const prefs = await db.preferences.get("preferences");
       const p = prefs && (await db.profiles.get(prefs.activeProfile));

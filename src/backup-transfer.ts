@@ -1,3 +1,6 @@
+import { extraTables } from "./work-types";
+import { remapExtra, extraLinks, checkExtraRow } from "./work-backup";
+import { migrateStories } from "./story-service";
 import { phoneTables } from "./phone-types";
 import { remapPhone, ensurePhone } from "./phone-store";
 import { phoneLinks, checkPhoneRow } from "./phone-backup";
@@ -99,7 +102,7 @@ export async function stageBackup(
   }
   const meta = parser.finish();
   if (counts.preferences > 1) throw Error("备份有多份全局设置");
-  await checkStaged(session, control, records, file.size);
+  await checkStaged(session, control, records, file.size, Number(meta.version));
   const summary: ImportSummary = {
     session,
     created: String(meta.created),
@@ -119,8 +122,10 @@ async function checkStaged(
   control: TransferControl,
   totalRecords: number,
   bytes: number,
+  version: number,
 ) {
   const stories = new Map<string, Set<string>>();
+  const storyKinds = new Map<string,Story["kind"]>();
   let records = 0;
   const progress = () => {
     control.check();
@@ -135,6 +140,7 @@ async function checkStaged(
       });
   };
   await eachStaged(session, "stories", async (s: Story) => {
+    if (version >= 6 && !s.kind) throw Error("3.0 备份作品缺少类型");
     progress();
     const roles = new Set(s.roles.map((r) => r.id));
     if (
@@ -142,7 +148,13 @@ async function checkStaged(
       [s.player, s.partner].some((id) => id && !roles.has(id))
     )
       throw Error("故事角色关联不完整");
-    stories.set(s.id, roles);
+    stories.set(s.id, roles); storyKinds.set(s.id,s.kind);
+    if(version>=6)for(const id of s.worldIds){const entry=await staged(session,"storyWorld",id);if(entry?.storyId!==s.id)throw Error("作品世界书副本缺失");}
+  });
+  for (const table of extraTables) await eachStaged(session, table, async row => {
+    const related = new Map<string, any>();
+    for (const [t, id] of extraLinks(table, row)) related.set(`${t}:${id}`, await staged(session, t as BackupTable, id));
+    checkExtraRow(table, row, related);
   });
   for (const table of phoneTables) await eachStaged(session, table, async row => {
     const related = new Map<string, any>();
@@ -150,6 +162,7 @@ async function checkStaged(
     checkPhoneRow(table, row, related);
   });
   await eachStaged(session, "events", async (e) => {
+    if(version>=6 && storyKinds.get(e.storyId)==="phone")throw Error("手机作品不能包含小说事件");
     progress();
     if (
       !stories.has(e.storyId) ||
@@ -284,6 +297,7 @@ export function backupRemapper() {
     styleIds,
     theaterPresetIds,
     row(table: BackupTable, x: any, replace: boolean): any {
+      if (extraTables.includes(table as any)) return remapExtra(table, x, id);
       if (table.startsWith("phone")) return remapPhone(table, x, id);
       switch (table) {
         case "roles":
@@ -493,7 +507,7 @@ export async function commitStaged(
         stylePresets: styles,
         theaterPresets: theaterPresets.presets,
       });
-      for (const story of await db.stories.toArray()) { control.check(); await ensurePhone(story.id); }
+      control.check(); await migrateStories();
       control.check();
     })
     .finally(() => {
@@ -535,7 +549,7 @@ export async function exportBackupBlob(
       await writer.write(
         JSON.stringify({
           format: "little-scene",
-          version: 5,
+          version: 6,
           created: new Date().toISOString(),
           scope: s ? "story" : "library",
           ...(s ? { title: s.title } : {}),
@@ -548,10 +562,10 @@ export async function exportBackupBlob(
         await visitRows(db.table(table), async (raw: any) => {
           control.check();
           if (s) {
-            if (["profiles", "roleDrafts"].includes(table)) return;
+            if (["profiles", "roleDrafts", "roles", "world"].includes(table)) return;
             if (table === "stories" && raw.id !== s.id) return;
             if (
-              [...phoneTables, "events", "memories", "chatBatches", "theaters"].includes(table) &&
+              [...phoneTables, ...extraTables, "events", "memories", "chatBatches", "theaters"].includes(table) &&
               raw.storyId !== s.id
             )
               return;

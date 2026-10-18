@@ -1,3 +1,6 @@
+import { CreateStory } from "./CreateStory";
+import { WorkPage, MigrationNotice, WorkWorldEditor } from "./WorkPage";
+import { updateStory } from "./story-service";
 import PhonePanel from "./PhonePanel";
 import { useEffect, useLayoutEffect, useState, useRef, type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -264,7 +267,7 @@ export default function App() {
         {route === "start" ? (
           <StarterPage notify={setNotice} />
         ) : route.startsWith("story/") ? (
-          <StoryPage key={route.slice(6)} id={route.slice(6)} notify={setNotice}
+          <WorkPage novel={StoryPage} key={route.slice(6)} id={route.slice(6)} notify={setNotice}
             reading={reading} onReadingChange={(value) => setReadingStory(value ? route.slice(6) : "")} />
         ) : section === "roles" ? (
           <RolesPage notify={setNotice} />
@@ -292,6 +295,7 @@ function StoriesPage({ notify }: { notify: Notice }) {
     [];
   const roles = useLiveQuery(() => db.roles.toArray(), []) || [];
   const world = useLiveQuery(() => db.world.toArray(), []) || [];
+  const [filterKind, setFilterKind] = useState("all");
   const [create, setCreate] = useState(false),
     [query, setQuery] = useState(""),
     [showArchived, setShowArchived] = useState(false),
@@ -302,6 +306,7 @@ function StoriesPage({ notify }: { notify: Notice }) {
   const needle = query.trim().toLocaleLowerCase();
   const visibleStories = stories.filter((s) => {
     if (!showArchived && s.archived) return false;
+    if (filterKind !== "all" && s.kind !== filterKind) return false;
     return !needle || [s.title, s.background, ...s.roles.map((r) => r.name)]
       .join(" ")
       .toLocaleLowerCase()
@@ -318,7 +323,7 @@ function StoriesPage({ notify }: { notify: Notice }) {
         <button
           className="primary"
           data-guide="story-create"
-          onClick={() => (roles.length ? setCreate(true) : openStarter(1))}
+          onClick={() => setCreate(true)}
         >
           <Plus size={18} />
           开启一个故事
@@ -341,7 +346,7 @@ function StoriesPage({ notify }: { notify: Notice }) {
               用自己的角色，收藏想看的日常。
             </p>
             <button
-              onClick={() => (roles.length ? setCreate(true) : openStarter(1))}
+              onClick={() => setCreate(true)}
             >
               从一个念头开始 <Feather size={16} />
             </button>
@@ -353,7 +358,7 @@ function StoriesPage({ notify }: { notify: Notice }) {
         <h2>
           我的故事 <small>{visibleStories.length}</small>
         </h2>
-        <div className="story-filters">
+        <div className="story-filters"><select aria-label="作品类型" value={filterKind} onChange={e=>setFilterKind(e.target.value)}><option value="all">全部</option><option value="novel">小说</option><option value="phone">手机</option></select>
           <input
             aria-label="搜索故事"
             value={query}
@@ -366,11 +371,12 @@ function StoriesPage({ notify }: { notify: Notice }) {
           </label>
         </div>
       </div>
+      <MigrationNotice />
       <div className="story-grid">
         {visibleStories.map((s, i) => (
           <a className="story-card" key={s.id} href={"#story/" + s.id}>
             <div className={"cover cover-" + (i % 3)}>
-              <span>STORY {String(i + 1).padStart(2, "0")}</span>
+              <span>{s.kind === "phone" ? "手机作品" : "小说作品"} {String(i + 1).padStart(2, "0")}</span>
               <BookOpen size={34} />
               <h3>{s.title}</h3>
             </div>
@@ -401,71 +407,7 @@ function StoriesPage({ notify }: { notify: Notice }) {
       {!stories.length && <Empty>这里还空着，先开启一个故事吧。</Empty>}
       {create && (
         <Modal title="开启一个故事" onClose={() => setCreate(false)}>
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (!selected.length) {
-                notify("至少选一位角色");
-                return;
-              }
-              const s = makeStory(
-                title.trim(),
-                roles.filter((r) => selected.includes(r.id)),
-                worldIds,
-                background,
-              );
-              await db.stories.add(s);
-              location.hash = "story/" + s.id;
-              setCreate(false);
-            }}
-          >
-            <Field label="故事名字">
-              <input
-                autoFocus
-                required
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="例如，雨停以前"
-              />
-            </Field>
-            <Field label="这次与谁相遇">
-              <PickRoles
-                roles={roles}
-                selected={selected}
-                onChange={setSelected}
-              />
-            </Field>
-            {!roles.length && <a href="#roles">先去添加角色</a>}
-            <Field label="开场背景 · 仅作者视角可读">
-              <textarea
-                value={background}
-                onChange={(e) => setBackground(e.target.value)}
-                placeholder="时间、地点，他们此刻的关系……"
-              />
-            </Field>
-            <Field label="带入世界书">
-              {world.map((w) => (
-                <Toggle
-                  key={w.id}
-                  label={w.title}
-                  value={worldIds.includes(w.id)}
-                  onChange={(v) =>
-                    setWorldIds(
-                      v
-                        ? [...worldIds, w.id]
-                        : worldIds.filter((id) => id !== w.id),
-                    )
-                  }
-                />
-              ))}
-            </Field>
-            <p className="hint">
-              故事会保存角色当前的人设副本，之后修改角色库不会改变这里。
-            </p>
-            <button className="primary" type="submit">
-              翻开第一页
-            </button>
-          </form>
+          <CreateStory onCreated={s=>{location.hash="story/"+s.id;setCreate(false)}} />
         </Modal>
       )}
     </div>
@@ -1226,19 +1168,19 @@ function EventEditor({
         </Field>
         {event.kind === "novel" && (
           <>
-            <Field label="本段如何进入手机聊天">
+            <Field label="本段的角色知情范围">
               <select value={visibility} onChange={(e) => setVisibility(e.target.value as typeof visibility)}>
                 <option value="inherit">跟随故事设置{sharedTimeline(story) ? " · 参考普通正文" : " · 严格知情"}</option>
                 <option value="author">私密段落 · 仅作者可见</option>
                 <option value="facts">仅共享下方授权的事实</option>
               </select>
             </Field>
-            <p className="hint">普通正文在参考普通正文模式下会进入聊天参考。含秘密或内心独白的段落，可以整段设为私密，或只共享选中的事实。</p>
+            <p className="hint">设置角色能够知道哪些内容，用于本作品的角色视角与记忆。含秘密或内心独白的段落可设为私密。</p>
             <details open={visibility === "facts" || (!sharedTimeline(story) && visibility === "inherit")}>
               <summary>高级 · 角色可知的事实摘录</summary>
             <h3>角色可知的事实摘录</h3>
             <p className="hint">
-              选择“仅共享下方授权的事实”或使用严格知情模式时，以下授权才控制本段的聊天参考。摘录必须逐字来自正文。
+              选择“仅共享下方授权的事实”或使用严格知情模式时，以下授权控制本段的角色知情范围。摘录必须逐字来自正文。
             </p>
             {facts.map((f, i) => (
               <div className="paragraph" key={f.id}>
@@ -1661,7 +1603,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
       () => db.memories.where("storyId").equals(id).toArray(),
       [id],
     ) || [];
-  const world = useLiveQuery(() => db.world.toArray(), []) || [];
+  const world = useLiveQuery(() => db.storyWorld.where("storyId").equals(id).toArray(), [id]) || [];
   useEffect(() => {
     void ensureStoryRounds(id).catch(() => notify("回合顺序初始化失败，请刷新后重试。"));
   }, [id, s?.timelineMode, s?.autoMemory, s?.roles.map((r) => r.id).join(","), events.length]);
@@ -1944,23 +1886,8 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
         />
       </div>
       <div className="mode-bar">
-        <div className="segmented">
-          <button
-            className={mode === "novel" ? "active" : ""}
-            onClick={() => setMode("novel")}
-          >
-            <Feather size={16} />
-            正文
-          </button>
-          <button
-            className={mode === "chat" ? "active" : ""}
-            onClick={() => setMode("chat")}
-          >
-            <MessageCircle size={16} />
-            角色手机
-          </button>
-        </div>
-        <span className="hint">正文与手机番外 · 单向参考</span>
+        <strong>小说作品</strong>
+
       </div>
       </div>
       {mode === "chat" && <PhonePanel key={s.id} story={s} />}
@@ -1977,17 +1904,17 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
             setMode("novel");
             openComposer();
           }}
-          onChat={() => setMode("chat")}
+          onChat={() => { location.hash = "stories"; }}
         />
       )}
       {!reading && !layout.toolbarCollapsed && mode === "chat" && (
         <ContextTip id="chat" title="选好身份，再开始聊天">
           <p>
-            「我扮演」是你发消息时的身份，「聊天对象」是回复你的角色。连续发送消息，说完后点「让 TA 回复」，对方会结合整组消息自然分条回复。{sharedTimeline(s) ? "手机参考普通正文，手机番外不进入正文；私聊只对参与双方可知。" : "当前使用严格知情模式，正文按事实授权进入聊天。可以在故事设置中切换为参考普通正文。"}
+            「我扮演」是你发消息时的身份，「聊天对象」是回复你的角色。连续发送消息，说完后点「让 TA 回复」，对方会结合整组消息自然分条回复。{sharedTimeline(s) ? "手机参考普通正文，手机作品不进入正文；私聊只对参与双方可知。" : "当前使用严格知情模式，正文按事实授权进入聊天。可以在故事设置中切换为参考普通正文。"}
           </p>
         </ContextTip>
       )}
-      {!reading && !layout.toolbarCollapsed && s.timelineMode === undefined && (
+      {!reading && !layout.toolbarCollapsed && false && (
         <div className="timeline-upgrade">
           <div><strong>让角色手机参考普通正文</strong><p>整本故事一次启用，普通正文无需逐段授权。已有的特定角色授权会保留，私密内容可在段落编辑中设置。</p></div>
           <button disabled={generating} onClick={async () => {
@@ -2471,16 +2398,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
       {panel === "settings" && (
         <Modal title="这本故事的设定" onClose={() => setPanel("")}>
           <StoryTheaterSettings story={s} prefs={prefs} update={update} />
-          <Field label="手机如何参考正文">
-            <select value={s.timelineMode || "strict"} disabled={generating} onChange={async (event) => {
-              try { await setTimelineMode(id, event.target.value as "shared" | "strict"); notify("故事互通设置已保存"); }
-              catch (error) { notify(String(error)); }
-            }}>
-              <option value="shared">参考普通正文（推荐）</option>
-              <option value="strict">严格知情（高级）</option>
-            </select>
-          </Field>
-          <p className="hint">手机番外只读取角色可知的正文和记忆，不反向影响主线。严格知情模式只提供明确授权的正文事实。</p>
+          <WorkWorldEditor story={s} />
           <Field label="故事名字">
             <input
               value={s.title}
@@ -2851,9 +2769,9 @@ function StylePresetSettings({
                 })
               }
             >
-              <option value="both">正文与手机番外</option>
+              <option value="both">正文与手机作品</option>
               <option value="novel">仅正文</option>
-              <option value="chat">仅手机番外</option>
+              <option value="chat">仅手机作品</option>
             </select>
           </Field>
           <Field label="风格要求">
@@ -3023,7 +2941,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
             </Field>
             <p className="hint">
               默认参考最近 3 段完整正文，可设为 1 到 20
-              段，另参考有效正文来源的已确认记忆，不读取手机番外，并区分人物知情范围。新一轮灵感会使用新段数，关闭开发者模式后设置仍生效。
+              段，另参考有效正文来源的已确认记忆，不读取手机作品，并区分人物知情范围。新一轮灵感会使用新段数，关闭开发者模式后设置仍生效。
             </p>
             <Field label="编辑提示词">
               <select

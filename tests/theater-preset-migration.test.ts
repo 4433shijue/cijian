@@ -18,7 +18,7 @@ it("inherits a missing built-in presentation without replacing custom words in s
   const expected = { ...legacyForum, presentation: "forum" };
   expect(resolveTheaterPreset(legacyForum)).toEqual(expected);
   expect(allTheaterPresets(prefs).find((preset) => preset.id === legacyForum.id)).toEqual(expected);
-  expect(selectedTheaterPresets({ ...makeStory("测试", []), theaterPresetIds: [legacyForum.id] }, prefs)).toEqual([expected]);
+  expect(selectedTheaterPresets({ ...makeStory("novel", "测试", []), theaterPresetIds: [legacyForum.id] }, prefs)).toEqual([expected]);
   expect(editableTheaterPreset(legacyForum)).toEqual(expected);
   const copied = copiedTheaterPreset(legacyForum);
   expect(copied).toEqual({ ...expected, id: copied.id, name: legacyForum.name + "（副本）" });
@@ -52,7 +52,7 @@ it("upgrades a schema 8 database to 9 by repairing configuration only, preservin
   const unknown = { ...legacyForum, id: "private-preset" };
   const legacyExplicit = { ...legacyForum, id: "theater-details", presentation: "freeform" } as unknown as TheaterPreset;
   const prefs = preferences([legacyForum, explicitStatic, unknown, legacyExplicit]);
-  const story = { ...makeStory("旧故事", []), id: "story", theaterPresetIds: [legacyForum.id] };
+  const story = { ...makeStory("novel", "旧故事", []), id: "story", theaterPresetIds: [legacyForum.id] };
   const prose = { id: "prose", storyId: story.id, seq: 1, text: "她在门口停了一下。" };
   const result: TheaterRecord = {
     id: "old-result", storyId: story.id, eventId: prose.id, sourceVersionId: "version",
@@ -72,7 +72,7 @@ it("upgrades a schema 8 database to 9 by repairing configuration only, preservin
   const upgraded = new SceneDB(name);
   try {
     await upgraded.open();
-    expect(upgraded.verno).toBe(10);
+    expect(upgraded.verno).toBe(11);
     expect(await upgraded.preferences.get("preferences")).toEqual({
       ...prefs, theaterPresets: [
         { ...legacyForum, presentation: "forum" }, explicitStatic, { ...unknown, presentation: "custom" }, legacyExplicit,

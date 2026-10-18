@@ -29,11 +29,10 @@ async function seed(page: Page) {
   await page.reload();
 }
 
-for (const mobile of [false, true]) test(`phone reads prose without feeding back into mainline (${mobile ? "mobile" : "desktop"})`, async ({ page }) => {
+for (const mobile of [false, true]) test(`phone and novel requests stay isolated (${mobile ? "mobile" : "desktop"})`, async ({ page }) => {
   if (mobile) await page.setViewportSize({ width: 390, height: 844 });
   const errors: string[] = []; page.on("pageerror", (e) => errors.push(e.message));
   await seed(page);
-  await page.getByRole("button", { name: "整本启用参考普通正文", exact: true }).click();
   await expect(page.getByRole("button", { name: "整本启用参考普通正文", exact: true })).toHaveCount(0);
   await expect.poll(async () => (await readStore(page, "memories")).length).toBe(0);
   const requests: any[] = [];
@@ -53,11 +52,11 @@ for (const mobile of [false, true]) test(`phone reads prose without feeding back
   await expect(page.locator(".phone-message.theirs")).toHaveCount(2);
   expect(requests).toHaveLength(1);
   expect(requests[0].messages[1].content).not.toContain("雾岚岛的船票已经放在蓝色抽屉。");
-  expect(requests[0].messages[1].content).toContain("手机番外独立发展");
-  expect(requests[0].messages[1].content).toContain("旧正文第32段");
+  expect(requests[0].messages[1].content).toContain("独立的手机作品");
+  expect(requests[0].messages[1].content).not.toContain("旧正文第32段");
   expect(requests[0].messages[1].content).not.toContain("PRIVATE_SECRET_HIDDEN");
   await page.screenshot({ path: `work/timeline-${mobile ? "mobile" : "desktop"}.png`, fullPage: false });
-  await page.getByRole("button", { name: "正文", exact: true }).click();
+  await page.goto("/#story/fixture-story");
   await page.getByRole("button", { name: "扩写这一刻", exact: true }).click();
   await expect(page.locator(".prose-event").last().locator(".event-text")).toHaveText("周屿把伞递过来，说“收下吧”。");
   await expect(page.getByRole("button", { name: "检查并采用", exact: true })).toHaveCount(0);
@@ -70,16 +69,15 @@ for (const mobile of [false, true]) test(`phone reads prose without feeding back
   expect(errors).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.reload();
-  expect((await readStore(page, "stories"))[0].timelineMode).toBe("shared");
+  expect((await readStore(page,"stories")).find(s=>s.id==="fixture-story").kind).toBe("novel");
 });
 
 test("optional dialogue advice and paragraph privacy controls persist without invalidating later prose", async ({ page }) => {
   await seed(page);
-  await page.getByRole("button", { name: "整本启用参考普通正文", exact: true }).click();
   await expect(page.getByRole("button", { name: "整本启用参考普通正文", exact: true })).toHaveCount(0);
   const before = (await readStore(page, "events")).find((e) => e.id === "old-3");
   await page.locator(".prose-event").first().getByRole("button", { name: "编辑", exact: true }).click();
-  await page.getByLabel("本段如何进入手机聊天").selectOption("author");
+  await page.getByLabel("本段的角色知情范围").selectOption("author");
   await page.getByRole("button", { name: "保存新版本", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "修改这一刻" })).toHaveCount(0);
   expect((await readStore(page, "events")).find((e) => e.id === "old-3").review).toBe(before.review);

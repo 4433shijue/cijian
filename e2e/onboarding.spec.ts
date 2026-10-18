@@ -60,9 +60,10 @@ async function createRole(page: Page, name = "顾言") {
   await page.getByRole("button", { name: "保存角色，继续" }).click();
 }
 async function createStory(page: Page) {
-  await page.getByLabel("故事名字", { exact: true }).fill("风经过书页");
+  await page.getByRole("button",{name:/小说模式/}).click();
+  await page.getByLabel("作品名字", { exact: true }).fill("风经过书页");
   await page.getByLabel("开场背景").fill("傍晚的旧书店，风吹动了门口的书页。");
-  await page.getByRole("button", { name: "保存故事，继续" }).click();
+  await page.getByRole("button", { name: "创建小说作品" }).click();
 }
 async function starterState(page: Page) {
   return page.evaluate(() =>
@@ -102,21 +103,22 @@ test("first visit, failed connection, refresh recovery, first real save and comp
   );
   expect((await readStore(page, "profiles"))[0].key).toBeUndefined();
   await page.getByRole("button", { name: "保存角色，继续" }).click();
-  await page.getByLabel("故事名字", { exact: true }).fill("风经过书页");
+  await page.getByRole("button",{name:/小说模式/}).click();
+  await page.getByLabel("作品名字", { exact: true }).fill("风经过书页");
   await page.getByLabel("开场背景").fill("傍晚的旧书店。");
   await page.reload();
-  await expect(page.getByLabel("故事名字", { exact: true })).toHaveValue(
+  await expect(page.getByLabel("作品名字", { exact: true })).toHaveValue(
     "风经过书页",
   );
   await expect(
-    page.getByRole("button", { name: /顾言/, exact: false }),
-  ).toHaveAttribute("aria-pressed", "true");
+    page.getByRole("checkbox", { name: "顾言", exact: true }),
+  ).toBeChecked();
   await page.getByRole("button", { name: "添加角色", exact: true }).click();
   await createRole(page, "许枝");
-  await expect(page.getByLabel("故事名字", { exact: true })).toHaveValue(
+  await expect(page.getByLabel("作品名字", { exact: true })).toHaveValue(
     "风经过书页",
   );
-  await page.getByRole("button", { name: "保存故事，继续" }).click();
+  await page.getByRole("button", { name: "创建小说作品" }).click();
   await expect(
     page.getByRole("heading", { name: "风经过书页", exact: true }),
   ).toBeVisible();
@@ -141,13 +143,8 @@ test("first visit, failed connection, refresh recovery, first real save and comp
     page.getByLabel("新手引导已完成", { exact: true }),
   ).toBeVisible();
   expect((await starterState(page)).status).toBe("complete");
-  await page.getByRole("button", { name: "看看手机聊天" }).click();
-  await expect(
-    page.getByLabel("角色手机", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByLabel("手机机主", { exact: true })).toHaveValue(
-    (await readStore(page, "stories"))[0].player,
-  );
+  await page.getByRole("button", {name:"继续写故事",exact:true}).click();
+  await expect(page.getByRole("button",{name:"角色手机",exact:true})).toHaveCount(0);
   await page.getByRole("button", { name: "故事记忆", exact: true }).click();
   await expect(
     page.getByLabel("回合记忆，按需带入", { exact: true }),
@@ -286,7 +283,7 @@ test("desktop artwork and prepared story; missing story has a recovery path", as
   await page.reload();
   await expect(page.getByRole("button", { name: "去选择故事" })).toBeVisible();
   await page.getByRole("button", { name: "去选择故事" }).click();
-  await expect(page.getByLabel("故事名字", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading",{name:"先选择作品模式"})).toBeVisible();
 });
 
 test("leaving a pending connection check does not advance or save later", async ({

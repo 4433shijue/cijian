@@ -450,7 +450,7 @@ it("retains full ten-dimension persona without exposing its secrets through publ
   expect(lin!.paragraphs.every((p) => !p.public)).toBe(true);
   for (const title of completionDimensions)
     expect(lin!.persona).toContain(title);
-  const story = makeStory("测试", [lin!, shen!]);
+  const story = makeStory("novel", "测试", [lin!, shen!]);
   // Distinguish the partner's secret from the viewer's own dossier.
   story.roles[1].paragraphs = [];
   story.roles[1].persona = "书店老板。";

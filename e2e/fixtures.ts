@@ -33,7 +33,7 @@ export async function seedJourney(page: Page, basePath = "/") {
       persona("fixture-role-b", "许知"),
     ];
     const transaction = database.transaction(
-      ["roles", "world", "stories"],
+      ["roles", "world", "stories", "storyWorld"],
       "readwrite",
     );
     roles.forEach((role) => transaction.objectStore("roles").put(role));
@@ -57,9 +57,11 @@ export async function seedJourney(page: Page, basePath = "/") {
       .put({
         id: "fixture-story",
         title: "雨声未歇",
+        kind: "novel",
+        timelineMode: "shared",
         background: "傍晚，许知来到书店门口。雨还没有停。",
         roles: roles.map((r) => ({ ...r, sourceId: r.id })),
-        worldIds: ["fixture-world"],
+        worldIds: ["fixture-story-world"],
         created: Date.now(),
         updated: Date.now(),
         draft: "周屿把伞递给许知，说“拿着”，但没有看她。",
@@ -76,6 +78,7 @@ export async function seedJourney(page: Page, basePath = "/") {
         memoryState: "idle",
         memoryError: "",
       });
+    transaction.objectStore("storyWorld").put({id:"fixture-story-world",sourceId:"fixture-world",storyId:"fixture-story",title:"河畔书屋",text:"初夏，河边的书店，门边放着一架旧雨伞。两人是认识三年的朋友。",type:"world",enabled:true,always:true,keywords:[],roleIds:[],storyIds:[],knownBy:[],audience:"all"});
     await new Promise<void>((resolve, reject) => {
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
@@ -103,7 +106,17 @@ export async function readStore(page: Page, name: string) {
 }
 
 /** Opens the shared phone conversation from either owner's perspective. */
+export async function seedPhone(page:Page) {
+ await page.evaluate(async()=>{
+  const d=await new Promise<IDBDatabase>((resolve,reject)=>{const q=indexedDB.open("little-scene-v1");q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});
+  const tx=d.transaction(["stories","storyWorld"],"readwrite"),table=tx.objectStore("stories");
+  const existing=table.get("fixture-story-phone");existing.onsuccess=()=>{if(existing.result)return;const q=table.get("fixture-story");q.onsuccess=()=>{table.put({...q.result,id:"fixture-story-phone",kind:"phone",title:"雨夜手机",draft:"",background:"",worldIds:["fixture-phone-world"]});const w=tx.objectStore("storyWorld").get("fixture-story-world");w.onsuccess=()=>tx.objectStore("storyWorld").put({...w.result,id:"fixture-phone-world",storyId:"fixture-story-phone"});}};
+  await new Promise<void>((resolve,reject)=>{tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error)});d.close();
+ });
+}
 export async function openPhoneChat(page: Page) {
+  await seedPhone(page);
+  await page.goto("/#story/fixture-story-phone");
   await page.getByRole("button", { name: "角色手机", exact: true }).click();
   await page.getByRole("button", { name: "联系人", exact: true }).click();
   await page.getByRole("button", { name: "发消息", exact: true }).first().click();

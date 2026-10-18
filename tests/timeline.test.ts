@@ -3,7 +3,11 @@ import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { db, initialize, refreshTimelineMemory, reviseEvent, sessionKeys, setTimelineMode } from "../src/db";
 import { buildContext } from "../src/context";
 import { organizeMemory, run } from "../src/engine";
-import { replyChat, sendChatMessage } from "../src/chat";
+import { createStory } from "../src/story-service";
+import { addRecord, conversation } from "../src/phone-store";
+import { startPhoneRun } from "../src/phone-generation";
+import { emptyBody } from "../src/phone-types";
+
 import { exportBackup, importBackup } from "../src/backup";
 import { visibleText } from "../src/timeline";
 import type { Preferences, Profile, SceneEvent, Story } from "../src/types";
@@ -156,19 +160,15 @@ it("still preserves incomplete generation as a draft", async () => {
   expect(await db.memories.count()).toBe(0);
 });
 
-it("gives legacy chat prose context without bringing replies back into prose", async () => {
-  await db.events.add(event(1, "他们约好明天一起去河边。"));
-  await sendChatMessage(s.id, s.player, s.partner, "几点出发？");
-  await sendChatMessage(s.id, s.player, s.partner, "我上午有事，改下午吧。");
-  expect((await context("novel")).user).not.toContain("我上午有事，改下午吧。");
-  const api = vi.spyOn(globalThis, "fetch").mockResolvedValue(response({ messages: ["那就下午三点。", "桥头等你。"] }));
-  await replyChat(s.id);
-  const sent = JSON.parse(api.mock.calls[0][1]?.body as string).messages[1].content;
-  expect(sent).toContain("他们约好明天一起去河边。");
-  const novel = (await context("novel")).user;
-  expect(novel).not.toContain("几点出发？");
-  expect(novel).not.toContain("那就下午三点。");
-  expect(novel).not.toContain("桥头等你。"); expect(api).toHaveBeenCalledTimes(1);
+it("keeps independent phone messages out of prose and prose out of phone requests", async () => {
+  await db.events.add(event(1,"他们约好明天一起去河边。"));
+  const phone=await createStory({kind:"phone",title:"独立",roles:s.roles,worldIds:[],background:""});const cid=await conversation(phone,[phone.player,phone.partner]);
+  await addRecord(phone.id,{speakerId:phone.player,conversationId:cid,body:{...emptyBody(),text:"我上午有事，改下午吧。"},pending:true});
+  const api=vi.spyOn(globalThis,"fetch").mockResolvedValue(response({messages:[{type:"text",text:"那就下午三点。"}]}));
+  await startPhoneRun({storyId:phone.id,ownerId:phone.player,conversationId:cid,speakers:[phone.partner],mode:"participate"});
+  const sent=JSON.stringify(api.mock.calls[0][1]?.body);
+  expect(sent).not.toContain("他们约好明天一起去河边。");expect(sent).toContain("我上午有事");
+  const novel=(await context("novel")).user;expect(novel).not.toContain("我上午有事");expect(novel).not.toContain("那就下午三点。");
 });
 
 it("AI summaries use separate audience requests, inherit prose visibility and respect a batch limit", async () => {

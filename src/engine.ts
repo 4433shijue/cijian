@@ -1,3 +1,4 @@
+import { requireStory } from "./story-service";
 import { withStoryLock } from "./locks";
 import { active, isBusy } from "./generation-state";
 export { isBusy, stop } from "./generation-state";
@@ -91,7 +92,8 @@ export async function preview(
   kind: "novel" | "chat",
   input: string,
 ) {
-  const s = await db.stories.get(storyId);
+  if ((kind as string) !== "novel") throw Error("旧聊天入口已停用，请进入独立手机作品");
+  const s = await requireStory(storyId, "novel");
   if (!s) throw Error("故事不存在");
   const { p, prefs } = await settings();
   return (await report(s, p, prefs, kind, input)).report;
@@ -131,6 +133,7 @@ async function runUnlocked(
   rewriteId?: string,
   options: { styleOnly?: boolean } = {},
 ) {
+  if ((kind as string) !== "novel") throw Error("旧聊天入口已停用，请进入独立手机作品");
   if (active.has(storyId)) throw Error("这个故事正在生成，请先停止或等待完成");
   if (!input.trim()) throw Error("先写下这一刻发生的事");
   const control = new AbortController();
@@ -142,7 +145,7 @@ async function runUnlocked(
   let theaterId: string | undefined;
   let latestRaw = "";
   try {
-    const s = await db.stories.get(storyId);
+    const s = await requireStory(storyId, "novel");
     if (!s) throw Error("故事不存在");
     if (kind === "chat" && (!s.partner || s.partner === s.player))
       throw Error("请选择两位不同的聊天角色");
@@ -468,6 +471,7 @@ export async function run(
   rewriteId?: string,
   options: { styleOnly?: boolean } = {},
 ) {
+  if ((kind as string) !== "novel") throw Error("旧聊天入口已停用，请进入独立手机作品");
   if (active.has(storyId)) throw Error("这个故事正在生成，请先停止或等待完成");
   await withStoryLock(storyId, () =>
     runUnlocked(storyId, kind, input, rewriteId, options),
@@ -477,6 +481,7 @@ export async function run(
 export async function extractFacts(id: string) {
   const e = await db.events.get(id);
   if (!e) throw Error("内容不存在");
+  await requireStory(e.storyId,"novel");
   return withStoryLock(e.storyId, () => extractFactsUnlocked(id));
 }
 

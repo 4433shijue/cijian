@@ -61,6 +61,7 @@ export function checkPhoneRow(
 ) {
   const story = related.get(`stories:${r.storyId}`) as Story;
   if (!story) throw Error("手机资料的故事不存在");
+  if (story.kind && story.kind !== "phone") throw Error("小说作品不能包含手机记录");
   for (const [t, id] of phoneLinks(table, r)) {
     const target = related.get(`${t}:${id}`);
     if (!target || (t !== "stories" && target.storyId !== r.storyId))

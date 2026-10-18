@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { db, keyFor, worldForStory } from "./db";
-import { buildContext, assemble } from "./context";
+import { db, keyFor } from "./db";
+import { assemble } from "./context";
+import { phoneContext } from "./phone-context";
 import { generate } from "./model";
 import { parseJSON } from "./output";
 import { defaults } from "./prompts";
@@ -100,42 +101,8 @@ async function snapshot(
   speaker: string,
   before = Infinity,
 ) {
-  const s = await db.stories.get(run.storyId);
-  if (!s) throw Error("故事不存在");
-  const { prefs, profile } = await connection();
-  const events = (
-    await db.events.where("storyId").equals(s.id).sortBy("seq")
-  ).filter((e) => e.kind === "novel" && e.seq < before);
-  const validIds = new Set(
-    events
-      .filter((e) => !e.deleted && e.status === "complete")
-      .map((e) => e.id),
-  );
-  const memories = (
-    await db.memories.where("storyId").equals(s.id).toArray()
-  ).filter(
-    (m) => m.sources.length && m.sources.every((ref) => validIds.has(ref.id)),
-  );
-  const report = buildContext(
-    "chat",
-    { ...s, player: run.ownerId, partner: speaker, memorySelection: undefined },
-    events,
-    memories,
-    await worldForStory(s),
-    prefs,
-    profile,
-    run.input,
-    { participants: run.audience },
-  );
-  const publicRoles = s.roles
-    .filter((r) => run.audience.includes(r.id) && r.id !== speaker)
-    .map((r) => ({
-      name: r.name,
-      bio: r.bio,
-      publicPersona: r.paragraphs.filter((p) => p.public).map((p) => p.text),
-    }));
-  const own = s.roles.find((r) => r.id === speaker)!;
-  return `你现在仅扮演 ${own.name}。\n${report.included.map((m) => `【${m.label}】\n${m.text}`).join("\n\n")}\n其他参与者的公开资料：${JSON.stringify(publicRoles)}\n这些正文经历是参考，手机番外独立发展。当前手机经历中的明确变化优先于主线旧状态，不能从缺失内容推断秘密。`;
+  const { prefs } = await connection();
+  return phoneContext(run.storyId, speaker, run.audience, run.input, prefs, before);
 }
 function phoneHistory(
   records: PhoneRecord[],
@@ -169,7 +136,7 @@ function renderHistory(records: PhoneRecord[], names: Map<string, string>) {
 export async function startPhoneRun(task: PhoneTask) {
   await ensurePhone(task.storyId);
   await connection();
-  if (controllers.has(task.storyId))
+  if (controllers.has(task.storyId) || (await db.phoneDrafts.where("storyId").equals(task.storyId).toArray()).some(d => d.generation?.status === "running"))
     throw Error("手机正在生成，请先停止或等待完成");
   const s = await db.stories.get(task.storyId);
   if (!s) throw Error("故事不存在");
@@ -367,8 +334,8 @@ export async function continuePhoneRun(id: string, rewrite = false) {
         )
           throw Error("群成员已改变，请结束本轮后重新生成");
         if (!step.context) {
-          // Old backups did not preserve request traces. Reconstruct only earlier prose.
-          step.context = await snapshot(
+          // Legacy runs reconstruct exclusively from the copied phone background.
+          step.context = "【旧任务参考重建：使用本手机已保存的背景】\n" + await snapshot(
             run,
             step.speakerId,
             run.legacyId ? run.cutoff : Infinity,

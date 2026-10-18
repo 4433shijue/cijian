@@ -29,23 +29,24 @@ export function parseInspiration(raw: string): InspirationOption[] {
   }
 }
 
-const sourceTables = [
+const sourceTables = () => [
   db.stories,
   db.events,
   db.memories,
-  db.world,
+  db.world, db.storyWorld,
   db.preferences,
 ];
 async function readInputs(
   storyId: string,
 ): Promise<InspirationInputs | undefined> {
-  return db.transaction("r", sourceTables, async () => {
+  return db.transaction("r", sourceTables(), async () => {
     const [story, events, memories, prefs] = await Promise.all([
       db.stories.get(storyId),
       db.events.where("storyId").equals(storyId).toArray(),
       db.memories.where("storyId").equals(storyId).toArray(),
       db.preferences.get("preferences"),
     ]);
+    if (story && story.kind !== "novel") throw Error("灵感只用于小说作品");
     const world = story ? await worldForStory(story) : [];
     return story
       ? {
@@ -102,7 +103,7 @@ export async function chooseInspiration(
   if (!initial) throw Error("故事已不存在");
   const source = inspirationSourceText(initial);
   const key = await contextKey(source);
-  return db.transaction("rw", sourceTables, async () => {
+  return db.transaction("rw", sourceTables(), async () => {
     const latest = await readInputs(storyId);
     const round = latest?.story.inspiration;
     if (!round?.options.some((option) => option.text === text))
@@ -157,7 +158,7 @@ export async function requestInspiration(
       memories,
       feedback,
     );
-    const ready = await db.transaction("rw", sourceTables, async () => {
+    const ready = await db.transaction("rw", sourceTables(), async () => {
       const latest = await readInputs(storyId);
       if (
         !latest ||
@@ -183,7 +184,7 @@ export async function requestInspiration(
     if (!result.complete)
       throw Error("这一轮灵感还没完整生成，请点「你再想想」重试。");
     const options = parseInspiration(result.text);
-    return db.transaction("rw", sourceTables, async () => {
+    return db.transaction("rw", sourceTables(), async () => {
       const latest = await readInputs(storyId);
       if (
         !latest ||

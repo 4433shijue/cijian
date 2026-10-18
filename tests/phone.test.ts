@@ -92,6 +92,7 @@ beforeEach(async () => {
   await db.open();
   await initialize();
   s = (await db.stories.toArray())[0];
+  s.kind = "phone";
   s.autoMemory = false;
   s.roles.push({
     ...structuredClone(s.roles[0]),
@@ -198,7 +199,7 @@ it("migrates legacy versions, drafts, failed batches and mixed memories once", a
   );
   expect((await db.events.get(event.id))?.text).toBe("OLD_USER");
 });
-it("reads current authorized prose but never leaks phone records back into prose", async () => {
+it("does not read prose and blocks novel operations on a phone work", async () => {
   await db.events.bulkAdd([
     prose("PUBLIC_PROSE"),
     prose("PRIVATE_PROSE", 2, { visibility: "author" }),
@@ -211,13 +212,11 @@ it("reads current authorized prose but never leaks phone records back into prose
   const request = JSON.stringify(
     JSON.parse(api.mock.calls[0][1]!.body as string),
   );
-  expect(request).toContain("PUBLIC_PROSE");
+  expect(request).not.toContain("PUBLIC_PROSE");
   expect(request).not.toContain("PRIVATE_PROSE");
   expect(request).toContain("PHONE_ONLY");
   expect(request).not.toContain("THIRD_PRIVATE_SECRET");
-  const report = await preview(s.id, "novel", "继续正文");
-  expect(report.user).not.toContain("PHONE_ONLY");
-  expect(report.user).not.toContain("PHONE_REPLY");
+  await expect(preview(s.id,"novel","继续正文")).rejects.toThrow("手机作品");
 });
 it("keeps group membership history and rejects invisible moments and quotes", async () => {
   const g = await conversation(s, [s.player, s.partner], "朋友", true);
@@ -319,15 +318,15 @@ it("rejects duplicate runs and preserves original outputs on invalid rewrite", a
   ).toContain("ORIGINAL");
   expect((await db.phoneRuns.get(run.id))?.status).toBe("failed");
 });
-it("historical rewrite uses frozen prose and replaces the whole output without touching later messages", async () => {
-  await db.events.add(prose("OLD_PROSE"));
+it("historical rewrite uses frozen phone background and replaces the whole output without touching later messages", async () => {
+  await db.phoneBackgrounds.add({id:"old-background",storyId:s.id,title:"承接背景",text:"OLD_PROSE",audience:[s.partner],enabled:true,updated:1});
   await send("HELLO");
   const api = vi
     .spyOn(globalThis, "fetch")
     .mockResolvedValue(response("ORIGINAL"));
   await startPhoneRun(task());
   const run = (await db.phoneRuns.toArray())[0];
-  await db.events.add(prose("FUTURE_PROSE", 2));
+  await db.phoneBackgrounds.update("old-background",{text:"FUTURE_PROSE"});
   await send("FUTURE_PHONE");
   api.mockResolvedValue(response("REPLACEMENT"));
   await continuePhoneRun(run.id, true);
@@ -415,7 +414,7 @@ it.each(["legacy", "stream"])(
       method === "legacy"
         ? await exportBackup()
         : JSON.parse(await (await exportBackupBlob(uid(), s.id)).blob.text());
-    expect(backup.version).toBe(5);
+    expect(backup.version).toBe(6);
     validateBackup(backup);
     if (method === "legacy") await importBackup(backup);
     else {
@@ -457,7 +456,7 @@ it.each(["legacy", "stream"])(
     validateBackup(await exportBackup());
   },
 );
-it("exports phone material as an appendix and cascades deletion", async () => {
+it("exports only independent phone material and cascades deletion", async () => {
   await db.events.add(prose("MAINLINE"));
   await send("APPENDIX");
   const result = await exportWork(uid(), {
@@ -474,7 +473,8 @@ it("exports phone material as an appendix and cascades deletion", async () => {
     pageBreak: false,
   });
   const text = await result.blob.text();
-  expect(text.indexOf("MAINLINE")).toBeLessThan(text.indexOf("手机番外"));
+  expect(text).not.toContain("MAINLINE");
+  expect(text).toContain("手机记录");
   expect(text).toContain("APPENDIX");
   await deleteStory(s.id);
   expect(await db.phoneRecords.count()).toBe(0);
@@ -482,7 +482,7 @@ it("exports phone material as an appendix and cascades deletion", async () => {
   expect(await db.phoneSpaces.count()).toBe(0);
 });
 it("rejects references to another story in writes and backups", async () => {
-  const other = makeStory("OTHER", s.roles);
+  const other = makeStory("phone", "OTHER", s.roles);
   await db.stories.add(other);
   await ensurePhone(other.id);
   const foreign = await addRecord(other.id, {

@@ -1,3 +1,6 @@
+import { extraSchemas, extraTables } from "./work-types";
+import { migrateStories } from "./story-service";
+import { remapExtra, validateExtras } from "./work-backup";
 import { phoneSchemas, phoneTables } from "./phone-types";
 import { remapPhone, ensurePhone } from "./phone-store";
 import { checkPhoneBackup } from "./phone-backup";
@@ -126,6 +129,7 @@ const theater = z.object({
   }
 });
 const story = z.object({
+  kind: z.enum(["novel", "phone"]).optional(),
   id: str,
   title: str,
   background: str,
@@ -288,7 +292,7 @@ const prefs = z.object({
   ),
 });
 export const recordSchemas = {
-  ...phoneSchemas,
+  ...phoneSchemas, ...extraSchemas,
   roles: role,
   stories: story,
   world,
@@ -301,13 +305,21 @@ export const recordSchemas = {
   roleDrafts: z.object({ id: str, role }),
 };
 const schema = z.object({
+  storyWorld: z.array(extraSchemas.storyWorld).default([]),
+  storyMigrations: z.array(extraSchemas.storyMigrations).default([]),
+  legacyArchives: z.array(extraSchemas.legacyArchives).default([]),
+  phoneBackgrounds: z.array(extraSchemas.phoneBackgrounds).default([]),
+  phoneDocuments: z.array(extraSchemas.phoneDocuments).default([]),
+  phoneReading: z.array(extraSchemas.phoneReading).default([]),
+  phoneDrafts: z.array(extraSchemas.phoneDrafts).default([]),
+  phoneEdits: z.array(extraSchemas.phoneEdits).default([]),
   phoneSpaces: z.array(phoneSchemas.phoneSpaces).default([]),
   phoneConversations: z.array(phoneSchemas.phoneConversations).default([]),
   phoneRecords: z.array(phoneSchemas.phoneRecords).default([]),
   phoneAssets: z.array(phoneSchemas.phoneAssets).default([]),
   phoneRuns: z.array(phoneSchemas.phoneRuns).default([]),
   format: z.literal("little-scene"),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)]),
   created: str,
   roles: z.array(role),
   stories: z.array(story),
@@ -370,8 +382,13 @@ export function remapTheaterContent(
 
 export function validateBackup(raw: unknown) {
   const b = schema.parse(raw);
-  if (b.version === 5) for (const table of phoneTables) if (!Array.isArray((raw as any)[table])) throw Error("备份缺少资料区：" + table);
+  if (b.version >= 5) for (const table of phoneTables) if (!Array.isArray((raw as any)[table])) throw Error("备份缺少资料区：" + table);
   checkPhoneBackup(b);
+  validateExtras(b);
+  if (b.version >= 6) {
+    for (const table of extraTables) if (!Array.isArray((raw as any)[table])) throw Error("备份缺少资料区：" + table);
+    if (b.stories.some(s => !s.kind)) throw Error("新版备份缺少作品类型");
+  }
   if (
     b.version >= 2 &&
     (!raw ||
@@ -542,7 +559,7 @@ export async function exportBackup() {
   return db.transaction(
     "r",
     [
-      ...phoneTables.map(t => db.table(t)),
+      ...[...phoneTables, ...extraTables].map(t => db.table(t)),
       db.roles,
       db.stories,
       db.world,
@@ -555,7 +572,8 @@ export async function exportBackup() {
     ],
     async () => ({
       format: "little-scene",
-      version: 5,
+      version: 6,
+      ...Object.fromEntries(await Promise.all(extraTables.map(async t => [t, await db.table(t).toArray()]))),
       phoneSpaces: await db.phoneSpaces.toArray(),
       phoneConversations: await db.phoneConversations.toArray(),
       phoneRecords: await db.phoneRecords.toArray(),
@@ -636,6 +654,7 @@ export async function importBackup(value: unknown, replace = false) {
     if (replace)
       for (const table of db.tables)
         if (![db.roleDrafts.name, db.roleCompletionDrafts.name].includes(table.name)) await table.clear();
+    for (const table of extraTables) await db.table(table).bulkAdd(b[table].map(row => remapExtra(table, row, remap)));
     for (const table of phoneTables) await db.table(table).bulkAdd(b[table].map(row => remapPhone(table, row, remap)));
     await db.roles.bulkAdd(b.roles.map(r));
     await db.world.bulkAdd(
@@ -652,6 +671,7 @@ export async function importBackup(value: unknown, replace = false) {
         ...x,
         id: remap(x.id),
         title: x.title + (replace ? "" : "（导入副本）"),
+        kind: x.kind as import("./types").Story["kind"],
         roles: x.roles.map(r),
         worldIds: x.worldIds.map(remap),
         player: remap(x.player),
@@ -787,7 +807,7 @@ export async function importBackup(value: unknown, replace = false) {
               })),
             },
       );
-    for (const story of await db.stories.toArray()) await ensurePhone(story.id);
+    await migrateStories();
   });
 }
 export function download(

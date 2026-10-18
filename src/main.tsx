@@ -1,9 +1,10 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { initialize } from "./db";
+import { initialize, db } from "./db";
 import App from "./App";
 import "./style.css";
 import { cleanupTransfers } from "./transfer-store";
+db.on("blocked", () => { const root=document.getElementById("root")!;root.textContent="升级正在等待其他页面关闭。请关闭此间的旧标签页，升级会自动继续。"; });
 initialize()
   .then(() => cleanupTransfers().catch(() => {}))
   .then(() =>
@@ -15,5 +16,6 @@ initialize()
   )
   .catch((e) => {
     document.getElementById("root")!.textContent =
-      "本地资料库无法打开，请检查浏览器存储权限。" + String(e);
+      "本地资料未能完成升级，原存档仍保留。请检查存储空间、关闭其他旧页面后重试。" + String(e);
+    const retry=document.createElement("button");retry.textContent="重试打开与迁移";retry.onclick=()=>location.reload();document.getElementById("root")!.append(retry);
   });

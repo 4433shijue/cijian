@@ -324,8 +324,10 @@ main {
   font-size: 11px;
   color: #919a87;
 }
-.story-filters { display: flex; align-items: center; gap: 10px; }
-.story-filters input { min-width: 180px; }
+.story-filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.story-filters input:not([type="checkbox"]) { min-width: 100px; width: 180px; max-width: 100%; }
+.story-filters input[type="checkbox"] { min-width: 0; }
+@media(max-width:600px) { .section-title:has(.story-filters) { align-items: flex-start; flex-direction: column; gap:12px; } .story-filters { width:100%; } }
 .toggle.compact { font-size: 12px; white-space: nowrap; }
 .text-button { border: 0; background: transparent; color: #316d5d; cursor: pointer; padding: 0; font: inherit; }
 .text-button:hover { text-decoration: underline; }

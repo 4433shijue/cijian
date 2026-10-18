@@ -56,7 +56,8 @@ async function fixture(content = data()) {
   story.theaterPresetIds = [preset.id];
   story.worldIds = ["regression-world"];
   await db.stories.put(story);
-  await db.world.put({
+  await db.storyWorld.put({
+    storyId:story.id,
     id: "regression-world", title: "门口的雨", text: "伞架放在门口，雨水沿伞面流下来。",
     type: "world", enabled: true, always: true, keywords: [], roleIds: [], storyIds: [story.id], knownBy: [], audience: "all",
   });
@@ -151,7 +152,7 @@ it.each(["character", "world"])("rejects a late follow-up after the %s material 
   if (kind === "character") {
     const current = (await db.stories.get(story.id))!;
     await db.stories.update(story.id, { roles: current.roles.map((role, index) => index ? role : { ...role, bio: "人物简介已修改。" }) });
-  } else await db.world.update("regression-world", { text: "设定已改，这里并没有伞架。" });
+  } else await db.storyWorld.update("regression-world", { text: "设定已改，这里并没有伞架。" });
   release(response(addition("基于过期材料的追加。")));
   expect(String(await settled)).toMatch(/变化/);
   const saved = (await db.theaters.get(record.id))!;

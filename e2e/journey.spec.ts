@@ -73,6 +73,7 @@ test("desktop full journey with controlled protocol fixture", async ({
     .locator(".prose-event")
     .getByRole("button", { name: "编辑", exact: true })
     .click();
+  await page.getByRole("dialog").getByText("高级 · 角色可知的事实摘录",{exact:true}).click();
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "许知", exact: true })
@@ -84,6 +85,7 @@ test("desktop full journey with controlled protocol fixture", async ({
   await page.getByRole("button", { name: "让 TA 回复", exact: true }).click();
   await expect(page.locator(".phone-message")).toHaveCount(3);
   await expect(page.getByText("伞先放你那里。", { exact: true })).toBeVisible();
+  await page.goto("/#story/fixture-story");
   await page.getByRole("button", { name: "故事记忆" }).click();
   await page.getByRole("button", { name: "一键补齐回合记忆" }).click();
   await expect(page.getByText("已记住", { exact: true }).first()).toBeVisible();
@@ -134,53 +136,10 @@ test("mobile layout and Chinese text editing", async ({ page }) => {
   ).toBe(true);
 });
 
-test("create single and multiple role stories; mobile keyboard viewport", async ({
-  page,
-}) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "开启一个故事", exact: true }).click();
-  await page.getByLabel("故事名字").fill("一个人的书页");
-  await page.getByRole("button", { name: "周屿", exact: true }).click();
-  await page.getByRole("button", { name: "翻开第一页" }).click();
-  await expect(
-    page.getByRole("heading", { name: "一个人的书页" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "角色手机", exact: true }).click();
-  await expect(page.locator(".phone-panel")).toContainText("角色手机");
-  await page.getByRole("button", { name: "故事设置", exact: true }).click();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "许知", exact: true })
-    .click();
-  await expect(
-    page.getByText("角色已带入这本故事", { exact: true }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "关闭", exact: true }).click();
-  await openPhoneChat(page);
-  await page.getByLabel("手机消息内容", { exact: true }).fill("你也来书店了吗？");
-  await expect(
-    page.getByRole("button", { name: "发送消息", exact: true }),
-  ).toBeEnabled();
-  await page.getByRole("link", { name: "返回故事列表" }).click();
-  await page.getByRole("button", { name: "开启一个故事", exact: true }).click();
-  await page.getByLabel("故事名字").fill("两个人的书页");
-  await page.getByRole("button", { name: "周屿", exact: true }).click();
-  await page.getByRole("button", { name: "许知", exact: true }).click();
-  await page.getByRole("checkbox", { name: "河畔书屋" }).check();
-  await page.getByRole("button", { name: "翻开第一页" }).click();
-  await expect(
-    page.getByRole("heading", { name: "两个人的书页" }),
-  ).toBeVisible();
-  await page.setViewportSize({ width: 390, height: 460 });
-  await page.getByLabel("本段动作或台词").fill("他站在门边。");
-  await page.getByLabel("本段动作或台词").focus();
-  const box = await page
-    .getByRole("button", { name: "扩写这一刻", exact: true })
-    .boundingBox();
-  expect(box!.y + box!.height).toBeLessThan(400);
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth,
-    ),
-  ).toBe(true);
+test("create single and multiple role novels; mobile keyboard viewport", async ({page})=>{
+ await page.goto("/");await page.getByRole("button",{name:"开启一个故事",exact:true}).click();await page.getByRole("button",{name:/小说模式/}).click();await page.getByLabel("作品名字").fill("一个人的书页");await page.getByRole("checkbox",{name:"周屿",exact:true}).check();await page.getByRole("button",{name:"创建小说作品",exact:true}).click();
+ await expect(page.getByRole("heading",{name:"一个人的书页"})).toBeVisible();await expect(page.getByRole("button",{name:"角色手机",exact:true})).toHaveCount(0);
+ await page.getByRole("button",{name:"故事设置",exact:true}).click();await page.getByRole("dialog").getByRole("button",{name:"许知",exact:true}).click();await expect(page.getByText("角色已带入这本故事",{exact:true})).toBeVisible();await page.getByRole("button",{name:"关闭",exact:true}).click();
+ await page.goto("/#stories");await page.getByRole("button",{name:"开启一个故事",exact:true}).click();await page.getByRole("button",{name:/小说模式/}).click();await page.getByLabel("作品名字").fill("两个人的书页");await page.getByRole("checkbox",{name:"周屿",exact:true}).check();await page.getByRole("checkbox",{name:"许知",exact:true}).check();await page.getByText("带入世界书副本",{exact:true}).click();await page.getByRole("checkbox",{name:"河畔书屋"}).check();await page.getByRole("button",{name:"创建小说作品",exact:true}).click();
+ await expect(page.getByRole("heading",{name:"两个人的书页"})).toBeVisible();await page.setViewportSize({width:390,height:460});await page.getByLabel("本段动作或台词").fill("他站在门边。");await page.getByLabel("本段动作或台词").focus();const box=await page.getByRole("button",{name:"扩写这一刻",exact:true}).boundingBox();expect(box!.y+box!.height).toBeLessThan(400);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });

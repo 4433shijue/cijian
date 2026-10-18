@@ -113,7 +113,7 @@ test("desktop exports TXT, Markdown, DOCX/EPUB documents and adjustable print pr
   expect(text).toContain("第2段");
   expect(text).not.toContain("第1段");
   expect(text).not.toContain("草稿不能导出");
-  await page.getByLabel("导出内容", { exact: true }).selectOption("all");
+  await page.getByLabel("导出内容", { exact: true }).selectOption("novel");
   await page.getByLabel("附上人物介绍（名字与简介）").check();
   await page.getByLabel("附上开场背景").check();
   for (const format of ["md", "docx", "epub"]) {

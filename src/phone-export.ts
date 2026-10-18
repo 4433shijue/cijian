@@ -163,7 +163,7 @@ export async function renderPhoneImages(input: ExportInput): Promise<Blob[]> {
     ctx.font = '11px "Microsoft YaHei", sans-serif';
     ctx.fillStyle = dark ? "#a4acb8" : "#697079";
     ctx.fillText(
-      `此间 · 手机番外${pages.length > 1 ? ` · ${index + 1}/${pages.length}` : ""}`,
+      `此间 · 手机作品${pages.length > 1 ? ` · ${index + 1}/${pages.length}` : ""}`,
       20,
       54,
     );

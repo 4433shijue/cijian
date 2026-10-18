@@ -220,9 +220,12 @@ export async function exportWork(
     async (writer) => {
       const story = await db.stories.get(o.storyId);
       if (!story) throw Error("故事已不存在");
+      if (!story.kind) throw Error("请先完成作品拆分");
+      if (story.kind === "novel" && o.content === "chat" || story.kind === "phone" && o.content === "novel") throw Error("导出内容与作品类型不符");
+      o.content = story.kind === "phone" ? "chat" : "novel";
       const doc = await documentWriter(writer, story, o);
       await doc.block({ kind: "title", text: story.title });
-      if (o.background && story.background) {
+      if (story.kind === "novel" && o.background && story.background) {
         await doc.block({ kind: "heading", text: "开场背景" });
         await doc.block({ kind: "prose", text: story.background });
       }
@@ -289,7 +292,7 @@ export async function exportWork(
           });
       }
       if (o.content !== "novel") {
-        await doc.block({ kind: "heading", text: "手机番外" });
+        await doc.block({ kind: "heading", text: "手机记录" });
         const phone = await db.phoneRecords.where("storyId").equals(story.id).sortBy("seq");
         const visibleIds = new Set(phone.filter(r => !r.deleted && !r.legacyDraft).map(r => r.id));
         for (const record of phone) {
@@ -297,7 +300,7 @@ export async function exportWork(
           index++;
           if (o.range === "selection" && (index < o.from || index > o.to)) continue;
           const author = story.roles.find(r => r.id === record.speakerId)?.name || "角色";
-          await doc.block({ kind: "chat", text: `[手机番外 · ${record.kind === "moment" ? "朋友圈" : record.kind === "comment" ? "评论" : "聊天"} · ${record.time.replace("T", " ")}]\n${author}：${recordText(record)}` });
+          await doc.block({ kind: "chat", text: `[手机记录 · ${record.kind === "moment" ? "朋友圈" : record.kind === "comment" ? "评论" : "聊天"} · ${record.time.replace("T", " ")}]\n${author}：${recordText(record)}` });
           selected++;
         }
       }

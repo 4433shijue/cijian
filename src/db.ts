@@ -28,6 +28,14 @@ import {
   type TheaterRecord,
 } from "./types";
 export class SceneDB extends Dexie {
+  storyWorld!: Table<import("./work-types").StoryWorld, string>;
+  storyMigrations!: Table<import("./work-types").StoryMigration, string>;
+  legacyArchives!: Table<import("./work-types").LegacyArchive, string>;
+  phoneBackgrounds!: Table<import("./work-types").PhoneBackground, string>;
+  phoneDocuments!: Table<import("./work-types").PhoneDocument, string>;
+  phoneReading!: Table<import("./work-types").PhoneReading, string>;
+  phoneDrafts!: Table<import("./work-types").PhoneDraft, string>;
+  phoneEdits!: Table<import("./work-types").PhoneEdit, string>;
   phoneSpaces!: Table<PhoneSpace, string>;
   phoneConversations!: Table<PhoneConversation, string>;
   phoneRecords!: Table<PhoneRecord, string>;
@@ -77,6 +85,12 @@ export class SceneDB extends Dexie {
     this.version(8).stores({
       theaters: "id,storyId,eventId,[eventId+sourceVersionId],status,interaction.status",
     });
+    this.version(11).stores({
+      stories: "id,updated,kind",
+      storyWorld: "id,storyId", storyMigrations: "id,storyId", legacyArchives: "id,storyId",
+      phoneBackgrounds: "id,storyId", phoneDocuments: "id,storyId,ownerId", phoneReading: "id,storyId",
+      phoneDrafts: "id,storyId,conversationId", phoneEdits: "id,storyId,conversationId",
+    });
     this.version(10).stores({
       phoneSpaces: "id,storyId",
       phoneConversations: "id,storyId",
@@ -101,6 +115,8 @@ export const db = new SceneDB();
 export const sessionKeys = new Map<string, string>();
 /** Load only the world-book entries attached to a story. */
 export async function worldForStory(story: Pick<Story, "worldIds">) {
+  const full = story as Story;
+  if (full.kind) return db.storyWorld.where("storyId").equals(full.id).filter(w => full.worldIds.includes(w.id)).toArray();
   return story.worldIds.length
     ? db.world.where("id").anyOf(story.worldIds).toArray()
     : [];
@@ -112,6 +128,7 @@ export async function saveProfile(p: Profile, key: string) {
   sessionKeys.set(p.id, key);
 }
 export function makeStory(
+  kind: Story["kind"],
   title: string,
   roles: Role[],
   worldIds: string[] = [],
@@ -120,6 +137,7 @@ export function makeStory(
   return {
     id: uid(),
     title,
+    kind,
     roles: structuredClone(roles).map((r) => ({ ...r, sourceId: r.id })),
     worldIds,
     background,
@@ -198,11 +216,15 @@ export async function initialize() {
       };
       await db.world.add(w);
       const s = makeStory(
+        "novel",
         "雨停以前",
         [a, b],
         [w.id],
         "傍晚，林晚来到书店门口。雨还没有停。",
       );
+      const localWorld = { ...w, id: uid(), storyId: s.id, sourceId: w.id, storyIds: [s.id] };
+      await db.storyWorld.add(localWorld);
+      s.worldIds = [localWorld.id];
       s.draft = "沈知言把伞递给林晚，说“拿着”，但没有看她。";
       await db.stories.add(s);
     }
@@ -298,6 +320,7 @@ export async function initialize() {
       );
     else await recover(s.id);
   }
+  await (await import("./story-service")).migrateStories();
   await (await import("./phone-store")).initializePhones();
 }
 export async function reviseEvent(
@@ -311,6 +334,7 @@ export async function reviseEvent(
   await db.transaction("rw", [db.events, db.memories, db.stories], async () => {
     const e = await db.events.get(id);
     if (!e) throw Error("这段内容已不存在");
+    if ((await db.stories.get(e.storyId))?.kind !== "novel") throw Error("手机作品不能修改小说事件");
     if (expectedVersion && expectedVersion !== e.versionId)
       throw Error("原文已修改，本次结果不会覆盖新版本");
     await ensureStoryRounds(e.storyId);
@@ -508,10 +532,10 @@ export async function deleteStory(id: string) {
       db.jobs,
       db.chatBatches,
       db.promptSessions,
-      db.theaters, db.phoneSpaces, db.phoneConversations, db.phoneRecords, db.phoneAssets, db.phoneRuns,
+      db.storyWorld, db.storyMigrations, db.legacyArchives, db.phoneBackgrounds, db.phoneDocuments, db.phoneReading, db.phoneDrafts, db.phoneEdits, db.theaters, db.phoneSpaces, db.phoneConversations, db.phoneRecords, db.phoneAssets, db.phoneRuns,
     ],
     async () => {
-      for (const table of [db.phoneSpaces, db.phoneConversations, db.phoneRecords, db.phoneAssets, db.phoneRuns]) await table.where("storyId").equals(id).delete();
+      for (const table of [db.storyWorld, db.storyMigrations, db.legacyArchives, db.phoneBackgrounds, db.phoneDocuments, db.phoneReading, db.phoneDrafts, db.phoneEdits, db.phoneSpaces, db.phoneConversations, db.phoneRecords, db.phoneAssets, db.phoneRuns]) await table.where("storyId").equals(id).delete();
       await db.events.where("storyId").equals(id).delete();
       await db.memories.where("storyId").equals(id).delete();
       await db.jobs.where("storyId").equals(id).delete();

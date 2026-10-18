@@ -567,7 +567,7 @@ export default function PhonePanel({ story }: { story: Story }) {
       <header className="phone-top">
         <div>
           <strong>角色手机</strong>
-          <small>独立番外 · 参考正文与记忆</small>
+          <small>独立手机作品 · 角色各有所知</small>
         </div>
         <label>
           机主
@@ -595,7 +595,7 @@ export default function PhonePanel({ story }: { story: Story }) {
           <button aria-pressed={compose} onClick={() => setCompose(true)}>
             翻看与编排
           </button>
-          <span>内容保存在这本故事的手机番外中</span>
+          <span>内容保存在这本独立手机作品中</span>
         </div>
       )}
       <nav className="phone-tabs" aria-label="手机应用">
@@ -1165,7 +1165,7 @@ export default function PhonePanel({ story }: { story: Story }) {
             恢复默认皮肤
           </button>
           <p>
-            这部手机的外观单独保存。所有手机内容是番外，生成时会参考角色可知的最新正文和有效记忆。
+            这部手机的外观单独保存。生成只参考本作品中角色可知的背景与手机内容。
           </p>
         </div>
       )}

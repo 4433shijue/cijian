@@ -1,4 +1,5 @@
 import "fake-indexeddb/auto";
+import { createStory } from "../src/story-service";
 import { addRecord, conversation } from "../src/phone-store";
 import { emptyBody } from "../src/phone-types";
 import { startPhoneRun } from "../src/phone-generation";
@@ -122,6 +123,7 @@ afterEach(() => {
 });
 
 it("bounds 105 prose rounds while independent phone records never enter the window", async () => {
+  const phone = await createStory({kind:"phone",title:"独立手机",roles:s.roles,worldIds:[],background:""});
   let turn = 0;
   const requests: any[] = [];
   vi.stubGlobal(
@@ -143,7 +145,7 @@ it("bounds 105 prose rounds while independent phone records never enter the wind
       await db.open();
     }
     const kind: string = "novel";
-    if (turn % 4 === 0) await addRecord(s.id, { speakerId: s.player, conversationId: await conversation(s, [s.player, s.partner]), body: { ...emptyBody(), text: "PHONE_ONLY_" + turn } });
+    if (turn % 4 === 0) await addRecord(phone.id, { speakerId: phone.player, conversationId: await conversation(phone, [phone.player, phone.partner]), body: { ...emptyBody(), text: "PHONE_ONLY_" + turn } });
     let reference;
     if (kind === "chat") {
       for (let j = 1; j <= 3; j++)
@@ -265,10 +267,11 @@ it("phone replies do not consume the mainline one-reply memory selection", async
   await seed(26);
   const m = await memory("phone-reference", (await rows()).slice(0, 5), "REFERENCE_MEMORY");
   await db.stories.update(s.id, { memorySelection: { token: "mainline-choice", ids: [m.id] } });
-  const cid = await conversation(s, [s.player, s.partner]);
-  await addRecord(s.id, { speakerId: s.player, conversationId: cid, body: { ...emptyBody(), text: "你好" }, pending: true });
+  const p = await createStory({kind:"phone",title:"独立手机",roles:s.roles,worldIds:[],background:""});
+  const cid = await conversation(p, [p.player, p.partner]);
+  await addRecord(p.id, { speakerId: p.player, conversationId: cid, body: { ...emptyBody(), text: "你好" }, pending: true });
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ messages: [{ type: "text", text: "我在" }] })));
-  await startPhoneRun({ storyId: s.id, ownerId: s.player, conversationId: cid, mode: "participate", speakers: [s.partner] });
+  await startPhoneRun({ storyId: p.id, ownerId: p.player, conversationId: cid, mode: "participate", speakers: [p.partner] });
   expect((await db.stories.get(s.id))?.memorySelection?.token).toBe("mainline-choice");
   expect((await rows()).every(e => e.kind === "novel")).toBe(true);
 });

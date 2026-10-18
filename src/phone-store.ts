@@ -1,3 +1,4 @@
+import { requireStory } from "./story-service";
 import { db } from "./db";
 import { uid, type Story } from "./types";
 import { withStoryLock } from "./locks";
@@ -26,10 +27,11 @@ export const canSee = (r: PhoneRecord, owner: string) =>
 export const deviceFor = (s: PhoneSpace | undefined, owner: string) =>
   s?.devices[owner] || newDevice();
 
-export async function ensurePhone(storyId: string) {
+export async function ensurePhone(storyId: string, legacyMigration = false) {
   return db.transaction("rw", db.tables, async () => {
     const story = await db.stories.get(storyId);
     if (!story) throw Error("故事不存在");
+    if (!legacyMigration && story.kind !== "phone") throw Error("请先完成作品拆分，小说不能写入手机内容");
     let space = await db.phoneSpaces.where("storyId").equals(storyId).first();
     if (space?.migrated) return space;
     space ||= {
@@ -204,9 +206,12 @@ export async function ensurePhone(storyId: string) {
   });
 }
 export async function initializePhones() {
-  for (const story of await db.stories.toArray()) {
+  for (const story of await db.stories.where("kind").equals("phone").toArray()) {
     await ensurePhone(story.id);
     await withStoryLock(`phone:${story.id}`, async () => {
+      for(const draft of await db.phoneDrafts.where("storyId").equals(story.id).toArray())
+        if(draft.generation?.status==="running")await db.phoneDrafts.update(draft.id,{generation:{...draft.generation,status:"interrupted",error:"上次生成中断，草稿仍保留"}});
+
       for (const run of await db.phoneRuns
         .where("storyId")
         .equals(story.id)
@@ -228,6 +233,7 @@ export async function updateDevice(
   change: (d: PhoneDevice) => PhoneDevice,
 ) {
   await ensurePhone(storyId);
+  if(!(await requireStory(storyId,"phone")).roles.some(r=>r.id===owner))throw Error("机主不属于这本作品");
   await db.transaction("rw", db.phoneSpaces, async () => {
     const s = (await db.phoneSpaces.where("storyId").equals(storyId).first())!;
     s.devices[owner] = change(deviceFor(s, owner));
@@ -242,6 +248,7 @@ export async function conversation(
   group = false,
   avatar = "",
 ) {
+  await requireStory(story.id, "phone");
   members = [...new Set(members)];
   if (
     members.length < 2 ||
@@ -330,7 +337,7 @@ export async function addRecord(
     "rw",
     [db.phoneRecords, db.phoneConversations, db.stories, db.phoneAssets],
     async () => {
-      const s = await db.stories.get(storyId);
+      const s = await requireStory(storyId, "phone");
       if (!s || !s.roles.some((r) => r.id === input.speakerId))
         throw Error("发言角色不存在");
       const body = phoneBodySchema.parse(input.body);
@@ -445,8 +452,9 @@ export async function editRecord(
   >,
   expected?: string,
 ) {
-  await db.transaction("rw", [db.phoneRecords, db.phoneAssets], async () => {
+  await db.transaction("rw", [db.phoneRecords, db.phoneAssets, db.stories], async () => {
     const r = await db.phoneRecords.get(id);
+    if (r) await requireStory(r.storyId, "phone");
     if (!r || (expected && r.versionId !== expected))
       throw Error("消息已改变，请重新打开编辑");
     const next = { ...r, ...change, versionId: uid(), updated: Date.now() };
@@ -489,8 +497,9 @@ export async function editRecord(
   });
 }
 export async function likeMoment(id: string, owner: string) {
-  await db.transaction("rw", db.phoneRecords, async () => {
+  await db.transaction("rw", [db.phoneRecords, db.stories], async () => {
     const r = await db.phoneRecords.get(id);
+    if (r) await requireStory(r.storyId, "phone");
     if (!r || r.kind !== "moment" || !canSee(r, owner))
       throw Error("动态不可见");
     await db.phoneRecords.update(id, {
@@ -501,6 +510,7 @@ export async function likeMoment(id: string, owner: string) {
   });
 }
 export async function saveAsset(storyId: string, file: File) {
+  await requireStory(storyId, "phone");
   if (file.size > 10 * 1024 * 1024) throw Error("请选择不超过 10 MiB 的素材");
   if (
     !/^(image\/(png|jpeg|webp|gif)|audio\/(mpeg|mp3|wav|x-wav|mp4|aac|ogg|webm))$/.test(

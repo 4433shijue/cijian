@@ -123,7 +123,7 @@ it("uses the most recent three full replies including folded text, story roles a
     event(8, { deleted: true }),
     event(9, { review: true }),
   ];
-  const world = await db.world.toArray();
+  const world = await db.storyWorld.toArray();
   world.push(
     { ...world[0], id: "unbound", text: "未加载世界书" },
     { ...world[0], id: "disabled", text: "关闭的世界书", enabled: false },
@@ -241,8 +241,7 @@ it("keeps a round through failed prose and chat, clearing it only after successf
   vi.stubGlobal("fetch", fetcher);
   await expect(run(story.id, "novel", "人物留在门边。")).rejects.toThrow();
   expect((await db.stories.get(story.id))?.inspiration).toBeDefined();
-  fetcher.mockResolvedValueOnce(response({ messages: ["明天再来。"] }));
-  await run(story.id, "chat", "我明天再来。");
+  await expect(run(story.id, "chat", "我明天再来。")).rejects.toThrow("旧聊天入口已停用");
   expect((await db.stories.get(story.id))?.inspiration).toBeDefined();
   fetcher.mockResolvedValueOnce(
     response({ text: "他还站在门边，伞上的水落了下来。", facts: [] }),
@@ -397,7 +396,7 @@ it("grounds suggestions in prose and valid memories while excluding phone histor
     status: "accepted",
     created: 1,
   };
-  const world = await db.world.toArray();
+  const world = await db.storyWorld.toArray();
   const secret = {
     ...world[0],
     id: "secret",
@@ -464,7 +463,7 @@ it("does not trigger world entries or memories from isolated phone messages", as
       chatBatchId: `batch-${i}`,
     }),
   );
-  const world = await db.world.toArray();
+  const world = await db.storyWorld.toArray();
   world.push(
     {
       ...world[0],
@@ -540,7 +539,7 @@ it.each([
         })),
       });
     if (change === "world")
-      await db.world.update(story.worldIds[0], { text: "世界规则已修改" });
+      await db.storyWorld.update(story.worldIds[0], { text: "世界规则已修改" });
     if (change === "memory")
       await db.memories.put({
         id: "new-memory",

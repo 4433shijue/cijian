@@ -10,7 +10,11 @@ import {
   SceneDB,
 } from "../src/db";
 import { preview, run } from "../src/engine";
-import { sendChatMessage, replyChat } from "../src/chat";
+import { createStory } from "../src/story-service";
+import { addRecord, conversation } from "../src/phone-store";
+import { startPhoneRun } from "../src/phone-generation";
+import { emptyBody } from "../src/phone-types";
+
 import { exportBackup, validateBackup, importBackup } from "../src/backup";
 import { active } from "../src/generation-state";
 import { cacheHitPercent, prefixEnabled } from "../src/prefix-cache";
@@ -72,8 +76,10 @@ const response = (content: string, usage?: unknown, finish_reason = "stop") =>
 const raw = (n: number) =>
   ` {"text": "正文第${n}段，他在窗边放下杯子。", "facts": []} `;
 const rows = () => db.events.where("storyId").equals(story.id).sortBy("seq");
-const send = (text: string) =>
-  sendChatMessage(story.id, story.player, story.partner, text);
+let phone: Story, cid: string;
+async function setupPhone() { phone=await createStory({kind:"phone",title:"手机",roles:story.roles,worldIds:[],background:""});cid=await conversation(phone,[phone.player,phone.partner]); }
+const send=(text:string)=>addRecord(phone.id,{speakerId:phone.player,conversationId:cid,body:{...emptyBody(),text},pending:true});
+const replyChat=(_id:string)=>startPhoneRun({storyId:phone.id,ownerId:phone.player,conversationId:cid,speakers:[phone.partner],mode:"participate"});
 const body = (fetcher: ReturnType<typeof vi.fn>, index: number) =>
   JSON.parse(fetcher.mock.calls[index][1].body);
 function mockNovel() {
@@ -172,7 +178,7 @@ it.each(["model", "style", "prompt", "world", "mode"])(
         prompts: { novel: { text: "短句为主", enabled: true } },
       });
     if (change === "world")
-      await db.world.update(story.worldIds[0], { enabled: false });
+      await db.storyWorld.update(story.worldIds[0], { enabled: false });
     if (change === "mode")
       await db.stories.update(story.id, { timelineMode: "strict" });
     await run(story.id, "novel", "第二轮");
@@ -211,37 +217,16 @@ it("rebuilds before capacity is exceeded, retains required recent prose, and can
   expect(resumed).toBe(true);
 });
 
-it("keeps novel and batched chat independent, brings intervening prose into the tail, and revokes private prose", async () => {
-  const fetcher = mockNovel();
-  await run(story.id, "novel", "正文输入");
-  const prose = (await rows())[0];
-  fetcher.mockResolvedValueOnce(
-    response('{"messages":["第一条回复","第二条回复"]}'),
-  );
-  await send("今天见面");
-  await send("等我下班");
-  await replyChat(story.id);
-  expect(body(fetcher, 1).messages).toHaveLength(2);
-  expect(body(fetcher, 1).messages[1].content).toContain(prose.text);
-  await run(story.id, "novel", "中间正文");
-  const secondProse = (await rows()).filter((e) => e.kind === "novel").at(-1)!;
-  fetcher.mockResolvedValueOnce(response('{"messages":["好，等你"]}'));
-  await send("我下班了");
-  await replyChat(story.id);
-  const secondChat = body(fetcher, 3).messages;
-  expect(secondChat.slice(0, 2)).toEqual(body(fetcher, 1).messages);
-  expect(secondChat[2].content).toBe(
-    '{"messages":["第一条回复","第二条回复"]}',
-  );
-  expect(secondChat.at(-1).content).toContain(secondProse.text);
-  expect(secondChat.at(-1).content).not.toContain("第一条回复");
-  await reviseEvent(prose.id, prose.text, false, [], prose.versionId, "author");
-  fetcher.mockResolvedValueOnce(response('{"messages":["晚安"]}'));
-  await send("晚安");
-  await replyChat(story.id);
-  expect(body(fetcher, 4).messages).toHaveLength(2);
-  expect(JSON.stringify(body(fetcher, 4))).not.toContain(prose.text);
-  expect(await db.promptSessions.count()).toBe(2);
+it("isolates phone requests from novel prose and its prefix cache", async () => {
+  await setupPhone(); const fetcher=mockNovel();
+  await run(story.id,"novel","正文输入"); const prose=(await rows())[0];
+  fetcher.mockResolvedValueOnce(response('{"messages":[{"type":"text","text":"等你"}]}'));
+  await send("今天见面");await send("等我下班");await replyChat(story.id);
+  expect(JSON.stringify(body(fetcher,1))).not.toContain(prose.text);
+  expect(JSON.stringify(body(fetcher,1))).toContain("等我下班");
+  await run(story.id,"novel","中间正文");
+  expect(JSON.stringify(body(fetcher,2))).not.toContain("今天见面");
+  expect((await db.promptSessions.toArray()).every(p=>p.storyId===story.id)).toBe(true);
 });
 
 it("does not cache failed or truncated responses, and rewrites never reuse future events", async () => {
@@ -263,7 +248,8 @@ it("does not cache failed or truncated responses, and rewrites never reuse futur
   expect(await db.promptSessions.count()).toBe(0);
 });
 
-it("keeps messages sent during generation for the next appended user turn", async () => {
+it("keeps messages sent during generation for the next phone turn", async () => {
+  await setupPhone();
   let finish!: (r: Response) => void;
   const fetcher = vi
     .fn()
@@ -273,19 +259,17 @@ it("keeps messages sent during generation for the next appended user turn", asyn
           finish = resolve;
         }),
     )
-    .mockResolvedValueOnce(response('{"messages":["第二轮回复"]}'));
+    .mockResolvedValueOnce(response('{"messages":[{"type":"text","text":"第二轮回复"}]}'));
   vi.stubGlobal("fetch", fetcher);
   await send("本轮第一条");
   await send("本轮第二条");
   const task = replyChat(story.id);
   await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
   await send("下一轮消息");
-  finish(response('{"messages":["第一轮回复"]}'));
+  finish(response('{"messages":[{"type":"text","text":"第一轮回复"}]}'));
   await task;
   await replyChat(story.id);
-  expect(body(fetcher, 1).messages.slice(0, 2)).toEqual(
-    body(fetcher, 0).messages,
-  );
+  expect(JSON.stringify(body(fetcher,1))).toContain("第一轮回复");
   expect(body(fetcher, 1).messages.at(-1).content).toContain("下一轮消息");
   expect(body(fetcher, 0).messages[1].content).not.toContain("下一轮消息");
 });

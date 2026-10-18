@@ -297,7 +297,7 @@ export function buildInspirationContext(
       "作者对本轮建议的要求 · 不代表已发生的经历",
       feedback.trim(),
     );
-  const task = `参考最近 ${recent.length} 段正文和所给记忆，给出恰好四个符合人物当前处境的候选。经历按时间顺序提供，较晚的明确事实覆盖较早状态，记忆不能覆盖相关原文。先核对当前场景、关系、每个人正在做的事、已知信息、约定与拒绝，再安排下一小步；手机番外不属于主线经历。${history.length ? "接着最后已发生的经历考虑，不能重新套用开场时的关系。" : "尚无正式经历，从开场处境寻找合理的第一步。"}\n以下文风只调整措辞，不能改变人物的动机、边界与行动：\n${styleInstruction(story, prefs, "novel")}`;
+  const task = `参考最近 ${recent.length} 段正文和所给记忆，给出恰好四个符合人物当前处境的候选。经历按时间顺序提供，较晚的明确事实覆盖较早状态，记忆不能覆盖相关原文。先核对当前场景、关系、每个人正在做的事、已知信息、约定与拒绝，再安排下一小步；手机作品不属于主线经历。${history.length ? "接着最后已发生的经历考虑，不能重新套用开场时的关系。" : "尚无正式经历，从开场处境寻找合理的第一步。"}\n以下文风只调整措辞，不能改变人物的动机、边界与行动：\n${styleInstruction(story, prefs, "novel")}`;
   const report = assemble(
     prompt("inspiration", prefs),
     task,

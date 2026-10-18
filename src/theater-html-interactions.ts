@@ -14,7 +14,7 @@ const active = new Map<
   string,
   { control: AbortController; work: Promise<void> }
 >();
-const tables = [db.theaters, db.events, db.stories, db.jobs];
+const tables = () => [db.theaters, db.events, db.stories, db.jobs];
 const cancel =
   typeof window !== "undefined" && typeof BroadcastChannel !== "undefined"
     ? new BroadcastChannel("cijian-html-cancel")
@@ -152,7 +152,7 @@ export function generateHtmlPage(
         if (control.signal.aborted) return;
         jobId = uid();
         const revision = (record.revision || 0) + 1;
-        await db.transaction("rw", tables, async () => {
+        await db.transaction("rw", tables(), async () => {
           const latest = await db.theaters.get(id);
           if (!latest || !(await db.stories.get(story.id)))
             throw Error("故事已删除。");
@@ -244,7 +244,7 @@ export function generateHtmlPage(
           updated.htmlPages[0].id !== pageId
         )
           throw Error("没有收到本栏完整 HTML，原页面保留。");
-        await db.transaction("rw", [...tables, db.world], async () => {
+        await db.transaction("rw", [...tables(), db.world, db.storyWorld], async () => {
           const [latest, source, latestStory, latestWorld] = await Promise.all([
             db.theaters.get(id),
             db.events.get(event!.id),

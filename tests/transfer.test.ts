@@ -1,4 +1,5 @@
 import "fake-indexeddb/auto";
+import { migrateStories } from "../src/story-service";
 import { ensurePhone } from "../src/phone-store";
 import { beforeEach, afterEach, it, expect, vi } from "vitest";
 import { unzipSync, strFromU8 } from "fflate";
@@ -148,8 +149,11 @@ async function fixture() {
     key: "DO_NOT_EXPORT_KEY",
   });
   await db.phoneSpaces.where("storyId").equals(s.id).delete();
-  await ensurePhone(s.id);
-  return { s, e, draft };
+  await db.stories.update(s.id,{kind:undefined as any,worldIds:(await db.world.toArray()).map(w=>w.id)});
+  const legacy={...await exportBackup(),version:4};
+  await migrateStories();
+  const phone=(await db.stories.where("kind").equals("phone").toArray())[0];
+  return { s:(await db.stories.get(s.id))!, e, draft, phone, legacy };
 }
 const file = (value: unknown) => new Blob([JSON.stringify(value)]);
 const workOptions = (
@@ -193,20 +197,22 @@ it("streams split Chinese, emoji, escapes and arbitrary top-level field order wi
   const summary = await stageBackup(blob, "chunks");
   expect(sizes.length).toBeGreaterThan(1);
   expect(Math.max(...sizes)).toBeLessThanOrEqual(READ_CHUNK_BYTES);
-  expect(summary.counts.events).toBe(6);
-  expect(await db.stories.count()).toBe(1);
+  expect(summary.counts.events).toBe(4);
+  expect(await db.stories.count()).toBe(2);
   await commitStaged("chunks", { replace: false, applySettings: true });
   const restored = validateBackup(await exportBackup());
   expect(
     restored.roles.some((r) => r.persona === original.roles[0].persona),
   ).toBe(true);
-  const copied = restored.stories.find((s) => s.id !== original.stories[0].id)!;
+  const copied = restored.stories.find((s) => s.kind === "novel" && !original.stories.some(old => old.id === s.id))!;
   expect(copied.draft).toBe("未完成的正文输入");
-  expect(copied.chatDraft).toBe("待发送聊天");
+  expect(copied.chatDraft).toBe("");
+  expect(restored.phoneSpaces.some(p => Object.values(p.devices).some(d => Object.values(d.drafts).includes("待发送聊天")))).toBe(true);
   expect(restored.events.filter((e) => e.storyId === copied.id)).toHaveLength(
-    6,
+    4,
   );
-  expect(restored.chatBatches).toHaveLength(2);
+  expect(restored.chatBatches).toHaveLength(0);
+  expect(restored.legacyArchives.filter(a => a.table === "chatBatches")).toHaveLength(2);
 });
 
 it("scans every character boundary without treating quotes or escaped braces as structure", async () => {
@@ -255,7 +261,7 @@ it.each([
       ? new Blob([new Uint8Array([0xff, 0xff])])
       : new Blob([text]);
   await expect(stageBackup(blob, kind)).rejects.toThrow();
-  expect(await db.stories.count()).toBe(1);
+  expect(await db.stories.count()).toBe(2);
   expect(await db.events.get(e.id)).toEqual(e);
   await expect(
     commitStaged(kind, { replace: true, applySettings: true }),
@@ -264,8 +270,7 @@ it.each([
 });
 
 it("duplicate record IDs and crossed chat/memory/rewrite links cannot be activated", async () => {
-  await fixture();
-  const original = await exportBackup();
+  const {legacy:original} = await fixture();
   for (const damage of [
     (b: any) => b.events.push(b.events[0]),
     (b: any) => b.chatBatches[0].replyIds.push(b.chatBatches[0].sources[0].id),
@@ -278,7 +283,7 @@ it("duplicate record IDs and crossed chat/memory/rewrite links cannot be activat
     await expect(stageBackup(file(b), session)).rejects.toThrow();
     await clearTransfer(session);
   }
-  expect(await db.events.count()).toBe(6);
+  expect(await db.events.count()).toBe(4);
 });
 
 it("cancels reading after a chunk and retains all original records", async () => {
@@ -376,7 +381,7 @@ it("exports a complete portable snapshot including drafts but without keys, requ
 
 it("single-story backups omit other stories and connection settings and scope shared world entries to the copy", async () => {
   const { s } = await fixture();
-  await db.stories.add(makeStory("另一故事不导出", s.roles));
+  await db.stories.add(makeStory("novel", "另一故事不导出", s.roles));
   await db.world.add({
     id: "other-world",
     title: "另一故事专属",
@@ -428,7 +433,8 @@ it("TXT and Markdown export current selected content in order, excluding drafts 
   expect(text).not.toContain(e.text);
   expect(text).not.toContain("已删除正文");
   expect(text).not.toContain("未完成的重写");
-  const chat = await exportWork("chat", workOptions(s.id, { content: "chat" }));
+  const phone=(await db.stories.where("kind").equals("phone").toArray())[0];
+  const chat = await exportWork("chat", workOptions(phone.id, { content: "chat" }));
   expect(await chat.blob.text()).toContain("这是用户发来的消息");
   expect(await chat.blob.text()).not.toContain("新正文");
   const md = await exportWork(

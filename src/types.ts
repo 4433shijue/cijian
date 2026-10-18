@@ -144,6 +144,7 @@ export interface WorldEntry {
   audience: "all" | "roles" | "author";
 }
 export interface Story {
+  kind: "novel" | "phone";
   id: string;
   title: string;
   background: string;

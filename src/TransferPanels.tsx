@@ -337,7 +337,7 @@ export function StoryTransfer({
   const [expanded, setExpanded] = useState(false);
   const [options, setOptions] = useState<WorkOptions>({
     storyId: story.id,
-    content: "novel",
+    content: story.kind === "phone" ? "chat" : "novel",
     range: "all",
     from: 1,
     to: 1,
@@ -393,9 +393,7 @@ export function StoryTransfer({
                   })
                 }
               >
-                <option value="novel">纯正文</option>
-                <option value="all">正文与手机番外</option>
-                <option value="chat">仅手机番外</option>
+                {story.kind === "novel" ? <option value="novel">小说正文</option> : <option value="chat">手机记录</option>}
               </select>
             </label>
             <label>
@@ -468,8 +466,8 @@ export function StoryTransfer({
           <label className="transfer-check">
             <input
               type="checkbox"
-              disabled={t.running}
-              checked={options.background}
+              disabled={t.running || story.kind === "phone"}
+              checked={story.kind === "novel" && options.background}
               onChange={(e) => change({ background: e.target.checked })}
             />
             附上开场背景

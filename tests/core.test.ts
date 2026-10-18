@@ -731,7 +731,7 @@ it("persists a long persona intact and keeps story snapshots isolated", async ()
 });
 it("filters worldbook keywords and whole character combinations", async () => {
   const s = (await db.stories.toArray())[0];
-  const w = (await db.world.toArray())[0];
+  const w = (await db.storyWorld.toArray())[0];
   w.always = false;
   w.keywords = ["伞", ""];
   w.text = "KEYWORD_FACT";

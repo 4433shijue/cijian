@@ -1,3 +1,4 @@
+import { CreateStory } from "./CreateStory";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
@@ -550,138 +551,7 @@ export function StarterPage({ notify }: { notify: (text: string) => void }) {
                   <div className="starter-or">或开启一本新故事</div>
                 </div>
               )}
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (!state.title.trim() || !selectedRoles.length) {
-                    setError("请为故事起个名字，并选上至少一位角色。");
-                    return;
-                  }
-                  guarded(async () => {
-                    const created = makeStory(
-                      state.title.trim(),
-                      selectedRoles,
-                      state.worldIds.filter((id) =>
-                        world.some((w) => w.id === id),
-                      ),
-                      state.background.trim(),
-                    );
-                    await db.stories.add(created);
-                    updateStarter({
-                      storyId: created.id,
-                      title: "",
-                      background: "",
-                      worldIds: [],
-                      step: 3,
-                      status: "active",
-                    });
-                  });
-                }}
-              >
-                <label className="field">
-                  <span>故事名字</span>
-                  <input
-                    required
-                    value={state.title}
-                    placeholder="例如，风经过书页"
-                    onChange={(e) => updateStarter({ title: e.target.value })}
-                  />
-                </label>
-                <fieldset className="starter-cast">
-                  <legend>这次与谁相遇</legend>
-                  <div className="starter-role-picks">
-                    {roles.map((r) => (
-                      <button
-                        type="button"
-                        key={r.id}
-                        aria-pressed={roleIds.includes(r.id)}
-                        className={roleIds.includes(r.id) ? "selected" : ""}
-                        onClick={() =>
-                          updateStarter({
-                            roleIds: roleIds.includes(r.id)
-                              ? roleIds.filter((id) => id !== r.id)
-                              : [...roleIds, r.id],
-                          })
-                        }
-                      >
-                        <span className="role-initial">
-                          {r.name.slice(0, 1)}
-                        </span>
-                        {r.name}
-                        {roleIds.includes(r.id) && <Check size={14} />}
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      className="text-action"
-                      onClick={() => go(1)}
-                    >
-                      <Plus size={15} />
-                      添加角色
-                    </button>
-                  </div>
-                  <p className="hint">
-                    写正文，一位角色就可以。想让角色互相聊天，可以选两位或更多。
-                  </p>
-                </fieldset>
-                <label className="field">
-                  <span>
-                    开场背景 <small>选填</small>
-                  </span>
-                  <textarea
-                    rows={3}
-                    value={state.background}
-                    placeholder="傍晚的旧书店，风把门口的书页翻动了。"
-                    onChange={(e) =>
-                      updateStarter({ background: e.target.value })
-                    }
-                  />
-                </label>
-                <details className="starter-details">
-                  <summary>
-                    <span>带入世界书</span>
-                    <small>选填，以后也能补上</small>
-                    <ChevronDown size={15} />
-                  </summary>
-                  <div className="details-content">
-                    <p className="hint">
-                      世界书用来补充地点、人物关系和故事规则。第一次写，可以先留空。
-                    </p>
-                    {world.length ? (
-                      world.map((w) => (
-                        <label className="toggle" key={w.id}>
-                          <input
-                            type="checkbox"
-                            checked={state.worldIds.includes(w.id)}
-                            onChange={(e) =>
-                              updateStarter({
-                                worldIds: e.target.checked
-                                  ? [...state.worldIds, w.id]
-                                  : state.worldIds.filter((id) => id !== w.id),
-                              })
-                            }
-                          />
-                          <span>{w.title}</span>
-                        </label>
-                      ))
-                    ) : (
-                      <p>还没有世界书，也可以直接开始。</p>
-                    )}
-                  </div>
-                </details>
-                <div className="starter-actions">
-                  <button type="button" disabled={saving} onClick={() => go(1)}>
-                    上一步
-                  </button>
-                  <button
-                    className="primary"
-                    disabled={saving || !selectedRoles.length}
-                  >
-                    保存故事，继续
-                    <ArrowRight size={16} />
-                  </button>
-                </div>
-              </form>
+              <CreateStory draftKey="cijian-starter-work-v3" initialRoleIds={state.roleIds} onAddRole={()=>go(1)} onCreated={created=>updateStarter({storyId:created.id, title:"", background:"", worldIds:[], step:3, status:"active"})} />
             </>
           )}
           {step === 3 &&
@@ -695,9 +565,9 @@ export function StarterPage({ notify }: { notify: (text: string) => void }) {
                 <div className="starter-next-note">
                   <Feather size={19} />
                   <div>
-                    <h3>你决定发生什么，AI 负责写得更细。</h3>
+                    <h3>{story.kind === "phone" ? "从一条消息，开始他们的手机生活。" : "你决定发生什么，AI 负责写得更细。"}</h3>
                     <p>
-                      进入故事后，在输入框写下动作或台词，再点「扩写这一刻」。成功保存第一段，引导就完成了。
+                      {story.kind === "phone" ? "进入手机后选择联系人，发送消息，再手动点击让 TA 回复。也可以直接编排作品。" : "进入故事后，在输入框写下动作或台词，再点「扩写这一刻」。成功保存第一段，引导就完成了。"}
                     </p>
                   </div>
                 </div>
@@ -712,13 +582,13 @@ export function StarterPage({ notify }: { notify: (text: string) => void }) {
                       }
                       updateStarter({
                         status:
-                          state.status === "complete" ? "complete" : "active",
+                          state.status === "complete" || story.kind === "phone" ? "complete" : "active",
                       });
                       location.hash = "story/" + story.id;
                     }}
                   >
                     {" "}
-                    {ready[0] ? "进入故事，写第一段" : "先完成模型连接"}
+                    {ready[0] ? story.kind === "phone" ? "进入角色手机" : "进入故事，写第一段" : "先完成模型连接"}
                     <ArrowRight size={16} />
                   </button>
                 </div>
@@ -866,7 +736,7 @@ export function StarterCelebration({
               onChat();
             }}
           >
-            看看手机聊天
+            创建独立手机作品
             <MessageCircle size={15} />
           </button>
         </div>

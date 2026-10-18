@@ -1,6 +1,7 @@
+import { extraTables } from "./work-types";
 import { phoneTables } from "./phone-types";
 export const backupTables = [
-  ...phoneTables,
+  ...phoneTables, ...extraTables,
   "roles",
   "stories",
   "world",
