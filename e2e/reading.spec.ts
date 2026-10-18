@@ -1,3 +1,4 @@
+import { openPhoneChat } from "./fixtures";
 import { test, expect, type Page } from "@playwright/test";
 import { readStore, seedJourney } from "./fixtures";
 
@@ -177,15 +178,11 @@ for (const mobile of [false, true])
       .getByRole("button", { name: "回到故事顶部", exact: true })
       .click();
     await page.getByRole("button", { name: "展开功能栏", exact: true }).click();
-    await page.getByRole("button", { name: "手机聊天", exact: true }).click();
-    await page.getByLabel("聊天消息").fill("手机消息也还没发出去。");
-    await page.getByRole("button", { name: "收起输入框", exact: true }).click();
+    await openPhoneChat(page);
+    await page.getByLabel("手机消息内容", { exact: true }).fill("手机消息也还没发出去。");
     await page.getByRole("button", { name: "沉浸阅读", exact: true }).click();
-    await page.getByRole("button", { name: "退出阅读", exact: true }).click();
-    await page.getByRole("button", { name: "展开输入框", exact: true }).click();
-    await expect(page.getByLabel("聊天消息")).toHaveValue(
-      "手机消息也还没发出去。",
-    );
+    await page.getByRole("button", { name: "退出手机阅读", exact: true }).click();
+    await expect(page.getByLabel("手机消息内容", { exact: true })).toHaveValue("手机消息也还没发出去。");
     expect((await readStore(page, "events")).map((e) => e.versionId)).toEqual(
       sourceVersions,
     );

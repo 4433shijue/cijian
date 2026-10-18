@@ -140,7 +140,6 @@ it("uses the most recent three full replies including folded text, story roles a
     "prose-3",
     "prose-4",
     "prose-5",
-    "prose-6",
   ]);
   expect(
     buildInspirationContext(
@@ -150,12 +149,11 @@ it("uses the most recent three full replies including folded text, story roles a
       prefs,
       profile,
     ).sources.map((s) => s.id),
-  ).toEqual(["prose-4", "prose-5", "prose-6", "prose-9"]);
+  ).toEqual(["prose-4", "prose-5", "prose-9"]);
   for (const text of [
     ...story.roles[0].paragraphs.map((p) => p.text),
     world[0].text,
     "正文内容标记_3",
-    "刚刚在私聊里约好了明天见面",
   ])
     expect(built.report.user).toContain(text);
   for (const text of [
@@ -164,6 +162,7 @@ it("uses the most recent three full replies including folded text, story roles a
     "正文内容标记_7",
     "未加载世界书",
     "关闭的世界书",
+    "刚刚在私聊里约好了明天见面",
   ])
     expect(built.report.user).not.toContain(text);
   expect(
@@ -174,7 +173,7 @@ it("uses the most recent three full replies including folded text, story roles a
       { ...prefs, inspirationParagraphs: 5 },
       profile,
     ).sources,
-  ).toHaveLength(6);
+  ).toHaveLength(5);
   expect(() =>
     buildInspirationContext(story, events, world, prefs, {
       ...profile,
@@ -373,7 +372,7 @@ it("backs up folding and developer settings without treating ideas as saved stor
   ).toBe("冷静短句");
 });
 
-it("grounds suggestions in chronological chat and current accepted memories, with private knowledge labelled", async () => {
+it("grounds suggestions in prose and valid memories while excluding phone history", async () => {
   const [a, b] = story.roles;
   const events = [
     event(1, { text: "她明确说现在不想拥抱。" }),
@@ -432,22 +431,18 @@ it("grounds suggestions in chronological chat and current accepted memories, wit
     "他不会主动靠近。",
   );
   expect(report.user).toContain(memory.text);
-  expect(report.user).toContain(events.at(-1)!.text);
+  expect(report.user).not.toContain(events.at(-1)!.text);
   expect(report.user.indexOf(memory.text)).toBeLessThan(
     report.user.indexOf(events[1].text),
   );
-  expect(report.user.indexOf(events[3].text)).toBeLessThan(
-    report.user.indexOf(events[4].text),
-  );
+  expect(report.user).toContain(events[3].text);
   expect(report.included.find((m) => m.id === "promise")?.text).toContain(
     `${a.name}（${a.id}）`,
   );
   expect(report.included.find((m) => m.id === "secret")?.text).toContain(
     "未授权给任何角色",
   );
-  expect(report.included.find((m) => m.id === "prose-5")?.label).toContain(
-    "尚待回复",
-  );
+  expect(report.included.find((m) => m.id === "prose-5")).toBeUndefined();
   expect(
     report.included.find((m) => m.id === "author-feedback")?.label,
   ).toContain("不代表已发生");
@@ -455,10 +450,10 @@ it("grounds suggestions in chronological chat and current accepted memories, wit
   expect(report.system).not.toContain("各出现一次");
   for (const forbidden of ["未确认的猜测", "旧版本记忆", "别本故事的记忆"])
     expect(report.user).not.toContain(forbidden);
-  expect(sources.map((ref) => ref.id)).toEqual(events.map((e) => e.id));
+  expect(sources.map((ref) => ref.id)).toEqual(events.filter(e => e.kind === "novel").map((e) => e.id));
 });
 
-it("bounds recent messages, resolves world triggers and limits memory knowledge to source permissions", async () => {
+it("does not trigger world entries or memories from isolated phone messages", async () => {
   const [a, b] = story.roles;
   const events = Array.from({ length: 24 }, (_, i) =>
     event(i + 1, {
@@ -506,20 +501,17 @@ it("bounds recent messages, resolves world triggers and limits memory knowledge 
     [memory],
   );
   expect(report.included.filter((m) => m.id.startsWith("prose-"))).toHaveLength(
-    19,
+    0,
   );
   expect(report.user).not.toContain("私聊第4条");
-  expect(report.user).toContain("私聊第24条");
-  expect(report.user).toContain("灯塔周围没有咖啡馆");
+  expect(report.user).not.toContain("私聊第24条");
+  expect(report.user).not.toContain("灯塔周围没有咖啡馆");
   expect(report.user).not.toContain("未触发地点");
-  expect(
-    report.included.find((m) => m.id === "private-memory")?.text,
-  ).not.toContain(b.name);
+  expect(report.included.find((m) => m.id === "private-memory")).toBeUndefined();
 });
 
 it.each([
   "prose",
-  "chat",
   "persona",
   "world",
   "memory",
@@ -539,14 +531,6 @@ it.each([
         text: "新的明确拒绝",
         versionId: "edited",
       });
-    if (change === "chat")
-      await db.events.put(
-        event(2, {
-          kind: "message",
-          text: "新聊天约定",
-          participants: story.roles.map((r) => r.id),
-        }),
-      );
     if (change === "persona")
       await db.stories.update(story.id, {
         roles: story.roles.map((r) => ({
@@ -598,6 +582,7 @@ it("keeps a round current through folding, visual changes, unsent chat and unrel
     vi.fn().mockResolvedValue(response({ options: options() })),
   );
   await requestInspiration(story.id);
+  await db.events.put(event(2, { kind: "message", text: "手机番外改变", participants: story.roles.map(r => r.id) }));
   await db.events.update("prose-1", { collapsed: true });
   await db.stories.update(story.id, {
     updated: Date.now(),

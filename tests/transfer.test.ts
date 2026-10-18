@@ -1,4 +1,5 @@
 import "fake-indexeddb/auto";
+import { ensurePhone } from "../src/phone-store";
 import { beforeEach, afterEach, it, expect, vi } from "vitest";
 import { unzipSync, strFromU8 } from "fflate";
 import { db, initialize, makeStory } from "../src/db";
@@ -146,6 +147,8 @@ async function fixture() {
     remember: true,
     key: "DO_NOT_EXPORT_KEY",
   });
+  await db.phoneSpaces.where("storyId").equals(s.id).delete();
+  await ensurePhone(s.id);
   return { s, e, draft };
 }
 const file = (value: unknown) => new Blob([JSON.stringify(value)]);

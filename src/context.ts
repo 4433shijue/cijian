@@ -1,3 +1,4 @@
+import { mainlineEvents } from "./mainline";
 import { prompt, theaterFormatGuard } from "./prompts";
 import { quotedDialogue } from "./output";
 import { styleInstruction } from "./style-presets";
@@ -84,8 +85,9 @@ export function buildContext(
   prefs: Preferences,
   p: Profile,
   input: string,
-  options: { styleOnly?: boolean; chatMessages?: string[]; rewrite?: boolean } = {},
+  options: { styleOnly?: boolean; chatMessages?: string[]; rewrite?: boolean; participants?: string[] } = {},
 ): ContextReport {
+  if (kind !== "chat") events = mainlineEvents(events);
   const viewer = kind === "chat" ? s.partner : undefined;
   const mats: Material[] = [];
   const add = (
@@ -100,7 +102,7 @@ export function buildContext(
   ) => {
     if (text) mats.push({ id, label, text, mandatory, priority, stable, sources, excerpt });
   };
-  const present = viewer ? [s.player, s.partner] : s.roles.map((r) => r.id);
+  const present = options.participants || (viewer ? [s.player, s.partner] : s.roles.map((r) => r.id));
   const worldById = new Map(world.map((entry) => [entry.id, entry]));
   const roleById = new Map(s.roles.map((role) => [role.id, role]));
   const loadedWorld = s.worldIds.flatMap((id) => {

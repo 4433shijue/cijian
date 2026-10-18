@@ -143,9 +143,9 @@ test("first visit, failed connection, refresh recovery, first real save and comp
   expect((await starterState(page)).status).toBe("complete");
   await page.getByRole("button", { name: "看看手机聊天" }).click();
   await expect(
-    page.getByLabel("选好身份，再开始聊天", { exact: true }),
+    page.getByLabel("角色手机", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByLabel("我扮演", { exact: true })).toHaveValue(
+  await expect(page.getByLabel("手机机主", { exact: true })).toHaveValue(
     (await readStore(page, "stories"))[0].player,
   );
   await page.getByRole("button", { name: "故事记忆", exact: true }).click();

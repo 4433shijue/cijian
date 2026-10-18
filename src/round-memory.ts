@@ -1,3 +1,4 @@
+import { mainlineEvents } from "./mainline";
 import { z } from "zod";
 import { db, ensureStoryRounds, keyFor } from "./db";
 import { active } from "./generation-state";
@@ -36,6 +37,7 @@ export function memoryBatches(
   prefs: Preferences,
   all = false,
 ): MemoryBatch[] {
+  events = mainlineEvents(events);
   const rounds = numberedRounds(events)
     .map((r) => ({ ...r, events: r.events.filter((e) => usableEvent(e, s)) }))
     .filter((r) => r.events.length);

@@ -101,3 +101,10 @@ export async function readStore(page: Page, name: string) {
     return rows;
   }, name);
 }
+
+/** Opens the shared phone conversation from either owner's perspective. */
+export async function openPhoneChat(page: Page) {
+  await page.getByRole("button", { name: "角色手机", exact: true }).click();
+  await page.getByRole("button", { name: "联系人", exact: true }).click();
+  await page.getByRole("button", { name: "发消息", exact: true }).first().click();
+}

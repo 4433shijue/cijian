@@ -1,4 +1,6 @@
+import { phoneTables } from "./phone-types";
 export const backupTables = [
+  ...phoneTables,
   "roles",
   "stories",
   "world",

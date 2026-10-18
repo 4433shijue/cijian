@@ -1,3 +1,4 @@
+import { recordText } from "./phone-store";
 import { Zip, ZipDeflate, ZipPassThrough, strToU8 } from "fflate";
 import { db } from "./db";
 import { uid, type SceneEvent, type Story } from "./types";
@@ -249,10 +250,10 @@ export async function exportWork(
         if (!e) break;
         cursor = [e.storyId, e.seq, e.id];
         if (
+          e.kind === "message" || o.content === "chat" ||
           e.deleted ||
           e.status !== "complete" ||
-          (o.content === "novel" && e.kind !== "novel") ||
-          (o.content === "chat" && e.kind !== "message")
+          (o.content === "novel" && e.kind !== "novel")
         )
           continue;
         index++;
@@ -286,6 +287,19 @@ export async function exportWork(
             totalBytes: 0,
             records: selected,
           });
+      }
+      if (o.content !== "novel") {
+        await doc.block({ kind: "heading", text: "手机番外" });
+        const phone = await db.phoneRecords.where("storyId").equals(story.id).sortBy("seq");
+        const visibleIds = new Set(phone.filter(r => !r.deleted && !r.legacyDraft).map(r => r.id));
+        for (const record of phone) {
+          if (!visibleIds.has(record.id) || record.parentId && !visibleIds.has(record.parentId)) continue;
+          index++;
+          if (o.range === "selection" && (index < o.from || index > o.to)) continue;
+          const author = story.roles.find(r => r.id === record.speakerId)?.name || "角色";
+          await doc.block({ kind: "chat", text: `[手机番外 · ${record.kind === "moment" ? "朋友圈" : record.kind === "comment" ? "评论" : "聊天"} · ${record.time.replace("T", " ")}]\n${author}：${recordText(record)}` });
+          selected++;
+        }
       }
       if (!selected) throw Error("所选范围内没有已完成的正文或聊天");
       if (o.range === "selection" && o.to > index)

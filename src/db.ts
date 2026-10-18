@@ -1,3 +1,5 @@
+import { mainlineEvents } from "./mainline";
+import type { PhoneSpace, PhoneConversation, PhoneRecord, PhoneAsset, PhoneGenerationRun } from "./phone-types";
 import Dexie, { type Table } from "dexie";
 import { sharedTimeline } from "./timeline";
 import { withStoryLock } from "./locks";
@@ -26,6 +28,11 @@ import {
   type TheaterRecord,
 } from "./types";
 export class SceneDB extends Dexie {
+  phoneSpaces!: Table<PhoneSpace, string>;
+  phoneConversations!: Table<PhoneConversation, string>;
+  phoneRecords!: Table<PhoneRecord, string>;
+  phoneAssets!: Table<PhoneAsset, string>;
+  phoneRuns!: Table<PhoneGenerationRun, string>;
   roles!: Table<Role, string>;
   roleDrafts!: Table<{ id: string; role: Role }, string>;
   roleCompletionDrafts!: Table<CompletionDraft, string>;
@@ -69,6 +76,13 @@ export class SceneDB extends Dexie {
     this.version(7).stores({ roleCompletionDrafts: "id" });
     this.version(8).stores({
       theaters: "id,storyId,eventId,[eventId+sourceVersionId],status,interaction.status",
+    });
+    this.version(10).stores({
+      phoneSpaces: "id,storyId",
+      phoneConversations: "id,storyId",
+      phoneRecords: "id,storyId,conversationId,parentId,[storyId+seq],runId",
+      phoneAssets: "id,storyId",
+      phoneRuns: "id,storyId,status",
     });
     this.version(9).stores({}).upgrade(async (transaction) => {
       // Only editable configuration inherits a missing built-in presentation.
@@ -284,6 +298,7 @@ export async function initialize() {
       );
     else await recover(s.id);
   }
+  await (await import("./phone-store")).initializePhones();
 }
 export async function reviseEvent(
   id: string,
@@ -368,7 +383,7 @@ export async function ensureStoryRounds(storyId: string) {
       .equals(storyId)
       .sortBy("seq");
     const original = new Map(events.map((e) => [e.id, e]));
-    const rounds = numberedRounds(events);
+    const rounds = numberedRounds(mainlineEvents(events));
     for (const r of rounds)
       for (const e of r.events)
         if (original.get(e.id)?.round !== r.number)
@@ -493,9 +508,10 @@ export async function deleteStory(id: string) {
       db.jobs,
       db.chatBatches,
       db.promptSessions,
-      db.theaters,
+      db.theaters, db.phoneSpaces, db.phoneConversations, db.phoneRecords, db.phoneAssets, db.phoneRuns,
     ],
     async () => {
+      for (const table of [db.phoneSpaces, db.phoneConversations, db.phoneRecords, db.phoneAssets, db.phoneRuns]) await table.where("storyId").equals(id).delete();
       await db.events.where("storyId").equals(id).delete();
       await db.memories.where("storyId").equals(id).delete();
       await db.jobs.where("storyId").equals(id).delete();

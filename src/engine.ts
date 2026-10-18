@@ -62,7 +62,7 @@ async function report(
   s = { ...s, nextRound: normalized.nextRound, contextWindowStart: normalized.contextWindowStart };
   const prior = (
     await db.events.where("storyId").equals(s.id).sortBy("seq")
-  ).filter((e) => e.seq < until);
+  ).filter((e) => e.seq < until && (kind === "chat" || e.kind === "novel"));
   const priorVersions = new Map(
     prior
       .filter((e) => usableEvent(e, s) && (kind !== "chat" || !e.chatPending))

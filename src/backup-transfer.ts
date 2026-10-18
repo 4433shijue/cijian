@@ -1,3 +1,6 @@
+import { phoneTables } from "./phone-types";
+import { remapPhone, ensurePhone } from "./phone-store";
+import { phoneLinks, checkPhoneRow } from "./phone-backup";
 import Dexie, { type Table } from "dexie";
 import { db } from "./db";
 import { recordSchemas, mergeTheaterPresets, normalizeTheaterPresetSnapshot, remapTheaterContent } from "./backup";
@@ -141,6 +144,11 @@ async function checkStaged(
       throw Error("故事角色关联不完整");
     stories.set(s.id, roles);
   });
+  for (const table of phoneTables) await eachStaged(session, table, async row => {
+    const related = new Map<string, any>();
+    for (const [t, id] of phoneLinks(table, row)) related.set(`${t}:${id}`, await staged(session, t as BackupTable, id));
+    checkPhoneRow(table, row, related);
+  });
   await eachStaged(session, "events", async (e) => {
     progress();
     if (
@@ -276,6 +284,7 @@ export function backupRemapper() {
     styleIds,
     theaterPresetIds,
     row(table: BackupTable, x: any, replace: boolean): any {
+      if (table.startsWith("phone")) return remapPhone(table, x, id);
       switch (table) {
         case "roles":
           return role(x);
@@ -402,6 +411,7 @@ export async function commitStaged(
       control.transaction = Dexie.currentTransaction!;
       control.check();
       if (
+        (await db.phoneRuns.where("status").equals("running").count()) ||
         (await db.jobs.where("status").equals("running").count()) ||
         (await db.chatBatches.where("status").equals("running").count()) ||
         (await db.theaters.where("status").equals("running").count()) ||
@@ -483,6 +493,7 @@ export async function commitStaged(
         stylePresets: styles,
         theaterPresets: theaterPresets.presets,
       });
+      for (const story of await db.stories.toArray()) { control.check(); await ensurePhone(story.id); }
       control.check();
     })
     .finally(() => {
@@ -524,7 +535,7 @@ export async function exportBackupBlob(
       await writer.write(
         JSON.stringify({
           format: "little-scene",
-          version: 4,
+          version: 5,
           created: new Date().toISOString(),
           scope: s ? "story" : "library",
           ...(s ? { title: s.title } : {}),
@@ -540,7 +551,7 @@ export async function exportBackupBlob(
             if (["profiles", "roleDrafts"].includes(table)) return;
             if (table === "stories" && raw.id !== s.id) return;
             if (
-              ["events", "memories", "chatBatches", "theaters"].includes(table) &&
+              [...phoneTables, "events", "memories", "chatBatches", "theaters"].includes(table) &&
               raw.storyId !== s.id
             )
               return;

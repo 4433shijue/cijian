@@ -1,3 +1,4 @@
+import { mainlineEvents } from "./mainline";
 import { assemble } from "./context";
 import { prompt } from "./prompts";
 import { styleInstruction } from "./style-presets";
@@ -66,8 +67,10 @@ export function inspirationSourceText({
   world,
   prefs,
 }: InspirationInputs) {
+  events = mainlineEvents(events);
+  const validVersions = new Map(events.filter(e => !e.deleted && e.status === "complete").map(e => [e.id, e.versionId]));
   return JSON.stringify({
-    policy: 3,
+    policy: 4,
     memoryLimit: memoryReadLimit(prefs),
     windowStart: s.contextWindowStart,
     story: {
@@ -90,7 +93,7 @@ export function inspirationSourceText({
       revision: s.inspirationRevision || "",
     },
     events: events
-      .filter((e) => e.storyId === s.id && usableEvent(e, s))
+      .filter((e) => e.storyId === s.id && e.kind === "novel" && usableEvent(e, s))
       .sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id))
       .map((e) => ({
         id: e.id,
@@ -105,7 +108,7 @@ export function inspirationSourceText({
         chatPending: !!e.chatPending,
       })),
     memories: memories
-      .filter((m) => m.storyId === s.id && m.status === "accepted")
+      .filter((m) => m.storyId === s.id && m.status === "accepted" && m.sources.length > 0 && m.sources.every(ref => validVersions.get(ref.id) === ref.versionId))
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((m) => ({
         id: m.id,
@@ -131,6 +134,7 @@ export function buildInspirationContext(
   memories: Memory[] = [],
   feedback = "",
 ) {
+  events = mainlineEvents(events);
   const common = selectRoundContext(story, events, memories, prefs, undefined, false, false);
   const recent = recentProse(
     common.history,
@@ -293,7 +297,7 @@ export function buildInspirationContext(
       "作者对本轮建议的要求 · 不代表已发生的经历",
       feedback.trim(),
     );
-  const task = `参考最近 ${recent.length} 段正文、${chats.length} 条聊天和所给记忆，给出恰好四个符合人物当前处境的候选。经历按时间顺序提供，较晚的明确事实覆盖较早状态，记忆不能覆盖相关原文。先核对当前场景、关系、每个人正在做的事、已知信息、约定与拒绝，再安排下一小步；聊天中的约定需要接上，但发消息不表示人物已经见面或移动了位置。${history.length ? "接着最后已发生的经历考虑，不能重新套用开场时的关系。" : "尚无正式经历，从开场处境寻找合理的第一步。"}\n以下文风只调整措辞，不能改变人物的动机、边界与行动：\n${styleInstruction(story, prefs, "novel")}`;
+  const task = `参考最近 ${recent.length} 段正文和所给记忆，给出恰好四个符合人物当前处境的候选。经历按时间顺序提供，较晚的明确事实覆盖较早状态，记忆不能覆盖相关原文。先核对当前场景、关系、每个人正在做的事、已知信息、约定与拒绝，再安排下一小步；手机番外不属于主线经历。${history.length ? "接着最后已发生的经历考虑，不能重新套用开场时的关系。" : "尚无正式经历，从开场处境寻找合理的第一步。"}\n以下文风只调整措辞，不能改变人物的动机、边界与行动：\n${styleInstruction(story, prefs, "novel")}`;
   const report = assemble(
     prompt("inspiration", prefs),
     task,

@@ -252,6 +252,7 @@ export function BackupSettings({
               <div>
                 <dt>小剧场</dt>
                 <dd>{t.summary.counts.theaters}</dd>
+              </div><div><dt>手机记录 / 素材</dt><dd>{t.summary.counts.phoneRecords || 0} / {t.summary.counts.phoneAssets || 0}</dd>
               </div>
             </dl>
             <p className="hint">
@@ -348,21 +349,12 @@ export function StoryTransfer({
     pageBreak: false,
     theaters: false,
   });
-  const count = useLiveQuery(
-    () =>
-      db.events
-        .where("storyId")
-        .equals(story.id)
-        .filter(
-          (e) =>
-            e.status === "complete" &&
-            !e.deleted &&
-            (options.content === "all" ||
-              e.kind === (options.content === "novel" ? "novel" : "message")),
-        )
-        .count(),
-    [story.id, options.content],
-  );
+  const count = useLiveQuery(async () => {
+    const prose = options.content === "chat" ? 0 : await db.events.where("storyId").equals(story.id).filter(e => e.kind === "novel" && !e.deleted && e.status === "complete").count();
+    const phone = options.content === "novel" ? [] : await db.phoneRecords.where("storyId").equals(story.id).filter(r => !r.deleted && !r.legacyDraft).toArray();
+    const ids = new Set(phone.map(r => r.id));
+    return prose + phone.filter(r => !r.parentId || ids.has(r.parentId)).length;
+  }, [story.id, options.content]);
   const change = (patch: Partial<WorkOptions>) =>
     setOptions((o) => ({ ...o, ...patch }));
   const unit =
@@ -402,8 +394,8 @@ export function StoryTransfer({
                 }
               >
                 <option value="novel">纯正文</option>
-                <option value="all">正文与聊天</option>
-                <option value="chat">仅聊天</option>
+                <option value="all">正文与手机番外</option>
+                <option value="chat">仅手机番外</option>
               </select>
             </label>
             <label>

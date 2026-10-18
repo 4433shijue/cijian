@@ -398,7 +398,7 @@ for (const mobile of [false, true])
     await expect(dialog.locator(".inspiration-option").first()).toBeEnabled();
     expect(requests).toHaveLength(1);
     expect(requests[0].messages[1].content).toContain("许知明确拒绝拥抱");
-    expect(requests[0].messages[1].content).toContain(
+    expect(requests[0].messages[1].content).not.toContain(
       "今天不见面，明天只在书店取书",
     );
     expect(requests[0].messages[0].content).not.toContain("各出现一次");
@@ -420,20 +420,10 @@ for (const mobile of [false, true])
     // as real author actions, rather than bypassing Dexie with a raw IDB write.
     const editor = await page.context().newPage();
     await editor.goto("/#story/fixture-story");
-    await editor.getByRole("button", { name: "手机聊天", exact: true }).click();
-    await editor
-      .locator(".message-event")
-      .getByRole("button", { name: "编辑", exact: true })
-      .click();
-    await editor
-      .getByLabel("正文 / 消息")
-      .fill("我改变主意，明天也不去书店了。");
-    await editor
-      .getByRole("button", { name: "保存新版本", exact: true })
-      .click();
-    await expect(
-      editor.getByRole("dialog", { name: "修改这一刻" }),
-    ).toHaveCount(0);
+    await editor.locator(".prose-event").last().getByRole("button", { name: "编辑", exact: true }).click();
+    await editor.getByLabel("正文 / 消息").fill("正文里的约定变了，他们明天也不去书店了。");
+    await editor.getByRole("button", { name: "保存新版本", exact: true }).click();
+    await expect(editor.getByRole("dialog", { name: "修改这一刻" })).toHaveCount(0);
     await editor.close();
     await expect(dialog.getByRole("status")).toContainText("这轮灵感需要更新");
     for (const option of await dialog.locator(".inspiration-option").all())
@@ -455,7 +445,7 @@ for (const mobile of [false, true])
     await expect(dialog.locator(".inspiration-stale")).toHaveCount(0);
     expect(requests).toHaveLength(3);
     expect(requests[2].messages[1].content).toContain(
-      "我改变主意，明天也不去书店了",
+      "正文里的约定变了，他们明天也不去书店了。",
     );
     expect(requests[2].messages[1].content).not.toContain(
       "今天不见面，明天只在书店取书",

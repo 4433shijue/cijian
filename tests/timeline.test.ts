@@ -33,15 +33,16 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("new stories use shared chronological prose and chat without facts approval", async () => {
+it("mainline excludes archived phone messages while legacy chat remains readable", async () => {
   expect(s.timelineMode).toBe("shared");
   await db.events.bulkAdd([event(1, "先约在河边见面。"), event(2, "我已经到桥头了。", {
     kind: "message", speaker: s.partner, origin: "ai", participants: [s.player, s.partner],
   }), event(3, "后来他们一起走进书店。", { review: true })]);
   for (const kind of ["novel", "chat"] as const) {
     const r = await context(kind);
-    expect(r.user.indexOf("先约在河边见面。")).toBeLessThan(r.user.indexOf("我已经到桥头了。"));
-    expect(r.user.indexOf("我已经到桥头了。")).toBeLessThan(r.user.indexOf("后来他们一起走进书店。"));
+    if (kind === "novel") expect(r.user).not.toContain("我已经到桥头了。");
+    else expect(r.user).toContain("我已经到桥头了。");
+    expect(r.user.indexOf("先约在河边见面。")).toBeLessThan(r.user.indexOf("后来他们一起走进书店。"));
   }
 });
 
@@ -155,18 +156,19 @@ it("still preserves incomplete generation as a draft", async () => {
   expect(await db.memories.count()).toBe(0);
 });
 
-it("automatically gives a chat batch prose context and brings its replies back into prose", async () => {
+it("gives legacy chat prose context without bringing replies back into prose", async () => {
   await db.events.add(event(1, "他们约好明天一起去河边。"));
   await sendChatMessage(s.id, s.player, s.partner, "几点出发？");
   await sendChatMessage(s.id, s.player, s.partner, "我上午有事，改下午吧。");
-  expect((await context("novel")).user).toContain("我上午有事，改下午吧。");
+  expect((await context("novel")).user).not.toContain("我上午有事，改下午吧。");
   const api = vi.spyOn(globalThis, "fetch").mockResolvedValue(response({ messages: ["那就下午三点。", "桥头等你。"] }));
   await replyChat(s.id);
   const sent = JSON.parse(api.mock.calls[0][1]?.body as string).messages[1].content;
   expect(sent).toContain("他们约好明天一起去河边。");
   const novel = (await context("novel")).user;
-  expect(novel.indexOf("几点出发？")).toBeLessThan(novel.indexOf("那就下午三点。"));
-  expect(novel).toContain("桥头等你。"); expect(api).toHaveBeenCalledTimes(1);
+  expect(novel).not.toContain("几点出发？");
+  expect(novel).not.toContain("那就下午三点。");
+  expect(novel).not.toContain("桥头等你。"); expect(api).toHaveBeenCalledTimes(1);
 });
 
 it("AI summaries use separate audience requests, inherit prose visibility and respect a batch limit", async () => {

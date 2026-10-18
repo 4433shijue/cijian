@@ -1,4 +1,7 @@
 import "fake-indexeddb/auto";
+import { addRecord, conversation } from "../src/phone-store";
+import { emptyBody } from "../src/phone-types";
+import { startPhoneRun } from "../src/phone-generation";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   db,
@@ -118,7 +121,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("bounds actual requests through 105 mixed rounds, bubbles, reloads and mode changes", async () => {
+it("bounds 105 prose rounds while independent phone records never enter the window", async () => {
   let turn = 0;
   const requests: any[] = [];
   vi.stubGlobal(
@@ -139,7 +142,8 @@ it("bounds actual requests through 105 mixed rounds, bubbles, reloads and mode c
       db.close();
       await db.open();
     }
-    const kind = turn % 4 < 2 ? "novel" : "chat";
+    const kind: string = "novel";
+    if (turn % 4 === 0) await addRecord(s.id, { speakerId: s.player, conversationId: await conversation(s, [s.player, s.partner]), body: { ...emptyBody(), text: "PHONE_ONLY_" + turn } });
     let reference;
     if (kind === "chat") {
       for (let j = 1; j <= 3; j++)
@@ -175,7 +179,8 @@ it("bounds actual requests through 105 mixed rounds, bubbles, reloads and mode c
   expect(requests).toHaveLength(105);
   const all = await rows();
   expect(new Set(all.map((e) => e.round)).size).toBe(105);
-  expect(all.filter((e) => e.round === 2)).toHaveLength(5); // 3 user + 2 AI bubbles
+  expect(all.filter((e) => e.round === 2)).toHaveLength(1);
+  expect(contents.every(text => !text.includes("PHONE_ONLY_"))).toBe(true);
   expect(contents.at(-1)!.length).toBeLessThan(contents[40].length * 2);
 // This deliberately exercises 105 rounds plus database reopen cycles. Keep a
 // generous budget for cold CI workers while retaining the bounded workload.
@@ -256,46 +261,16 @@ it("keeps a newer selection made during generation for the following reply", asy
   expect((await db.stories.get(s.id))?.memorySelection?.token).toBe("new");
 });
 
-it("consumes the same one-reply selection only after a complete adopted chat batch", async () => {
+it("phone replies do not consume the mainline one-reply memory selection", async () => {
   await seed(26);
-  await db.preferences.update("preferences", { memoryAutoReadLimit: 0 });
-  const m = await memory(
-    "chat-one-off",
-    (await rows()).slice(0, 5),
-    "CHAT_ONE_OFF_REFERENCE",
-  );
-  await db.stories.update(s.id, {
-    memorySelection: { token: "chat-choice", ids: [m.id] },
-  });
-  await sendChatMessage(s.id, s.player, s.partner, "第一条补充");
-  await sendChatMessage(s.id, s.player, s.partner, "第二条补充");
-  expect((await previewChat(s.id)).user).toContain(m.text);
-  const requests: string[] = [];
-  let failed = false;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (_url: string, init: RequestInit) => {
-      requests.push(init.body as string);
-      if (!failed) {
-        failed = true;
-        return response({ messages: ["未完整回复"] }, "length");
-      }
-      return response({ messages: ["我看到你的补充了。", "我们接着说。"] });
-    }),
-  );
-  await expect(replyChat(s.id)).rejects.toThrow();
-  expect((await db.stories.get(s.id))?.memorySelection?.token).toBe(
-    "chat-choice",
-  );
-  await replyChat(s.id, (await db.chatBatches.toArray())[0].id);
-  expect(requests.at(-1)).toContain(m.text);
-  expect((await db.stories.get(s.id))?.memorySelection).toBeUndefined();
-  expect(
-    (await rows()).filter((e) => e.round === 27 && !e.deleted),
-  ).toHaveLength(4);
-  await sendChatMessage(s.id, s.player, s.partner, "再说一句");
-  const next = await previewChat(s.id);
-  expect(JSON.stringify(next.messages)).not.toContain(m.text);
+  const m = await memory("phone-reference", (await rows()).slice(0, 5), "REFERENCE_MEMORY");
+  await db.stories.update(s.id, { memorySelection: { token: "mainline-choice", ids: [m.id] } });
+  const cid = await conversation(s, [s.player, s.partner]);
+  await addRecord(s.id, { speakerId: s.player, conversationId: cid, body: { ...emptyBody(), text: "你好" }, pending: true });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ messages: [{ type: "text", text: "我在" }] })));
+  await startPhoneRun({ storyId: s.id, ownerId: s.player, conversationId: cid, mode: "participate", speakers: [s.partner] });
+  expect((await db.stories.get(s.id))?.memorySelection?.token).toBe("mainline-choice");
+  expect((await rows()).every(e => e.kind === "novel")).toBe(true);
 });
 
 it("creates one paragraph every five newly adopted rounds and does not inject it while raw text covers it", async () => {

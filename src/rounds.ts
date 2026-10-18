@@ -130,10 +130,10 @@ export function memoryValid(
     m.status === "accepted" &&
     (!viewer || m.knownBy.includes(viewer)) &&
     (!m.timelineMode || m.timelineMode === (s.timelineMode || "strict")) &&
-    m.sources.every((ref) => {
+    m.sources.length > 0 && m.sources.every((ref) => {
       const e = byId.get(ref.id);
       return (
-        !!e &&
+        !!e && e.kind === "novel" &&
         usableEvent(e, s) &&
         !e.chatPending &&
         e.versionId === ref.versionId &&

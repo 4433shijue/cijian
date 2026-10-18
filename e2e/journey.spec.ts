@@ -1,3 +1,4 @@
+import { openPhoneChat } from "./fixtures";
 import { test, expect } from "@playwright/test";
 import { seedJourney } from "./fixtures";
 test.beforeEach(async ({ page }) => {
@@ -16,7 +17,7 @@ test("desktop full journey with controlled protocol fixture", async ({
       ? JSON.stringify({ text: "对方说伞可以明天归还，两人已经约好路过书店时再交还，目前伞仍由借用的一方保管。" })
       : system.includes("messages")
         ? JSON.stringify({
-            messages: ["伞先放你那里。", "明天路过书店再给我。"],
+            messages: ["伞先放你那里。", "明天路过书店再给我。"].map(text => ({ type: "text", text })),
           })
         : JSON.stringify({
             text: "周屿把伞递到许知面前，握着伞柄的手稍稍向前伸了些。“拿着。”声音不高，说话时也没有转过头来看她。",
@@ -77,11 +78,11 @@ test("desktop full journey with controlled protocol fixture", async ({
     .getByRole("button", { name: "许知", exact: true })
     .click();
   await page.getByRole("button", { name: "保存新版本" }).click();
-  await page.getByRole("button", { name: "手机聊天", exact: true }).click();
-  await page.getByLabel("聊天消息").fill("伞我明天还你。");
+  await openPhoneChat(page);
+  await page.getByLabel("手机消息内容", { exact: true }).fill("伞我明天还你。");
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
-  await page.getByRole("button", { name: "让 TA 回复（1）", exact: true }).click();
-  await expect(page.locator(".message-event")).toHaveCount(3);
+  await page.getByRole("button", { name: "让 TA 回复", exact: true }).click();
+  await expect(page.locator(".phone-message")).toHaveCount(3);
   await expect(page.getByText("伞先放你那里。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "故事记忆" }).click();
   await page.getByRole("button", { name: "一键补齐回合记忆" }).click();
@@ -89,8 +90,8 @@ test("desktop full journey with controlled protocol fixture", async ({
   await expect(page.getByRole("button", { name: "一键补齐回合记忆" })).toBeDisabled();
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.reload();
-  await page.getByRole("button", { name: "手机聊天", exact: true }).click();
-  await expect(page.locator(".message-event")).toHaveCount(3);
+  await openPhoneChat(page);
+  await expect(page.locator(".phone-message")).toHaveCount(3);
   await page.getByRole("link", { name: "设置", exact: true }).click();
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出完整备份（不含 Key）" }).click();
@@ -144,11 +145,9 @@ test("create single and multiple role stories; mobile keyboard viewport", async 
   await expect(
     page.getByRole("heading", { name: "一个人的书页" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "手机聊天", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "发送消息", exact: true }),
-  ).toBeDisabled();
-  await page.getByRole("button", { name: "打开故事设置", exact: true }).click();
+  await page.getByRole("button", { name: "角色手机", exact: true }).click();
+  await expect(page.locator(".phone-panel")).toContainText("角色手机");
+  await page.getByRole("button", { name: "故事设置", exact: true }).click();
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "许知", exact: true })
@@ -157,7 +156,8 @@ test("create single and multiple role stories; mobile keyboard viewport", async 
     page.getByText("角色已带入这本故事", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "关闭", exact: true }).click();
-  await page.getByLabel("聊天消息").fill("你也来书店了吗？");
+  await openPhoneChat(page);
+  await page.getByLabel("手机消息内容", { exact: true }).fill("你也来书店了吗？");
   await expect(
     page.getByRole("button", { name: "发送消息", exact: true }),
   ).toBeEnabled();

@@ -1,3 +1,6 @@
+import { phoneSchemas, phoneTables } from "./phone-types";
+import { remapPhone, ensurePhone } from "./phone-store";
+import { checkPhoneBackup } from "./phone-backup";
 import { z } from "zod";
 import { db } from "./db";
 import { uid, type TheaterPreset, type TheaterRecord, type TheaterState } from "./types";
@@ -285,6 +288,7 @@ const prefs = z.object({
   ),
 });
 export const recordSchemas = {
+  ...phoneSchemas,
   roles: role,
   stories: story,
   world,
@@ -297,8 +301,13 @@ export const recordSchemas = {
   roleDrafts: z.object({ id: str, role }),
 };
 const schema = z.object({
+  phoneSpaces: z.array(phoneSchemas.phoneSpaces).default([]),
+  phoneConversations: z.array(phoneSchemas.phoneConversations).default([]),
+  phoneRecords: z.array(phoneSchemas.phoneRecords).default([]),
+  phoneAssets: z.array(phoneSchemas.phoneAssets).default([]),
+  phoneRuns: z.array(phoneSchemas.phoneRuns).default([]),
   format: z.literal("little-scene"),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
   created: str,
   roles: z.array(role),
   stories: z.array(story),
@@ -361,6 +370,8 @@ export function remapTheaterContent(
 
 export function validateBackup(raw: unknown) {
   const b = schema.parse(raw);
+  if (b.version === 5) for (const table of phoneTables) if (!Array.isArray((raw as any)[table])) throw Error("备份缺少资料区：" + table);
+  checkPhoneBackup(b);
   if (
     b.version >= 2 &&
     (!raw ||
@@ -531,6 +542,7 @@ export async function exportBackup() {
   return db.transaction(
     "r",
     [
+      ...phoneTables.map(t => db.table(t)),
       db.roles,
       db.stories,
       db.world,
@@ -543,7 +555,12 @@ export async function exportBackup() {
     ],
     async () => ({
       format: "little-scene",
-      version: 4,
+      version: 5,
+      phoneSpaces: await db.phoneSpaces.toArray(),
+      phoneConversations: await db.phoneConversations.toArray(),
+      phoneRecords: await db.phoneRecords.toArray(),
+      phoneAssets: await db.phoneAssets.toArray(),
+      phoneRuns: await db.phoneRuns.toArray(),
       created: new Date().toISOString(),
       roles: await db.roles.toArray(),
       stories: (await db.stories.toArray()).map(
@@ -601,6 +618,7 @@ export async function importBackup(value: unknown, replace = false) {
   });
   await db.transaction("rw", db.tables, async () => {
     if (
+      (await db.phoneRuns.where("status").equals("running").count()) ||
       (await db.jobs.where("status").equals("running").count()) ||
       (await db.chatBatches.where("status").equals("running").count()) ||
       (await db.theaters.where("status").equals("running").count()) ||
@@ -618,6 +636,7 @@ export async function importBackup(value: unknown, replace = false) {
     if (replace)
       for (const table of db.tables)
         if (![db.roleDrafts.name, db.roleCompletionDrafts.name].includes(table.name)) await table.clear();
+    for (const table of phoneTables) await db.table(table).bulkAdd(b[table].map(row => remapPhone(table, row, remap)));
     await db.roles.bulkAdd(b.roles.map(r));
     await db.world.bulkAdd(
       b.world.map((x) => ({
@@ -768,6 +787,7 @@ export async function importBackup(value: unknown, replace = false) {
               })),
             },
       );
+    for (const story of await db.stories.toArray()) await ensurePhone(story.id);
   });
 }
 export function download(

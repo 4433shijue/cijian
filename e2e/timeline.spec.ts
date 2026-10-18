@@ -1,3 +1,4 @@
+import { openPhoneChat } from "./fixtures";
 import { expect, test, type Page } from "@playwright/test";
 import { seedJourney, readStore } from "./fixtures";
 
@@ -28,31 +29,31 @@ async function seed(page: Page) {
   await page.reload();
 }
 
-for (const mobile of [false, true]) test(`shared timeline carries old prose into batched chat and back (${mobile ? "mobile" : "desktop"})`, async ({ page }) => {
+for (const mobile of [false, true]) test(`phone reads prose without feeding back into mainline (${mobile ? "mobile" : "desktop"})`, async ({ page }) => {
   if (mobile) await page.setViewportSize({ width: 390, height: 844 });
   const errors: string[] = []; page.on("pageerror", (e) => errors.push(e.message));
   await seed(page);
-  await page.getByRole("button", { name: "整本启用自动互通", exact: true }).click();
-  await expect(page.getByRole("button", { name: "整本启用自动互通", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "整本启用参考普通正文", exact: true }).click();
+  await expect(page.getByRole("button", { name: "整本启用参考普通正文", exact: true })).toHaveCount(0);
   await expect.poll(async () => (await readStore(page, "memories")).length).toBe(0);
   const requests: any[] = [];
   await page.route("https://timeline.fixture.test/**", async (route) => {
     const body = route.request().postDataJSON(); requests.push(body);
     const data = body.messages[0].content.includes('"messages"')
-      ? { messages: ["船票在蓝色抽屉。", "下午一起出发。"] }
+      ? { messages: ["船票在蓝色抽屉。", "下午一起出发。"].map(text => ({ type: "text", text })) }
       : { text: "周屿把伞递过来，说“收下吧”。", facts: "malformed optional facts" };
     await route.fulfill({ json: { choices: [{ message: { content: JSON.stringify(data) }, finish_reason: "stop" }] } });
   });
-  await page.getByRole("button", { name: "手机聊天", exact: true }).click();
-  await page.getByLabel("聊天消息").fill("雾岚岛的船票放哪了？");
+  await openPhoneChat(page);
+  await page.getByLabel("手机消息内容", { exact: true }).fill("雾岚岛的船票放哪了？");
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
-  await page.getByLabel("聊天消息").fill("顺便说下，上午没空，下午出发吧。");
+  await page.getByLabel("手机消息内容", { exact: true }).fill("顺便说下，上午没空，下午出发吧。");
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
-  await page.getByRole("button", { name: "让 TA 回复（2）", exact: true }).click();
-  await expect(page.locator(".message-event.theirs")).toHaveCount(2);
+  await page.getByRole("button", { name: "让 TA 回复", exact: true }).click();
+  await expect(page.locator(".phone-message.theirs")).toHaveCount(2);
   expect(requests).toHaveLength(1);
   expect(requests[0].messages[1].content).not.toContain("雾岚岛的船票已经放在蓝色抽屉。");
-  expect(requests[0].messages[1].content).toContain("未被所选记忆完整覆盖");
+  expect(requests[0].messages[1].content).toContain("手机番外独立发展");
   expect(requests[0].messages[1].content).toContain("旧正文第32段");
   expect(requests[0].messages[1].content).not.toContain("PRIVATE_SECRET_HIDDEN");
   await page.screenshot({ path: `work/timeline-${mobile ? "mobile" : "desktop"}.png`, fullPage: false });
@@ -62,8 +63,9 @@ for (const mobile of [false, true]) test(`shared timeline carries old prose into
   await expect(page.getByRole("button", { name: "检查并采用", exact: true })).toHaveCount(0);
   expect(requests).toHaveLength(2);
   const proseRequest = requests[1].messages[1].content;
-  expect(proseRequest.indexOf("旧正文第32段")).toBeLessThan(proseRequest.indexOf("船票在蓝色抽屉。"));
-  expect(proseRequest).toContain("下午一起出发。");
+  expect(proseRequest).toContain("旧正文第32段");
+  expect(proseRequest).not.toContain("船票在蓝色抽屉。");
+  expect(proseRequest).not.toContain("下午一起出发。");
   expect((await readStore(page, "events")).filter((e) => e.status === "draft")).toHaveLength(0);
   expect(errors).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -73,8 +75,8 @@ for (const mobile of [false, true]) test(`shared timeline carries old prose into
 
 test("optional dialogue advice and paragraph privacy controls persist without invalidating later prose", async ({ page }) => {
   await seed(page);
-  await page.getByRole("button", { name: "整本启用自动互通", exact: true }).click();
-  await expect(page.getByRole("button", { name: "整本启用自动互通", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "整本启用参考普通正文", exact: true }).click();
+  await expect(page.getByRole("button", { name: "整本启用参考普通正文", exact: true })).toHaveCount(0);
   const before = (await readStore(page, "events")).find((e) => e.id === "old-3");
   await page.locator(".prose-event").first().getByRole("button", { name: "编辑", exact: true }).click();
   await page.getByLabel("本段如何进入手机聊天").selectOption("author");

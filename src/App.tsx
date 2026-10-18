@@ -1,3 +1,4 @@
+import PhonePanel from "./PhonePanel";
 import { useEffect, useLayoutEffect, useState, useRef, type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
@@ -1028,7 +1029,7 @@ function Reference({
       </p>
       {report.history && (
         <p className="hint">
-          {report.history.rounds ? `原文窗口 ${report.history.rounds.length} / ${report.history.limit} 回合 · ${roundLabel(report.history.rounds)}，正文与聊天合计。` : "这是升级前保存的参考记录，新请求将采用20回合上限。"}
+          {report.history.rounds ? `原文窗口 ${report.history.rounds.length} / ${report.history.limit} 回合 · ${roundLabel(report.history.rounds)}，仅统计正文。` : "这是升级前保存的参考记录，新请求将采用20回合上限。"}
         </p>
       )}
       {report.memoryContext && <p className="hint">本次选中 {report.memoryContext.selected.length} 条记忆{report.memoryContext.selectionToken ? " · 使用一次性选择" : ` · 自动读取上限 ${report.memoryContext.automaticLimit} 条`}。
@@ -1227,12 +1228,12 @@ function EventEditor({
           <>
             <Field label="本段如何进入手机聊天">
               <select value={visibility} onChange={(e) => setVisibility(e.target.value as typeof visibility)}>
-                <option value="inherit">跟随故事设置{sharedTimeline(story) ? " · 自动互通" : " · 严格知情"}</option>
+                <option value="inherit">跟随故事设置{sharedTimeline(story) ? " · 参考普通正文" : " · 严格知情"}</option>
                 <option value="author">私密段落 · 仅作者可见</option>
                 <option value="facts">仅共享下方授权的事实</option>
               </select>
             </Field>
-            <p className="hint">普通正文在自动互通模式下会进入聊天参考。含秘密或内心独白的段落，可以整段设为私密，或只共享选中的事实。</p>
+            <p className="hint">普通正文在参考普通正文模式下会进入聊天参考。含秘密或内心独白的段落，可以整段设为私密，或只共享选中的事实。</p>
             <details open={visibility === "facts" || (!sharedTimeline(story) && visibility === "inherit")}>
               <summary>高级 · 角色可知的事实摘录</summary>
             <h3>角色可知的事实摘录</h3>
@@ -1334,7 +1335,7 @@ function Memories({
   useEffect(() => {
     if (localChoice && s.memorySelection?.token === localChoice.token) setLocalChoice(undefined);
   }, [s.memorySelection?.token, localChoice?.token]);
-  const selection = selectRoundContext({ ...s, memorySelection: localChoice || s.memorySelection }, events, items, prefs, viewMode === "chat" ? s.partner : undefined);
+  const selection = selectRoundContext({ ...s, memorySelection: localChoice || s.memorySelection }, events.filter(e => e.kind === "novel"), items, prefs, viewMode === "chat" ? s.partner : undefined);
   const selectedIds = selection.selected.map((m) => m.id);
   const batches = memoryBatches(s, events, items, prefs, true);
   const requests = memoryRequestCount(s, batches, prefs, profile);
@@ -1400,7 +1401,7 @@ function Memories({
         </Field>
         <button disabled={!s.memorySelection} onClick={() => db.stories.update(s.id, { memorySelection: undefined })}>恢复默认选择</button>
       </div>
-      <p className="hint" role="status">下次将带入 {selectedIds.length} 条记忆。{s.memorySelection ? "已临时调整：下一次成功回复后恢复默认；失败或取消会保留。" : "正在使用自动选择。勾选可临时增减，仅影响下一次正文或聊天回复。"}</p>
+      <p className="hint" role="status">下次将带入 {selectedIds.length} 条记忆。{s.memorySelection ? "已临时调整：下一次成功采用正文后恢复默认；失败或取消会保留。" : "正在使用自动选择。勾选可临时增减，仅影响下一次正文；角色手机使用默认数量，不消耗勾选。"}</p>
       {selection.gaps.length > 0 && <p className="hint">{roundLabel(selection.gaps)}未被所选记忆完整覆盖；可勾选已有记忆或一键补齐。</p>}
       <div className="row">
         <button disabled={busy || isBusy(s.id) || !batches.length} className="primary" onClick={async () => {
@@ -1570,7 +1571,7 @@ function Memories({
       ) : (
         <section className="fact-center">
           <p className="hint">
-            这里用于严格知情模式和单段权限微调。自动互通模式下，普通正文无需逐条摘录或授权；私密段落可在原文编辑中单独设置。
+            这里用于严格知情模式和单段权限微调。参考普通正文模式下，普通正文无需逐条摘录或授权；私密段落可在原文编辑中单独设置。
           </p>
           {facts.map(({ event, fact }) => (
             <article className="memory-card" key={fact.id}>
@@ -1648,10 +1649,11 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
   const s = useLiveQuery(() => db.stories.get(id), [id]);
   const events =
     useLiveQuery(
-      () => db.events.where("storyId").equals(id).sortBy("seq"),
+      () => db.events.where("storyId").equals(id).filter(e => e.kind === "novel").sortBy("seq"),
       [id],
     ) || [];
   const prefs = useLiveQuery(() => db.preferences.get("preferences"), []);
+  const phoneRuns = useLiveQuery(() => db.phoneRuns.where("storyId").equals(id).toArray(), [id]) || [];
   const chatBatches = useLiveQuery(() => db.chatBatches.where("storyId").equals(id).sortBy("created"), [id]) || [];
   const profiles = useLiveQuery(() => db.profiles.toArray(), []) || [];
   const memories =
@@ -1913,7 +1915,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
           </button>
         </div>
       </header>
-      <div className="story-toolbar">
+      <div className="story-toolbar" hidden={mode === "chat"}>
         <button
           onClick={async () => {
             try {
@@ -1934,7 +1936,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
           story={s}
           events={events}
           memories={memories}
-          failedChats={chatBatches.filter((batch) => batch.status === "failed" || batch.status === "interrupted").length}
+          failedChats={phoneRuns.filter((batch) => batch.status === "failed" || batch.status === "interrupted").length}
           readyModel={
             !!prefs?.activeProfile &&
             profiles.some((p) => p.id === prefs.activeProfile)
@@ -1955,12 +1957,14 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
             onClick={() => setMode("chat")}
           >
             <MessageCircle size={16} />
-            手机聊天
+            角色手机
           </button>
         </div>
-        <span className="hint">同一本故事，同一条时间线</span>
+        <span className="hint">正文与手机番外 · 单向参考</span>
       </div>
       </div>
+      {mode === "chat" && <PhonePanel key={s.id} story={s} />}
+      <div hidden={mode === "chat"} style={mode === "novel" ? { display: "contents" } : undefined}>
       {!reading && events.some(
         (event) =>
           event.kind === "novel" &&
@@ -1979,17 +1983,17 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
       {!reading && !layout.toolbarCollapsed && mode === "chat" && (
         <ContextTip id="chat" title="选好身份，再开始聊天">
           <p>
-            「我扮演」是你发消息时的身份，「聊天对象」是回复你的角色。连续发送消息，说完后点「让 TA 回复」，对方会结合整组消息自然分条回复。{sharedTimeline(s) ? "普通正文会自动接入聊天，聊天也会带回正文；私聊仍只对参与双方可知。" : "当前使用严格知情模式，正文按事实授权进入聊天。可以在故事设置中切换为自动互通。"}
+            「我扮演」是你发消息时的身份，「聊天对象」是回复你的角色。连续发送消息，说完后点「让 TA 回复」，对方会结合整组消息自然分条回复。{sharedTimeline(s) ? "手机参考普通正文，手机番外不进入正文；私聊只对参与双方可知。" : "当前使用严格知情模式，正文按事实授权进入聊天。可以在故事设置中切换为参考普通正文。"}
           </p>
         </ContextTip>
       )}
       {!reading && !layout.toolbarCollapsed && s.timelineMode === undefined && (
         <div className="timeline-upgrade">
-          <div><strong>让正文和手机聊天自动接上</strong><p>整本故事一次启用，普通正文无需逐段授权。已有的特定角色授权会保留，私密内容可在段落编辑中设置。</p></div>
+          <div><strong>让角色手机参考普通正文</strong><p>整本故事一次启用，普通正文无需逐段授权。已有的特定角色授权会保留，私密内容可在段落编辑中设置。</p></div>
           <button disabled={generating} onClick={async () => {
-            try { await setTimelineMode(id, "shared"); notify("整本故事已启用自动互通"); }
+            try { await setTimelineMode(id, "shared"); notify("整本故事已启用参考普通正文"); }
             catch (error) { notify(String(error)); }
-          }}>整本启用自动互通</button>
+          }}>整本启用参考普通正文</button>
         </div>
       )}
       {!reading && !layout.toolbarCollapsed && mode === "chat" && s.roles.length < 2 && (
@@ -2064,32 +2068,11 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
                 <details>
                   <summary>{sharedTimeline(s) ? "查看聊天对象可参考的正文" : "查看双方可知的事实"}</summary>
                   <p>{visibleText(e, s.partner, s) || "这段内容未向聊天对象共享。"}</p>
-                  <small>{sharedTimeline(s) ? "普通正文自动接入，单段权限可以在编辑中调整。" : "当前仅共享授权事实，可在故事设置中开启自动互通。"}</small>
+                  <small>{sharedTimeline(s) ? "普通正文自动接入，单段权限可以在编辑中调整。" : "当前仅共享授权事实，可在故事设置中开启参考普通正文。"}</small>
                 </details>
               </div>
             );
-          if (mode === "novel" && e.kind === "message")
-            return (
-              <details className="chat-insert" key={e.id}>
-                <summary>
-                  <MessageCircle size={14} />
-                  {
-                    s.roles.find((r) => r.id === e.speaker)?.name
-                  } 的手机消息 <span>{date(e.created)}</span>
-                  {e.review ? " · 待复核" : ""}
-                  {e.status === "draft" ? " · 草稿" : ""}
-                </summary>
-                <p>{e.text || "正在接收…"}</p>
-                {e.error && <p className="error">{e.error}</p>}
-                {e.status === "complete" ? (
-                  actions(e)
-                ) : (
-                  <button disabled={busy} onClick={() => submit(e)}>
-                    重试回复
-                  </button>
-                )}
-              </details>
-            );
+          if (mode === "novel" && e.kind === "message") return null;
           return (
             <article
               key={e.id}
@@ -2457,6 +2440,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
         </button>
         {reading && generating && <button onClick={() => stop(id)} aria-label="停止生成"><Square size={16} /></button>}
       </nav>
+      </div>
       {panel === "inspiration" && (
         <Modal title="灵感小助手" onClose={() => setPanel("")}>
           <InspirationAssistant
@@ -2487,16 +2471,16 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
       {panel === "settings" && (
         <Modal title="这本故事的设定" onClose={() => setPanel("")}>
           <StoryTheaterSettings story={s} prefs={prefs} update={update} />
-          <Field label="正文与手机聊天">
+          <Field label="手机如何参考正文">
             <select value={s.timelineMode || "strict"} disabled={generating} onChange={async (event) => {
               try { await setTimelineMode(id, event.target.value as "shared" | "strict"); notify("故事互通设置已保存"); }
               catch (error) { notify(String(error)); }
             }}>
-              <option value="shared">自动互通（推荐）</option>
+              <option value="shared">参考普通正文（推荐）</option>
               <option value="strict">严格知情（高级）</option>
             </select>
           </Field>
-          <p className="hint">自动互通会让普通正文和手机聊天按时间接续。私密段落、作者设定和其他人的私聊仍按各自权限处理。严格模式只把授权事实提供给聊天角色。</p>
+          <p className="hint">手机番外只读取角色可知的正文和记忆，不反向影响主线。严格知情模式只提供明确授权的正文事实。</p>
           <Field label="故事名字">
             <input
               value={s.title}
@@ -2867,9 +2851,9 @@ function StylePresetSettings({
                 })
               }
             >
-              <option value="both">正文和手机聊天</option>
+              <option value="both">正文与手机番外</option>
               <option value="novel">仅正文</option>
-              <option value="chat">仅手机聊天</option>
+              <option value="chat">仅手机番外</option>
             </select>
           </Field>
           <Field label="风格要求">
@@ -3004,7 +2988,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
             <Toggle label="台词检查（只提醒，不拦截）" value={!!prefs.dialogueCheck}
               onChange={(value) => db.preferences.update("preferences", { dialogueCheck: value }).then(() => {})} />
             <p className="hint">默认关闭。开启后只提示台词用字差异，完整正文仍会直接保存；标点变化也可能触发提醒。</p>
-            <p className="hint">正文与聊天共用最多20回原文，按16～20回分批滚动。删除和被替换的旧版本不参与请求。</p>
+            <p className="hint">正文最多读取20回原文；角色手机另有20轮可见番外记录，按16～20回分批滚动。删除和被替换的旧版本不参与请求。</p>
             <Field label="每几回合自动提炼记忆"><input type="number" min={1} step={1} value={memoryEvery}
               onChange={(e) => { setMemoryEvery(e.target.value); const n = Number(e.target.value);
                 if (Number.isSafeInteger(n) && n >= 1) void db.preferences.update("preferences", { memoryIntervalRounds: n }).catch(() => notify("记忆频率保存失败")); }}
@@ -3039,7 +3023,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
             </Field>
             <p className="hint">
               默认参考最近 3 段完整正文，可设为 1 到 20
-              段，另参考最近 20 条已发送聊天和相关的已确认记忆，并区分人物知情范围。新一轮灵感会使用新段数，关闭开发者模式后设置仍生效。
+              段，另参考有效正文来源的已确认记忆，不读取手机番外，并区分人物知情范围。新一轮灵感会使用新段数，关闭开发者模式后设置仍生效。
             </p>
             <Field label="编辑提示词">
               <select

@@ -1,3 +1,4 @@
+import { openPhoneChat } from "./fixtures";
 import { test, expect, type Page } from "@playwright/test";
 import { seedJourney, readStore } from "./fixtures";
 
@@ -63,7 +64,7 @@ for (const mobile of [false, true])
       expect(body.stream_options).toEqual({ include_usage: true });
       const raw = JSON.stringify(
         body.messages[0].content.includes('"messages"')
-          ? { messages: ["第一条回复。", "第二条补充。"] }
+          ? { messages: ["第一条回复。", "第二条补充。"].map(text => ({ type: "text", text })) }
           : { text: `第${requests.length}段，他把杯子放下。`, facts: [] },
       );
       responses.push(raw);
@@ -131,25 +132,22 @@ for (const mobile of [false, true])
       path: `work/cache-${mobile ? "mobile" : "desktop"}.png`,
     });
     await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-    await page.getByRole("button", { name: "手机聊天", exact: true }).click();
+    await openPhoneChat(page);
     for (let n = 1; n <= 2; n++) {
       for (const text of ["今天见面", `补充第${n}条`]) {
-        await page.getByLabel("聊天消息").fill(text);
+        await page.getByLabel("手机消息内容", { exact: true }).fill(text);
         await page
           .getByRole("button", { name: "发送消息", exact: true })
           .click();
-        await expect(page.getByLabel("聊天消息")).toHaveValue("");
+        await expect(page.getByLabel("手机消息内容", { exact: true })).toHaveValue("");
       }
       await page
-        .getByRole("button", { name: "让 TA 回复（2）", exact: true })
+        .getByRole("button", { name: "让 TA 回复", exact: true })
         .click();
-      await expect(page.locator(".message-event.theirs")).toHaveCount(n * 2);
+      await expect(page.locator(".phone-message.theirs")).toHaveCount(n * 2);
     }
     expect(requests[3].messages).toHaveLength(2);
-    expect(requests[4].messages.slice(0, -1)).toEqual([
-      ...requests[3].messages,
-      { role: "assistant", content: responses[3] },
-    ]);
-    expect(await readStore(page, "promptSessions")).toHaveLength(2);
+    expect(requests[4].messages[1].content).toContain("第一条回复。");
+    expect(await readStore(page, "promptSessions")).toHaveLength(1);
     expect(errors).toEqual([]);
   });

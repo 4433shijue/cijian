@@ -1,3 +1,4 @@
+import { openPhoneChat } from "./fixtures";
 import { test, expect } from "@playwright/test";
 import { seedJourney } from "./fixtures";
 import { writeFile } from "node:fs/promises";
@@ -39,17 +40,17 @@ test("real browser connection, expansion and chat", async ({ page }) => {
   });
   await expect(page.locator(".prose-event .event-text")).toContainText("拿着");
   await page.screenshot({ path: "work/live-novel.png", fullPage: true });
-  await page.getByRole("button", { name: "手机聊天", exact: true }).click();
-  await page.getByLabel("聊天消息").fill("刚才递给你的伞还好用吗？");
+  await openPhoneChat(page);
+  await page.getByLabel("手机消息内容", { exact: true }).fill("刚才递给你的伞还好用吗？");
   await page.getByRole("button", { name: "发送消息", exact: true }).click();
-  await page.getByRole("button", { name: "让 TA 回复（1）", exact: true }).click();
+  await page.getByRole("button", { name: "让 TA 回复", exact: true }).click();
   await expect(
-    page.locator(".message-event.theirs .event-actions").first(),
+    page.locator(".phone-message.theirs .event-actions").first(),
   ).toBeVisible({ timeout: 120000 });
   await page.screenshot({ path: "work/live-chat.png", fullPage: true });
   const novel = await page.locator(".node-marker").count();
   const replies = await page
-    .locator(".message-event.theirs .event-text")
+    .locator(".phone-message.theirs .phone-bubble p")
     .allTextContents();
   await writeFile(
     "work/live-evidence.json",

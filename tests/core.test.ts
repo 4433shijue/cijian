@@ -334,12 +334,14 @@ describe("history and backup", () => {
     expect(await db.roles.count()).toBe(backup.roles.length);
     expect((await db.stories.toArray())[0].id).toBe(backup.stories[0].id);
   });
-  it("counts completed reply groups rather than individual bubbles", async () => {
+  it("counts only prose toward mainline memory", async () => {
     const { s, e } = await fixture();
     await db.preferences.update("preferences", { memoryIntervalRounds: 3 });
     await db.events.bulkAdd([2, 3].map((seq) => ({ ...e, id: uid(), seq, kind: "message" as const, chatBatchId: "same-reply" })));
-    expect(await memoryDue(s)).toBe(false); // one prose + one chat group
+    expect(await memoryDue(s)).toBe(false); // phone history is not a prose round
     await db.events.add({ ...e, id: uid(), seq: 4 });
+    expect(await memoryDue(s)).toBe(false);
+    await db.events.add({ ...e, id: uid(), seq: 5 });
     expect(await memoryDue(s)).toBe(true);
   });
 });
