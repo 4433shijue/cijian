@@ -1,7 +1,23 @@
-import { defineConfig } from "vite";
+import { version } from "./package.json";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: "release-version",
+      generateBundle() {
+        this.emitFile({
+          type: "asset",
+          fileName: "version.json",
+          source: JSON.stringify({
+            version,
+            commit: process.env.GITHUB_SHA || "local",
+          }),
+        });
+      },
+    } as Plugin,
+  ],
   base: process.env.VITE_BASE_PATH || "./",
   server: {
     watch: {

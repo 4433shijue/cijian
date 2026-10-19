@@ -1,4 +1,5 @@
-import { extraSchemas, extraTables } from "./work-types";
+import { ensureAutomation } from "./phone-automation";
+import { extraSchemas, extraTables, automationTables } from "./work-types";
 import { migrateStories } from "./story-service";
 import { remapExtra, validateExtras } from "./work-backup";
 import { phoneSchemas, phoneTables } from "./phone-types";
@@ -287,7 +288,7 @@ const prefs = z.object({
     )
     .optional(),
   prompts: z.record(
-    z.enum(["novel", "chat", "facts", "memory", "inspiration", "theater"]),
+    z.enum(["novel", "chat", "facts", "memory", "inspiration", "theater", "phoneDecision", "phoneMoment", "phoneInteraction", "phoneDocument", "phoneEvent", "phoneVariant", "phoneHabits"]),
     z.object({ text: str, enabled: z.boolean() }),
   ),
 });
@@ -305,6 +306,11 @@ export const recordSchemas = {
   roleDrafts: z.object({ id: str, role }),
 };
 const schema = z.object({
+  phoneAutomationSettings: z.array(extraSchemas.phoneAutomationSettings).default([]),
+  phoneAutomationRuns: z.array(extraSchemas.phoneAutomationRuns).default([]),
+  phoneAutomationSteps: z.array(extraSchemas.phoneAutomationSteps).default([]),
+  phoneKnowledge: z.array(extraSchemas.phoneKnowledge).default([]),
+  phoneWorldEvents: z.array(extraSchemas.phoneWorldEvents).default([]),
   storyWorld: z.array(extraSchemas.storyWorld).default([]),
   storyMigrations: z.array(extraSchemas.storyMigrations).default([]),
   legacyArchives: z.array(extraSchemas.legacyArchives).default([]),
@@ -319,7 +325,7 @@ const schema = z.object({
   phoneAssets: z.array(phoneSchemas.phoneAssets).default([]),
   phoneRuns: z.array(phoneSchemas.phoneRuns).default([]),
   format: z.literal("little-scene"),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7)]),
   created: str,
   roles: z.array(role),
   stories: z.array(story),
@@ -386,7 +392,7 @@ export function validateBackup(raw: unknown) {
   checkPhoneBackup(b);
   validateExtras(b);
   if (b.version >= 6) {
-    for (const table of extraTables) if (!Array.isArray((raw as any)[table])) throw Error("备份缺少资料区：" + table);
+    for (const table of extraTables.filter(t => b.version >= 7 || !automationTables.includes(t as any))) if (!Array.isArray((raw as any)[table])) throw Error("备份缺少资料区：" + table);
     if (b.stories.some(s => !s.kind)) throw Error("新版备份缺少作品类型");
   }
   if (
@@ -572,7 +578,7 @@ export async function exportBackup() {
     ],
     async () => ({
       format: "little-scene",
-      version: 6,
+      version: 7,
       ...Object.fromEntries(await Promise.all(extraTables.map(async t => [t, await db.table(t).toArray()]))),
       phoneSpaces: await db.phoneSpaces.toArray(),
       phoneConversations: await db.phoneConversations.toArray(),
@@ -636,6 +642,7 @@ export async function importBackup(value: unknown, replace = false) {
   });
   await db.transaction("rw", db.tables, async () => {
     if (
+      (await db.phoneAutomationRuns.where("status").equals("running").count()) ||
       (await db.phoneRuns.where("status").equals("running").count()) ||
       (await db.jobs.where("status").equals("running").count()) ||
       (await db.chatBatches.where("status").equals("running").count()) ||
@@ -808,6 +815,7 @@ export async function importBackup(value: unknown, replace = false) {
             },
       );
     await migrateStories();
+    for(const story of await db.stories.where("kind").equals("phone").toArray())await ensureAutomation(story.id);
   });
 }
 export function download(

@@ -1,3 +1,4 @@
+import { ensureAutomation } from "./phone-automation";
 import Dexie from "dexie";
 import { withStoryLock } from "./locks";
 import { db, makeStory } from "./db";
@@ -81,6 +82,7 @@ export async function createStory(input: {
     await db.stories.add(story);
     if (story.kind === "phone") {
       await ensurePhone(story.id);
+      await ensureAutomation(story.id);
       if (input.background.trim())
         await db.phoneBackgrounds.add({
           id: uid(),

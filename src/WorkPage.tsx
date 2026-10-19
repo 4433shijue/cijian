@@ -1,3 +1,4 @@
+import { PhoneAutomation } from "./PhoneAutomation";
 import { useState, type ComponentType } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, deleteStory } from "./db";
@@ -116,6 +117,7 @@ function PhoneWork({
       <nav className="work-tabs" aria-label="手机工作区">
         {[
           ["phone", "角色手机"],
+          ["automation", "让故事继续"],
           ["documents", "备忘录与相册"],
           ["background", "背景与知情"],
           ["batch", "批量编排"],
@@ -131,6 +133,7 @@ function PhoneWork({
         ))}
       </nav>
       {tab === "phone" && <PhonePanel story={story} />}
+      {tab === "automation" && <PhoneAutomation story={story} />}
       {tab === "documents" && <PhoneDocuments story={story} />}
       {tab === "background" && <PhoneBackgrounds story={story} />}
       {tab === "batch" && <PhoneBatch story={story} />}

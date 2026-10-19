@@ -362,7 +362,7 @@ test("AI moments and comments remain manual and export with nine local photos", 
   await page.getByRole("button", { name: "发布动态", exact: true }).click();
   await page.getByLabel("动态内容").fill("写一条关于书店的小日常");
   await page
-    .getByRole("button", { name: "让 AI 写一条动态", exact: true })
+    .getByRole("button", { name: "让角色直接发布", exact: true })
     .click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator(".phone-moment")).toContainText(

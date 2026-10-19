@@ -1,6 +1,6 @@
 export type Protocol = "chat" | "responses" | "claude" | "gemini";
 export type PromptKind =
-  "novel" | "chat" | "facts" | "memory" | "inspiration" | "theater";
+  "novel" | "chat" | "facts" | "memory" | "inspiration" | "theater" | "phoneDecision" | "phoneMoment" | "phoneInteraction" | "phoneDocument" | "phoneEvent" | "phoneVariant" | "phoneHabits";
 export type TheaterPresentation =
   | "dialogue"
   | "detail-list"

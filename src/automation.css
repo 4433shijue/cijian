@@ -1,0 +1,200 @@
+.automation-panel {
+  max-width: 960px;
+  margin: auto;
+  padding: 24px;
+  background: var(--paper, #fff);
+  border: 1px solid var(--line, #ddd);
+  border-radius: 16px;
+}
+.auto-eyebrow {
+  font-size: 12px;
+  color: var(--accent, #527560);
+  letter-spacing: 0.08em;
+}
+.automation-panel h2 {
+  margin: 8px 0;
+}
+.automation-panel header p {
+  line-height: 1.8;
+}
+.auto-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 20px 0;
+}
+.auto-grid label,
+.auto-task > label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+}
+.auto-grid input,
+.auto-grid select,
+.auto-grid textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.auto-wide {
+  grid-column: 1/-1;
+}
+.auto-grid textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+.auto-check {
+  justify-content: center;
+  flex-direction: row !important;
+  align-items: center;
+}
+.auto-check input,
+.auto-roles input {
+  width: auto;
+}
+.automation-panel fieldset {
+  border: 1px solid var(--line, #ddd);
+  border-radius: 10px;
+  padding: 16px;
+  min-width: 0;
+}
+.auto-roles {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.auto-roles label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.auto-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.auto-actions input {
+  max-width: 170px;
+}
+.auto-error {
+  color: #ad3544;
+  background: #ffebed;
+  border-radius: 8px;
+  padding: 12px;
+  overflow-wrap: anywhere;
+}
+.auto-habit {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line, #ddd);
+}
+.auto-history {
+  display: grid;
+  gap: 10px;
+}
+.auto-run-row {
+  display: flex;
+  text-align: left;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px !important;
+  width: 100%;
+  white-space: normal;
+}
+.auto-result {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line, #ddd);
+  overflow-wrap: anywhere;
+}
+.auto-result p {
+  white-space: pre-wrap;
+}
+.auto-result pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow: auto;
+  font-size: 12px;
+  padding: 10px;
+  background: var(--bg, #f5f6f6);
+}
+.auto-result summary {
+  cursor: pointer;
+  line-height: 1.8;
+}
+.auto-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.auto-progress progress {
+  width: 100%;
+  accent-color: var(--accent, #527560);
+}
+.automation-taskbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 25;
+  background: var(--paper, #fff);
+  border-top: 1px solid var(--line, #ddd);
+  padding: 8px 16px;
+  box-shadow: 0 -3px 16px #0000000a;
+  max-height: 120px;
+  overflow: auto;
+}
+.automation-taskbar > div {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+}
+.automation-taskbar button {
+  font-size: 12px;
+  white-space: normal;
+  text-align: left;
+  min-width: 0;
+}
+.auto-task {
+  min-width: 0;
+}
+.auto-task article {
+  padding: 10px 0;
+}
+.automation-panel small {
+  line-height: 1.6;
+}
+.auto-run-row small {
+  opacity: 0.65;
+}
+@media (max-width: 600px) {
+  .automation-panel {
+    padding: 16px 12px;
+    border-radius: 10px;
+  }
+  .auto-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .auto-actions > button {
+    flex: 1 1 140px;
+    white-space: normal;
+  }
+  .auto-progress span {
+    font-size: 13px;
+  }
+  .automation-taskbar {
+    bottom: calc(62px + env(safe-area-inset-bottom));
+    padding: 8px;
+  }
+  .auto-check {
+    justify-content: flex-start;
+  }
+  .auto-roles {
+    gap: 12px;
+  }
+  .auto-result summary {
+    font-size: 13px;
+  }
+}

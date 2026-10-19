@@ -217,6 +217,7 @@ function BodyEditor({
   );
 }
 export default function PhonePanel({ story }: { story: Story }) {
+  const preferences=useLiveQuery(()=>db.preferences.get("preferences"),[]);
   const space = useLiveQuery(
     () => db.phoneSpaces.where("storyId").equals(story.id).first(),
     [story.id],
@@ -1199,6 +1200,7 @@ export default function PhonePanel({ story }: { story: Story }) {
               {r.error && <p>{r.error}</p>}
               {r.status !== "running" && (
                 <>
+                  {r.draftOnly && r.staged?.["0"]?.[0] && <button onClick={()=>{setMomentOwner(r.steps[0].speakerId);setMomentBody(r.staged!["0"][0]);setAudience(r.audience);setVisibility("selected");setTime(r.time);setMoment(true);}}>载入动态草稿</button>}
                   <button
                     disabled={busy || activeRun}
                     onClick={() =>
@@ -1219,6 +1221,7 @@ export default function PhonePanel({ story }: { story: Story }) {
                       结束本轮
                     </button>
                   )}
+                  {preferences?.developer && <details><summary>查看本轮请求与参考</summary><pre>{JSON.stringify({profile:r.profile,steps:r.steps.map(s=>({speakerId:s.speakerId,request:s.request,context:s.context}))},null,2)}</pre></details>}
                   <details>
                     <summary>查看接收内容</summary>
                     <pre>
@@ -1472,6 +1475,14 @@ export default function PhonePanel({ story }: { story: Story }) {
           >
             发布这条动态
           </button>
+          <button disabled={busy || activeRun} onClick={()=>void perform(async()=>{
+            const id=await startPhoneRun({storyId:story.id,ownerId:owner,speakers:[momentOwner],mode:"moment",input:momentBody.text,
+              audience:visibility==="all"?story.roles.map(r=>r.id):visibility==="self"?[momentOwner]:[...new Set([momentOwner,...audience])],time,draftOnly:true});
+            const run=await db.phoneRuns.get(id);
+            const generated=run?.staged?.["0"]?.[0];
+            if(!generated)throw Error(run?.error || "动态尚未生成完成，可在生成记录中恢复");
+            setMomentBody({...generated,assets:momentBody.assets,type:momentBody.assets.length?"image":generated.type});
+          })}>AI 生成到编辑器</button>
           <button
             disabled={busy || activeRun}
             onClick={() =>
@@ -1495,7 +1506,7 @@ export default function PhonePanel({ story }: { story: Story }) {
               })
             }
           >
-            让 AI 写一条动态
+            让角色直接发布
           </button>
         </Modal>
       )}

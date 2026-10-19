@@ -72,7 +72,7 @@ it("upgrades a schema 8 database to 9 by repairing configuration only, preservin
   const upgraded = new SceneDB(name);
   try {
     await upgraded.open();
-    expect(upgraded.verno).toBe(11);
+    expect(upgraded.verno).toBe(12);
     expect(await upgraded.preferences.get("preferences")).toEqual({
       ...prefs, theaterPresets: [
         { ...legacyForum, presentation: "forum" }, explicitStatic, { ...unknown, presentation: "custom" }, legacyExplicit,

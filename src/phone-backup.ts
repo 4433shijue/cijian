@@ -78,7 +78,7 @@ export function checkPhoneRow(
     ];
   if (table === "phoneConversations") roles = r.members;
   if (table === "phoneRecords") {
-    roles = [r.speakerId, ...r.audience, ...r.likes];
+    roles = [r.speakerId, ...r.audience, ...r.likes, ...Object.keys(r.likeVersions || {})];
     if (
       !r.audience.includes(r.speakerId) ||
       r.likes.some((id: string) => !r.audience.includes(id))

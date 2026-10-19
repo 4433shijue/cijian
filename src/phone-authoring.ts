@@ -1,3 +1,5 @@
+import { assertAutomationIdle } from "./phone-automation";
+import { phoneInstruction } from "./phone-prompt-runtime";
 import { db, keyFor } from "./db";
 import { uid, type Story } from "./types";
 import { requireStory } from "./story-service";
@@ -125,6 +127,7 @@ export function parseScript(
   return rows;
 }
 async function editable(storyId: string, conversationId: string) {
+  await assertAutomationIdle(storyId);
   await requireStory(storyId, "phone");
   const c = await db.phoneConversations.get(conversationId);
   if (c?.storyId !== storyId) throw Error("会话不存在");
@@ -413,7 +416,7 @@ export async function generateVariant(id: string, situation: string) {
       const lines: DraftLine[] = [];
       for (const item of contexts) {
         const system =
-          '只扮演当前角色。改写给出的对话草稿，输出 JSON {"messages":[{"text":"内容"}]}，0 到 5 条。不要替其他角色发言。';
+          phoneInstruction("phoneVariant", prefs) + '\n只扮演当前角色。改写给出的对话草稿，输出 JSON {"messages":[{"text":"内容"}]}，0 到 5 条。不要替其他角色发言。';
         const request = assemble(
           system,
           `${item.context}\n可知草稿：${JSON.stringify(item.lines)}\n本轮改写：${recordText({ body: initial.lines.find((l) => l.id === item.sourceLine)!.body, retracted: false })}\n此前已改写且你可见的消息：${JSON.stringify(lines.filter((l) => l.audience.includes(item.speaker)).map((l) => ({ speaker: l.speakerId, text: l.body.text })))}\n作者要求：${situation}`,
@@ -432,7 +435,7 @@ export async function generateVariant(id: string, situation: string) {
           },
           fetch,
           {
-            kind: "chat",
+            kind: "phoneVariant",
             schema: {
               type: "object",
               properties: {

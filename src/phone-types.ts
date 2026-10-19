@@ -108,6 +108,7 @@ export const phoneRecordSchema = z.object({
   deleted: z.boolean(),
   retracted: z.boolean(),
   likes: ids,
+  likeVersions: z.record(id).optional(),
   origin: z.enum(["user", "ai", "legacy"]),
   legacyId: id,
   created: z.number(),
@@ -124,7 +125,12 @@ export const phoneAssetSchema = z.object({
     .min(0)
     .max(10 * 1024 * 1024),
 });
+export const phoneProfileSchema = z.object({id, name:id, protocol:z.enum(["chat","responses","claude","gemini"]),url:id,model:id,
+  stream:z.boolean(),context:z.number(),maxOutput:z.number(),timeout:z.number(),temperature:z.number().optional(),
+  frequencyPenalty:z.number().nullable().optional(),outputMode:z.enum(["auto","schema","json","compatible"]).optional(),
+  cachePolicy:z.enum(["auto","off"]).optional(),prefixReuse:z.enum(["auto","on","off"]).optional(),remember:z.literal(false)});
 const step = z.object({
+  request: z.object({system:id,user:id}).optional(),
   speakerId: id,
   status,
   context: id,
@@ -133,6 +139,9 @@ const step = z.object({
   error: id,
 });
 export const phoneRunSchema = z.object({
+  draftOnly: z.boolean().optional(),
+  prompt: id.optional(),
+  profile: phoneProfileSchema.optional(),
   rewriteBase: z
     .object({ steps: z.array(step), versions: z.record(id) })
     .optional(),

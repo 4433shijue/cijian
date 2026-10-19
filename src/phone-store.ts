@@ -503,6 +503,7 @@ export async function likeMoment(id: string, owner: string) {
     if (!r || r.kind !== "moment" || !canSee(r, owner))
       throw Error("动态不可见");
     await db.phoneRecords.update(id, {
+      likeVersions: {...r.likeVersions,[owner]:uid()},
       likes: r.likes.includes(owner)
         ? r.likes.filter((x) => x !== owner)
         : [...r.likes, owner],
@@ -617,6 +618,7 @@ export function remapPhone(
       r[k] = id(r[k]);
     r.audience = r.audience.map(id);
     r.likes = r.likes.map(id);
+    if(r.likeVersions)r.likeVersions=Object.fromEntries(Object.entries(r.likeVersions).map(([k,v])=>[id(k),id(v as string)]));
     const body = (b: PhoneBody) => ({
       ...b,
       assets: b.assets.map(id),

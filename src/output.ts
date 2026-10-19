@@ -1,3 +1,4 @@
+import { phoneOutputSchemas } from "./phone-prompts";
 import type { PromptKind } from "./types";
 import { htmlOutputSchema } from "./theater-html";
 
@@ -207,6 +208,7 @@ export const novelTheaterSchema = object({
   theater: htmlOutputSchema,
 });
 export const outputSchemas: Record<PromptKind, ReturnType<typeof object>> = {
+  ...phoneOutputSchemas,
   novel: object({ text: string, facts: array(fact) }),
   theater: object({ theater: htmlOutputSchema }),
   chat: object({ messages: array(string) }),

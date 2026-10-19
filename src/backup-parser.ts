@@ -1,5 +1,5 @@
 import { phoneTables } from "./phone-types";
-import { extraTables } from "./work-types";
+import { extraTables, automationTables } from "./work-types";
 import { backupTables } from "./transfer-types";
 
 // Only one top-level array item is assembled at a time. The decoder and scanner
@@ -168,15 +168,15 @@ export class BackupParser {
       throw Error("备份文件被截断，没有读到完整结尾");
     if (
       this.metadata.format !== "little-scene" ||
-      ![1, 2, 3, 4, 5, 6].includes(this.metadata.version as number) ||
+      ![1, 2, 3, 4, 5, 6, 7].includes(this.metadata.version as number) ||
       typeof this.metadata.created !== "string"
     )
-      throw Error("这不是支持的此间备份（需要 version 1～6）");
+      throw Error("这不是支持的此间备份（需要 version 1～7）");
     for (const key of backupTables.filter(
       (t) => !extraTables.includes(t as any) && !t.startsWith("phone") && t !== "chatBatches" && t !== "roleDrafts" && t !== "theaters",
     ))
       if (!this.seen.has(key)) throw Error("备份缺少资料区：" + key);
-    if ((this.metadata.version as number) >= 6) for (const key of extraTables) if (!this.seen.has(key)) throw Error("备份缺少资料区：" + key);
+    if ((this.metadata.version as number) >= 6) for (const key of extraTables.filter(t => Number(this.metadata.version) >= 7 || !automationTables.includes(t as any))) if (!this.seen.has(key)) throw Error("备份缺少资料区：" + key);
     if ((this.metadata.version as number) >= 5)
       for (const key of phoneTables)
         if (!this.seen.has(key)) throw Error("备份缺少资料区：" + key);

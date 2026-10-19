@@ -28,6 +28,11 @@ import {
   type TheaterRecord,
 } from "./types";
 export class SceneDB extends Dexie {
+  phoneAutomationSettings!: Table<import("./work-types").PhoneAutomationSettings, string>;
+  phoneAutomationRuns!: Table<import("./work-types").PhoneAutomationRun, string>;
+  phoneAutomationSteps!: Table<import("./work-types").PhoneAutomationStep, string>;
+  phoneKnowledge!: Table<import("./work-types").PhoneKnowledge, string>;
+  phoneWorldEvents!: Table<import("./work-types").PhoneWorldEvent, string>;
   storyWorld!: Table<import("./work-types").StoryWorld, string>;
   storyMigrations!: Table<import("./work-types").StoryMigration, string>;
   legacyArchives!: Table<import("./work-types").LegacyArchive, string>;
@@ -84,6 +89,10 @@ export class SceneDB extends Dexie {
     this.version(7).stores({ roleCompletionDrafts: "id" });
     this.version(8).stores({
       theaters: "id,storyId,eventId,[eventId+sourceVersionId],status,interaction.status",
+    });
+    this.version(12).stores({
+      phoneAutomationSettings: "id,storyId", phoneAutomationRuns: "id,storyId,status",
+      phoneAutomationSteps: "id,storyId,runId,[runId+round]", phoneKnowledge: "id,storyId,actorId,[actorId+targetId]", phoneWorldEvents: "id,storyId,runId",
     });
     this.version(11).stores({
       stories: "id,updated,kind",
@@ -322,6 +331,7 @@ export async function initialize() {
   }
   await (await import("./story-service")).migrateStories();
   await (await import("./phone-store")).initializePhones();
+  await (await import("./phone-automation")).initializeAutomation();
 }
 export async function reviseEvent(
   id: string,
@@ -523,6 +533,7 @@ export async function setTimelineMode(
   });
 }
 export async function deleteStory(id: string) {
+  await (await import("./phone-automation")).pauseStoryAutomation(id);
   await db.transaction(
     "rw",
     [
@@ -532,10 +543,10 @@ export async function deleteStory(id: string) {
       db.jobs,
       db.chatBatches,
       db.promptSessions,
-      db.storyWorld, db.storyMigrations, db.legacyArchives, db.phoneBackgrounds, db.phoneDocuments, db.phoneReading, db.phoneDrafts, db.phoneEdits, db.theaters, db.phoneSpaces, db.phoneConversations, db.phoneRecords, db.phoneAssets, db.phoneRuns,
+      db.phoneAutomationSettings, db.phoneAutomationRuns, db.phoneAutomationSteps, db.phoneKnowledge, db.phoneWorldEvents, db.storyWorld, db.storyMigrations, db.legacyArchives, db.phoneBackgrounds, db.phoneDocuments, db.phoneReading, db.phoneDrafts, db.phoneEdits, db.theaters, db.phoneSpaces, db.phoneConversations, db.phoneRecords, db.phoneAssets, db.phoneRuns,
     ],
     async () => {
-      for (const table of [db.storyWorld, db.storyMigrations, db.legacyArchives, db.phoneBackgrounds, db.phoneDocuments, db.phoneReading, db.phoneDrafts, db.phoneEdits, db.phoneSpaces, db.phoneConversations, db.phoneRecords, db.phoneAssets, db.phoneRuns]) await table.where("storyId").equals(id).delete();
+      for (const table of [db.phoneAutomationSettings, db.phoneAutomationRuns, db.phoneAutomationSteps, db.phoneKnowledge, db.phoneWorldEvents, db.storyWorld, db.storyMigrations, db.legacyArchives, db.phoneBackgrounds, db.phoneDocuments, db.phoneReading, db.phoneDrafts, db.phoneEdits, db.phoneSpaces, db.phoneConversations, db.phoneRecords, db.phoneAssets, db.phoneRuns]) await table.where("storyId").equals(id).delete();
       await db.events.where("storyId").equals(id).delete();
       await db.memories.where("storyId").equals(id).delete();
       await db.jobs.where("storyId").equals(id).delete();

@@ -1,6 +1,7 @@
+import { automationLinks, checkAutomation, isAutomationTable, remapAutomation } from "./automation-backup";
 import { extraTables } from "./work-types";
 export function extraLinks(table: string, r: any): [string, string][] {
-  const out: [string, string][] = [["stories", r.storyId]];
+  const out: [string, string][] = [["stories", r.storyId], ...automationLinks(table,r)];
   const add = (t: string, values: string[]) =>
     values.filter(Boolean).forEach((id) => out.push([t, id]));
   const target = (t: any) => {
@@ -65,6 +66,7 @@ export function checkExtraRow(
     if (!row || (t !== "stories" && row.storyId !== r.storyId))
       throw Error("作品资料缺失或跨作品引用");
   }
+  if(isAutomationTable(table))checkAutomation(table,r,related);
   let roles: string[] = [];
   if (table === "phoneBackgrounds") roles = r.audience;
   if (table === "phoneDocuments")
@@ -122,6 +124,7 @@ export function remapExtra(
   row: any,
   id: (id: string) => string,
 ) {
+  if(isAutomationTable(table))return remapAutomation(table,row,id);
   const r = structuredClone(row);
   r.id = id(r.id);
   r.storyId = id(r.storyId);

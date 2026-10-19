@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { phoneBodySchema } from "./phone-types";
+import {
+  phoneBodySchema,
+  phoneRecordSchema,
+  phoneConversationSchema,
+} from "./phone-types";
 
 const id = z.string(),
   ids = z.array(id);
@@ -175,7 +179,196 @@ export const archiveSchema = z.object({
   value: z.unknown(),
   created: z.number(),
 });
+export const habitSchema = z.object({
+  initiative: z.enum(["quiet", "balanced", "active"]),
+  expression: z.enum(["private", "balanced", "public"]),
+  replyDelay: z.number().int().min(0).max(10),
+  browseEvery: z.number().int().min(1).max(20),
+  preference: id,
+});
+export const automationOptionsSchema = z.object({
+  roles: ids,
+  controlledRole: id,
+  takeover: z.boolean(),
+  rounds: z.number().int().min(1).max(100),
+  minutes: z.number().int().min(1).max(60),
+  endTime: id,
+  maxRequests: z.number().int().min(0).max(10000),
+  mode: z.enum(["live", "draft"]),
+  freedom: z.enum(["limited", "active"]),
+  direction: id,
+  startTime: id,
+  habits: z.record(habitSchema),
+});
+export const automationSettingsSchema = z.object({
+  ...base,
+  ...automationOptionsSchema.shape,
+  updated: z.number(),
+});
+export const worldEventSchema = z.object({
+  ...base,
+  actorId: id,
+  title: id,
+  text: id,
+  audience: ids,
+  time: id,
+  versionId: id,
+  runId: id,
+  stepId: id,
+  deleted: z.boolean(),
+  created: z.number(),
+});
+export const knowledgeSchema = z.object({
+  ...base,
+  actorId: id,
+  targetId: id,
+  versionId: id,
+  runId: id,
+  stepId: id,
+  created: z.number(),
+});
+export const autoActionSchema = z
+  .object({
+    kind: z.enum([
+      "chat",
+      "moment",
+      "comment",
+      "like",
+      "note",
+      "draft",
+      "event",
+      "wait",
+    ]),
+    conversationId: id,
+    recipientId: id,
+    parentId: id,
+    replyTo: id,
+    documentId: id,
+    audience: ids,
+    reason: id,
+    instruction: id,
+    awaitUser: z.boolean(),
+  })
+  .strict();
+export const automationPayloadSchema = z.object({
+  records: z.array(phoneRecordSchema),
+  documents: z.array(documentSchema),
+  events: z.array(worldEventSchema),
+  conversations: z.array(phoneConversationSchema),
+  likes: z.array(
+    z.object({
+      recordId: id,
+      actorId: id,
+      before: z.boolean(),
+      beforeVersion: id.optional(),
+      versionId: id.optional(),
+    }),
+  ),
+});
+const referenceSchema = z.object({
+  table: z.enum([
+    "phoneRecords",
+    "phoneDocuments",
+    "phoneWorldEvents",
+    "phoneConversations",
+  ]),
+  id,
+  version: id,
+});
+const requestSchema = z.object({
+  system: id,
+  user: id,
+  raw: id,
+  complete: z.boolean(),
+});
+export const automationStepSchema = z.object({
+  ...base,
+  runId: id,
+  actorId: id,
+  round: z.number().int().min(1),
+  order: z.number().int().min(0),
+  status: z.enum(["pending", "running", "complete", "failed"]),
+  phase: z.enum(["decision", "content", "commit"]),
+  options: automationOptionsSchema,
+  context: id,
+  materialVersion: id.default(""),
+  prompts: z.record(id),
+  profile: z.object({
+    id,
+    name: id,
+    protocol: z.enum(["chat", "responses", "claude", "gemini"]),
+    url: id,
+    model: id,
+    stream: z.boolean(),
+    context: z.number(),
+    maxOutput: z.number(),
+    timeout: z.number(),
+    temperature: z.number().optional(),
+    frequencyPenalty: z.number().nullable().optional(),
+    outputMode: z.enum(["auto", "schema", "json", "compatible"]).optional(),
+    cachePolicy: z.enum(["auto", "off"]).optional(),
+    prefixReuse: z.enum(["auto", "on", "off"]).optional(),
+    remember: z.literal(false),
+  }),
+  time: id,
+  snapshot: automationPayloadSchema,
+  roles: z.array(z.object({ id, name: id })),
+  assets: z.array(z.object({ id, mime: id })),
+  readIds: ids,
+  refs: z.array(referenceSchema),
+  action: autoActionSchema.optional(),
+  result: automationPayloadSchema.optional(),
+  decisionRequest: requestSchema.optional(),
+  contentRequest: requestSchema.optional(),
+  consumedIds: ids.default([]),
+  beforeDocuments: z.array(documentSchema),
+  afterVersions: z.record(id),
+  applied: z.boolean(),
+  error: id,
+  created: z.number(),
+  updated: z.number(),
+});
+export const automationRunSchema = z.object({
+  ...base,
+  options: automationOptionsSchema,
+  status: z.enum([
+    "running",
+    "paused",
+    "failed",
+    "interrupted",
+    "complete",
+    "adopted",
+    "undone",
+    "cancelled",
+  ]),
+  round: z.number().int().min(0),
+  requests: z.number().int().min(0),
+  waiting: z.record(z.number()),
+  error: id,
+  created: z.number(),
+  updated: z.number(),
+});
+export const automationSchemas = {
+  phoneAutomationSettings: automationSettingsSchema,
+  phoneAutomationRuns: automationRunSchema,
+  phoneAutomationSteps: automationStepSchema,
+  phoneKnowledge: knowledgeSchema,
+  phoneWorldEvents: worldEventSchema,
+};
+export const automationTables = Object.keys(
+  automationSchemas,
+) as (keyof typeof automationSchemas)[];
+export type PhoneAutomationOptions = z.infer<typeof automationOptionsSchema>;
+export type PhoneAutomationSettings = z.infer<typeof automationSettingsSchema>;
+export type PhoneAutomationRun = z.infer<typeof automationRunSchema>;
+export type PhoneAutomationStep = z.infer<typeof automationStepSchema>;
+export type PhoneWorldEvent = z.infer<typeof worldEventSchema>;
+export type PhoneKnowledge = z.infer<typeof knowledgeSchema>;
+export type PhoneHabit = z.infer<typeof habitSchema>;
+export type PhoneAutoAction = z.infer<typeof autoActionSchema>;
+export type PhoneAutomationPayload = z.infer<typeof automationPayloadSchema>;
 export const extraSchemas = {
+  ...automationSchemas,
   storyWorld: storyWorldSchema,
   storyMigrations: migrationSchema,
   legacyArchives: archiveSchema,

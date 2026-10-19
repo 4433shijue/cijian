@@ -1,3 +1,4 @@
+import { ensureAutomation } from "./phone-automation";
 import { extraTables } from "./work-types";
 import { remapExtra, extraLinks, checkExtraRow } from "./work-backup";
 import { migrateStories } from "./story-service";
@@ -425,7 +426,8 @@ export async function commitStaged(
       control.transaction = Dexie.currentTransaction!;
       control.check();
       if (
-        (await db.phoneRuns.where("status").equals("running").count()) ||
+        (await db.phoneAutomationRuns.where("status").equals("running").count()) ||
+      (await db.phoneRuns.where("status").equals("running").count()) ||
         (await db.jobs.where("status").equals("running").count()) ||
         (await db.chatBatches.where("status").equals("running").count()) ||
         (await db.theaters.where("status").equals("running").count()) ||
@@ -508,6 +510,7 @@ export async function commitStaged(
         theaterPresets: theaterPresets.presets,
       });
       control.check(); await migrateStories();
+    for(const story of await db.stories.where("kind").equals("phone").toArray())await ensureAutomation(story.id);
       control.check();
     })
     .finally(() => {
@@ -549,7 +552,7 @@ export async function exportBackupBlob(
       await writer.write(
         JSON.stringify({
           format: "little-scene",
-          version: 6,
+          version: 7,
           created: new Date().toISOString(),
           scope: s ? "story" : "library",
           ...(s ? { title: s.title } : {}),

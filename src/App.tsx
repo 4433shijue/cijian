@@ -1,3 +1,6 @@
+import { version as appVersion } from "../package.json";
+import { AutomationTaskbar } from "./PhoneAutomation";
+import { phonePromptLabels } from "./phone-prompts";
 import { CreateStory } from "./CreateStory";
 import { WorkPage, MigrationNotice, WorkWorldEditor } from "./WorkPage";
 import { updateStory } from "./story-service";
@@ -279,6 +282,7 @@ export default function App() {
           <StoriesPage notify={setNotice} />
         )}
       </main>
+      <AutomationTaskbar />
       {notice && (
         <div className="toast" role="status">
           {notice}
@@ -2825,7 +2829,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
         <div>
           <span className="eyebrow">MAKE YOURSELF AT HOME</span>
           <h1>让此间合你心意</h1>
-          <p>接好灵感的来路，也为故事留一份备份。</p>
+          <p>接好灵感的来路，也为故事留一份备份。此间 {appVersion}</p>
         </div>
       </header>
       <section className="settings-card">
@@ -2906,7 +2910,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
             <Toggle label="台词检查（只提醒，不拦截）" value={!!prefs.dialogueCheck}
               onChange={(value) => db.preferences.update("preferences", { dialogueCheck: value }).then(() => {})} />
             <p className="hint">默认关闭。开启后只提示台词用字差异，完整正文仍会直接保存；标点变化也可能触发提醒。</p>
-            <p className="hint">正文最多读取20回原文；角色手机另有20轮可见番外记录，按16～20回分批滚动。删除和被替换的旧版本不参与请求。</p>
+            <p className="hint">正文最多读取20回原文；角色手机另有20轮可知记录，按16～20回分批滚动。删除和被替换的旧版本不参与请求。</p>
             <Field label="每几回合自动提炼记忆"><input type="number" min={1} step={1} value={memoryEvery}
               onChange={(e) => { setMemoryEvery(e.target.value); const n = Number(e.target.value);
                 if (Number.isSafeInteger(n) && n >= 1) void db.preferences.update("preferences", { memoryIntervalRounds: n }).catch(() => notify("记忆频率保存失败")); }}
@@ -2950,6 +2954,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
               >
                 <option value="novel">小说扩写</option>
                 <option value="chat">手机聊天</option>
+                {Object.entries(phonePromptLabels).map(([key,label])=><option key={key} value={key}>{label}</option>)}
                 <option value="facts">事实摘录</option>
                 <option value="memory">记忆整理</option>
                 <option value="inspiration">灵感小助手</option>
