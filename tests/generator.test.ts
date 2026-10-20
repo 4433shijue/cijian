@@ -359,10 +359,13 @@ it("copies edited and restored result versions and leaves saved cards unchanged"
       (r) => r.payload.input.targets[0].name === "林知舟",
     ),
   ).toBe(true);
-  expect(
-    (await generatorData(s.id)).results.filter((r) => r.kind === "card").at(-1)!
-      .card!.name,
-  ).toBe("林知舟");
+  // IndexedDB returns UUID key order, which does not identify the latest generation.
+  const regenerated = (await generatorData(s.id)).results.filter(
+    (result) =>
+      result.kind === "card" && ![r.id, updated.id].includes(result.id),
+  );
+  expect(regenerated).toHaveLength(1);
+  expect(regenerated[0].card!.name).toBe("林知舟");
   const restored = await editGeneratorResult(updated.id, { card: r.card });
   expect(restored.previousId).toBe(updated.id);
   expect(restored.card!.bio).toBe("修船匠");
