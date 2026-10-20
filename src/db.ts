@@ -1,3 +1,4 @@
+import type { GeneratorSession, GeneratorMaterial, GeneratorTurn, GeneratorStep, GeneratorResult } from "./generator-types";
 import { mainlineEvents } from "./mainline";
 import type { PhoneSpace, PhoneConversation, PhoneRecord, PhoneAsset, PhoneGenerationRun } from "./phone-types";
 import Dexie, { type Table } from "dexie";
@@ -28,6 +29,11 @@ import {
   type TheaterRecord,
 } from "./types";
 export class SceneDB extends Dexie {
+  generatorSessions!: Table<GeneratorSession, string>;
+  generatorMaterials!: Table<GeneratorMaterial, string>;
+  generatorTurns!: Table<GeneratorTurn, string>;
+  generatorSteps!: Table<GeneratorStep, string>;
+  generatorResults!: Table<GeneratorResult, string>;
   phoneAutomationSettings!: Table<import("./work-types").PhoneAutomationSettings, string>;
   phoneAutomationRuns!: Table<import("./work-types").PhoneAutomationRun, string>;
   phoneAutomationSteps!: Table<import("./work-types").PhoneAutomationStep, string>;
@@ -90,6 +96,7 @@ export class SceneDB extends Dexie {
     this.version(8).stores({
       theaters: "id,storyId,eventId,[eventId+sourceVersionId],status,interaction.status",
     });
+    this.version(13).stores({ generatorSessions: "id,updated", generatorMaterials: "id,sessionId", generatorTurns: "id,sessionId", generatorSteps: "id,sessionId,status,batchId", generatorResults: "id,sessionId,batchId" });
     this.version(12).stores({
       phoneAutomationSettings: "id,storyId", phoneAutomationRuns: "id,storyId,status",
       phoneAutomationSteps: "id,storyId,runId,[runId+round]", phoneKnowledge: "id,storyId,actorId,[actorId+targetId]", phoneWorldEvents: "id,storyId,runId",

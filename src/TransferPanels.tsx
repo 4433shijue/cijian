@@ -250,6 +250,10 @@ export function BackupSettings({
                 <dd>{t.summary.counts.roleDrafts}</dd>
               </div>
               <div>
+                <dt>角色生成会话</dt>
+                <dd>{t.summary.counts.generatorSessions || 0}</dd>
+              </div>
+              <div>
                 <dt>小剧场</dt>
                 <dd>{t.summary.counts.theaters}</dd>
               </div><div><dt>手机记录 / 素材</dt><dd>{t.summary.counts.phoneRecords || 0} / {t.summary.counts.phoneAssets || 0}</dd>

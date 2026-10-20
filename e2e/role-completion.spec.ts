@@ -98,6 +98,7 @@ async function openAssistant(page: Page) {
   // to leave the DOM before targeting the page-level entry button.
   await expect(assistant(page)).toHaveCount(0);
   await page.getByRole("button", { name: "帮我补全", exact: true }).click();
+  await page.getByRole("button", { name: "旧版快速补全与恢复", exact: true }).click();
   await expect(assistant(page)).toBeVisible();
   await expect(
     assistant(page).getByRole("textbox", {

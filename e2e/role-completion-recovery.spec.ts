@@ -147,6 +147,7 @@ async function seed(page: Page, draft?: CompletionDraft) {
 async function open(page: Page) {
   await expect(dialog(page)).toHaveCount(0);
   await page.getByRole("button", { name: "帮我补全", exact: true }).click();
+  await page.getByRole("button", { name: "旧版快速补全与恢复", exact: true }).click();
   await expect(
     dialog(page).getByRole("textbox", { name: "人物或故事素材", exact: true }),
   ).toBeEnabled();

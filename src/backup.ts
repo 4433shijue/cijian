@@ -1,3 +1,5 @@
+import { generatorTables, generatorSchemas } from "./generator-types";
+import { validateGeneratorBackup, remapGenerator } from "./generator-backup";
 import { ensureAutomation } from "./phone-automation";
 import { extraSchemas, extraTables, automationTables } from "./work-types";
 import { migrateStories } from "./story-service";
@@ -262,6 +264,9 @@ const profile = z.object({
 const prefs = z.object({
   id: z.literal("preferences"),
   activeProfile: str,
+  generatorConnection: z.enum(["inherit","dedicated"]).optional(),
+  generatorProfileId: str.optional(),
+  generatorLegacyMigrated: z.boolean().optional(),
   developer: z.boolean(),
   dialogueCheck: z.boolean().optional(),
   inspirationParagraphs: z.number().int().min(1).max(20).optional(),
@@ -288,12 +293,12 @@ const prefs = z.object({
     )
     .optional(),
   prompts: z.record(
-    z.enum(["novel", "chat", "facts", "memory", "inspiration", "theater", "phoneDecision", "phoneMoment", "phoneInteraction", "phoneDocument", "phoneEvent", "phoneVariant", "phoneHabits"]),
+    z.enum(["novel", "chat", "facts", "memory", "inspiration", "theater", "phoneDecision", "phoneMoment", "phoneInteraction", "phoneDocument", "phoneEvent", "phoneVariant", "phoneHabits", "generatorInterview", "generatorIf", "generatorCompose"]),
     z.object({ text: str, enabled: z.boolean() }),
   ),
 });
 export const recordSchemas = {
-  ...phoneSchemas, ...extraSchemas,
+  ...phoneSchemas, ...extraSchemas, ...generatorSchemas,
   roles: role,
   stories: story,
   world,
@@ -306,6 +311,12 @@ export const recordSchemas = {
   roleDrafts: z.object({ id: str, role }),
 };
 const schema = z.object({
+  generatorSessions: z.array(generatorSchemas.generatorSessions).default([]),
+  generatorMaterials: z.array(generatorSchemas.generatorMaterials).default([]),
+  generatorTurns: z.array(generatorSchemas.generatorTurns).default([]),
+  generatorSteps: z.array(generatorSchemas.generatorSteps).default([]),
+  generatorResults: z.array(generatorSchemas.generatorResults).default([]),
+
   phoneAutomationSettings: z.array(extraSchemas.phoneAutomationSettings).default([]),
   phoneAutomationRuns: z.array(extraSchemas.phoneAutomationRuns).default([]),
   phoneAutomationSteps: z.array(extraSchemas.phoneAutomationSteps).default([]),
@@ -325,7 +336,7 @@ const schema = z.object({
   phoneAssets: z.array(phoneSchemas.phoneAssets).default([]),
   phoneRuns: z.array(phoneSchemas.phoneRuns).default([]),
   format: z.literal("little-scene"),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8)]),
   created: str,
   roles: z.array(role),
   stories: z.array(story),
@@ -388,6 +399,8 @@ export function remapTheaterContent(
 
 export function validateBackup(raw: unknown) {
   const b = schema.parse(raw);
+  if (b.version >= 8) for (const table of generatorTables) if (!Array.isArray((raw as any)[table])) throw Error("备份缺少资料区：" + table);
+  validateGeneratorBackup(b);
   if (b.version >= 5) for (const table of phoneTables) if (!Array.isArray((raw as any)[table])) throw Error("备份缺少资料区：" + table);
   checkPhoneBackup(b);
   validateExtras(b);
@@ -565,7 +578,7 @@ export async function exportBackup() {
   return db.transaction(
     "r",
     [
-      ...[...phoneTables, ...extraTables].map(t => db.table(t)),
+      ...[...phoneTables, ...extraTables, ...generatorTables].map(t => db.table(t)),
       db.roles,
       db.stories,
       db.world,
@@ -578,8 +591,8 @@ export async function exportBackup() {
     ],
     async () => ({
       format: "little-scene",
-      version: 7,
-      ...Object.fromEntries(await Promise.all(extraTables.map(async t => [t, await db.table(t).toArray()]))),
+      version: 8,
+      ...Object.fromEntries(await Promise.all([...extraTables,...generatorTables].map(async t => [t, await db.table(t).toArray()]))),
       phoneSpaces: await db.phoneSpaces.toArray(),
       phoneConversations: await db.phoneConversations.toArray(),
       phoneRecords: await db.phoneRecords.toArray(),
@@ -642,6 +655,7 @@ export async function importBackup(value: unknown, replace = false) {
   });
   await db.transaction("rw", db.tables, async () => {
     if (
+      (await db.generatorSessions.filter(s => !!s.lease && s.lease.until > Date.now()).count()) ||
       (await db.phoneAutomationRuns.where("status").equals("running").count()) ||
       (await db.phoneRuns.where("status").equals("running").count()) ||
       (await db.jobs.where("status").equals("running").count()) ||
@@ -661,6 +675,7 @@ export async function importBackup(value: unknown, replace = false) {
     if (replace)
       for (const table of db.tables)
         if (![db.roleDrafts.name, db.roleCompletionDrafts.name].includes(table.name)) await table.clear();
+    for (const table of generatorTables) await db.table(table).bulkAdd(b[table].map(row => remapGenerator(table,row,remap)));
     for (const table of extraTables) await db.table(table).bulkAdd(b[table].map(row => remapExtra(table, row, remap)));
     for (const table of phoneTables) await db.table(table).bulkAdd(b[table].map(row => remapPhone(table, row, remap)));
     await db.roles.bulkAdd(b.roles.map(r));
@@ -808,6 +823,7 @@ export async function importBackup(value: unknown, replace = false) {
               ...imported,
               theaterPresets: theaterPresets.presets,
               activeProfile: remap(imported.activeProfile),
+              generatorProfileId: imported.generatorProfileId ? remap(imported.generatorProfileId) : undefined,
               stylePresets: imported.stylePresets?.map((preset) => ({
                 ...preset,
                 builtIn: false,

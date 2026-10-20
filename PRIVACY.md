@@ -79,3 +79,7 @@ GitHub Pages 提供网页文件。网站的脚本、样式、图片和其中写�
 - [GitHub Pages 与 HTTPS](https://docs.github.com/en/pages/getting-started-with-github-pages/securing-your-github-pages-site-with-https)
 - [GitHub Pages 介绍及访问数据](https://docs.github.com/en/pages/getting-started-with-github-pages/about-github-pages)
 - [浏览器同源策略与存储范围](https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Same-origin_policy)
+
+## 3.2 角色生成器
+
+生成器只把用户输入、明确勾选的角色库和世界书快照、当前访谈及当前修订的结果提供给所选接口，不自动读取作品经历。勾选资料以作者视角完整读取，可能包含私密设定，请在开始前检查清单。专用接口独立于通用接口配置。生成器会话保留不含密钥的请求快照和原始回复；完整 version 8 备份包含这些恢复资料，兼容导入 version 1～7。单本作品备份不包含全局生成会话。所有新资料使用新编号，参考资料不被覆盖。

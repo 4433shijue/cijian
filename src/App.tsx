@@ -1,3 +1,4 @@
+import { generatorPromptLabels } from "./generator-prompts";
 import { version as appVersion } from "../package.json";
 import { AutomationTaskbar } from "./PhoneAutomation";
 import { phonePromptLabels } from "./phone-prompts";
@@ -38,7 +39,7 @@ import { db, makeStory, deleteStory, reviseEvent, setTimelineMode, ensureStoryRo
 import { sharedTimeline, visibleText } from "./timeline";
 import { loadRoleDraft, saveRoleDraft, saveCreatedRole } from "./role-draft";
 import { InspirationAssistant } from "./InspirationAssistant";
-import { RoleCompletionAssistant } from "./RoleCompletionAssistant";
+import { RoleGenerator as RoleCompletionAssistant } from "./RoleGenerator";
 import { TheaterPanel, EventRawOutput } from "./TheaterPanel";
 import { StoryTheaterSettings, TheaterPresetSettings } from "./TheaterSettings";
 import { inspirationCount, chooseInspiration } from "./inspiration";
@@ -2954,7 +2955,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
               >
                 <option value="novel">小说扩写</option>
                 <option value="chat">手机聊天</option>
-                {Object.entries(phonePromptLabels).map(([key,label])=><option key={key} value={key}>{label}</option>)}
+                {Object.entries({...phonePromptLabels, ...generatorPromptLabels}).map(([key,label])=><option key={key} value={key}>{label}</option>)}
                 <option value="facts">事实摘录</option>
                 <option value="memory">记忆整理</option>
                 <option value="inspiration">灵感小助手</option>

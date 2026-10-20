@@ -1,3 +1,4 @@
+import { migrateCompletionGenerator } from "./generator";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { initialize, db } from "./db";
@@ -6,6 +7,7 @@ import "./style.css";
 import { cleanupTransfers } from "./transfer-store";
 db.on("blocked", () => { const root=document.getElementById("root")!;root.textContent="升级正在等待其他页面关闭。请关闭此间的旧标签页，升级会自动继续。"; });
 initialize()
+  .then(migrateCompletionGenerator)
   .then(() => cleanupTransfers().catch(() => {}))
   .then(() =>
     createRoot(document.getElementById("root")!).render(

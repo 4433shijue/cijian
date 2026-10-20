@@ -1,3 +1,4 @@
+import { generatorTables } from "./generator-types";
 import { phoneTables } from "./phone-types";
 import { extraTables, automationTables } from "./work-types";
 import { backupTables } from "./transfer-types";
@@ -168,14 +169,15 @@ export class BackupParser {
       throw Error("备份文件被截断，没有读到完整结尾");
     if (
       this.metadata.format !== "little-scene" ||
-      ![1, 2, 3, 4, 5, 6, 7].includes(this.metadata.version as number) ||
+      ![1, 2, 3, 4, 5, 6, 7, 8].includes(this.metadata.version as number) ||
       typeof this.metadata.created !== "string"
     )
-      throw Error("这不是支持的此间备份（需要 version 1～7）");
+      throw Error("这不是支持的此间备份（需要 version 1～8）");
     for (const key of backupTables.filter(
-      (t) => !extraTables.includes(t as any) && !t.startsWith("phone") && t !== "chatBatches" && t !== "roleDrafts" && t !== "theaters",
+      (t) => !generatorTables.includes(t as any) && !extraTables.includes(t as any) && !t.startsWith("phone") && t !== "chatBatches" && t !== "roleDrafts" && t !== "theaters",
     ))
       if (!this.seen.has(key)) throw Error("备份缺少资料区：" + key);
+    if ((this.metadata.version as number) >= 8) for (const key of generatorTables) if (!this.seen.has(key)) throw Error("备份缺少资料区：" + key);
     if ((this.metadata.version as number) >= 6) for (const key of extraTables.filter(t => Number(this.metadata.version) >= 7 || !automationTables.includes(t as any))) if (!this.seen.has(key)) throw Error("备份缺少资料区：" + key);
     if ((this.metadata.version as number) >= 5)
       for (const key of phoneTables)

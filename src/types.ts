@@ -1,6 +1,6 @@
 export type Protocol = "chat" | "responses" | "claude" | "gemini";
 export type PromptKind =
-  "novel" | "chat" | "facts" | "memory" | "inspiration" | "theater" | "phoneDecision" | "phoneMoment" | "phoneInteraction" | "phoneDocument" | "phoneEvent" | "phoneVariant" | "phoneHabits";
+  "novel" | "chat" | "facts" | "memory" | "inspiration" | "theater" | "phoneDecision" | "phoneMoment" | "phoneInteraction" | "phoneDocument" | "phoneEvent" | "phoneVariant" | "phoneHabits" | "generatorInterview" | "generatorIf" | "generatorCompose";
 export type TheaterPresentation =
   | "dialogue"
   | "detail-list"
@@ -289,6 +289,9 @@ export interface Profile {
 export interface Preferences {
   id: "preferences";
   activeProfile: string;
+  generatorProfileId?: string;
+  generatorLegacyMigrated?: boolean;
+  generatorConnection?: "inherit" | "dedicated";
   developer: boolean;
   dialogueCheck?: boolean;
   inspirationParagraphs?: number;

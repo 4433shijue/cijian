@@ -399,7 +399,7 @@ it.each(["legacy", "stream"])(
       .mockResolvedValueOnce(result(content()));
     await run({ rounds: 1 });
     const b = await exportBackup();
-    expect(b.version).toBe(7);
+    expect(b.version).toBe(8);
     validateBackup(b);
     if (route === "legacy") await importBackup(b);
     else {

@@ -1,3 +1,5 @@
+import { generatorTables } from "./generator-types";
+import { generatorLinks, checkGeneratorRow, remapGenerator } from "./generator-backup";
 import { ensureAutomation } from "./phone-automation";
 import { extraTables } from "./work-types";
 import { remapExtra, extraLinks, checkExtraRow } from "./work-backup";
@@ -152,6 +154,18 @@ async function checkStaged(
     stories.set(s.id, roles); storyKinds.set(s.id,s.kind);
     if(version>=6)for(const id of s.worldIds){const entry=await staged(session,"storyWorld",id);if(entry?.storyId!==s.id)throw Error("作品世界书副本缺失");}
   });
+  for (const table of generatorTables) await eachStaged(session, table, async row => {
+    const related = new Map<string, any>();
+    for (const [t,id] of generatorLinks(table,row)) related.set(`${t}:${id}`,await staged(session,t as BackupTable,id));
+    checkGeneratorRow(table,row,related);
+    if (table === "generatorResults") {
+      const seen = new Set<string>(); let current = row;
+      while (current) {
+        if (seen.has(current.id)) throw Error("生成器版本存在循环引用");
+        seen.add(current.id); current = current.previousId ? await staged(session,"generatorResults",current.previousId) : undefined;
+      }
+    }
+  });
   for (const table of extraTables) await eachStaged(session, table, async row => {
     const related = new Map<string, any>();
     for (const [t, id] of extraLinks(table, row)) related.set(`${t}:${id}`, await staged(session, t as BackupTable, id));
@@ -298,6 +312,7 @@ export function backupRemapper() {
     styleIds,
     theaterPresetIds,
     row(table: BackupTable, x: any, replace: boolean): any {
+      if (generatorTables.includes(table as any)) return remapGenerator(table,x,id);
       if (extraTables.includes(table as any)) return remapExtra(table, x, id);
       if (table.startsWith("phone")) return remapPhone(table, x, id);
       switch (table) {
@@ -426,7 +441,8 @@ export async function commitStaged(
       control.transaction = Dexie.currentTransaction!;
       control.check();
       if (
-        (await db.phoneAutomationRuns.where("status").equals("running").count()) ||
+        (await db.generatorSessions.filter(s => !!s.lease && s.lease.until > Date.now()).count()) ||
+      (await db.phoneAutomationRuns.where("status").equals("running").count()) ||
       (await db.phoneRuns.where("status").equals("running").count()) ||
         (await db.jobs.where("status").equals("running").count()) ||
         (await db.chatBatches.where("status").equals("running").count()) ||
@@ -504,7 +520,7 @@ export async function commitStaged(
           prompts: {},
         }),
         ...(apply && imported
-          ? { ...imported, activeProfile: remap.id(imported.activeProfile) }
+          ? { ...imported, activeProfile: remap.id(imported.activeProfile), generatorProfileId: imported.generatorProfileId ? remap.id(imported.generatorProfileId) : undefined }
           : {}),
         stylePresets: styles,
         theaterPresets: theaterPresets.presets,
@@ -552,7 +568,7 @@ export async function exportBackupBlob(
       await writer.write(
         JSON.stringify({
           format: "little-scene",
-          version: 7,
+          version: 8,
           created: new Date().toISOString(),
           scope: s ? "story" : "library",
           ...(s ? { title: s.title } : {}),
@@ -565,6 +581,7 @@ export async function exportBackupBlob(
         await visitRows(db.table(table), async (raw: any) => {
           control.check();
           if (s) {
+            if (generatorTables.includes(table as any)) return;
             if (["profiles", "roleDrafts", "roles", "world"].includes(table)) return;
             if (table === "stories" && raw.id !== s.id) return;
             if (
@@ -587,6 +604,7 @@ export async function exportBackupBlob(
           if (s && table === "world") row.storyIds = [s.id];
           if (s && table === "preferences") {
             row.activeProfile = "";
+            delete row.generatorProfileId; delete row.generatorConnection; delete row.generatorLegacyMigrated;
             row.developer = false;
             row.prompts = {};
             row.stylePresets = row.stylePresets?.filter(
