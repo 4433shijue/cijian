@@ -14,6 +14,7 @@ import {
   migrateCompletionGenerator,
   advanceGenerator,
   retryGenerator,
+  forkGeneratorRecovery,
   stopGenerator,
   reviseGenerator,
   editGeneratorResult,
@@ -30,6 +31,10 @@ import {
   type GeneratorResult,
 } from "./generator-types";
 import "./generator.css";
+import {
+  generatorResultGroups,
+  generatorStepIsCurrent,
+} from "./generator-results";
 
 type Props = {
   onClose: () => void;
@@ -273,11 +278,7 @@ function GeneratorDialog({
   const candidates = (data?.results || []).filter(
     (r) => r.revision === current?.revision && !r.needsReview,
   );
-  const groups = new Map<string, GeneratorResult[]>();
-  for (const r of candidates.sort((a, b) => a.created - b.created)) {
-    const key = r.kind === "card" ? r.targetId : "world:" + r.world?.title;
-    groups.set(key, [...(groups.get(key) || []), r]);
-  }
+  const groups = generatorResultGroups(candidates);
   const displayed = [...groups].map(([key, list]) => ({
     key,
     list,
@@ -965,36 +966,64 @@ function GeneratorDialog({
                         <pre>{step.system}</pre>
                         <pre>{step.user}</pre>
                         <pre>{step.raw}</pre>
+                        {step.legacyData && <pre>{step.legacyData}</pre>}
                       </details>
-                      {step.status !== "complete" &&
-                        step.kind !== "legacy" &&
-                        step.revision === current.revision && (
-                          <>
-                            <button
-                              disabled={busy}
-                              onClick={() =>
-                                void perform(() =>
-                                  retryGenerator(
-                                    current.id,
-                                    step.batchId,
-                                    setRaw,
-                                  ),
-                                )
-                              }
-                            >
-                              从此批次未完成处继续
-                            </button>
-                            <RecoveryEditor
-                              raw={step.raw}
-                              disabled={busy}
-                              onRecover={(value) =>
-                                void perform(() =>
-                                  recoverGeneratorStep(step.id, value),
-                                )
-                              }
-                            />
-                          </>
-                        )}
+                      {step.status !== "complete" && step.kind !== "legacy" && (
+                        <>
+                          {!generatorStepIsCurrent(current, step) && (
+                            <p className="hint">
+                              后续对话或资料已变化，请在独立会话恢复原请求。
+                            </p>
+                          )}
+                          <button
+                            disabled={
+                              busy || !generatorStepIsCurrent(current, step)
+                            }
+                            onClick={() =>
+                              void perform(() =>
+                                retryGenerator(
+                                  current.id,
+                                  step.batchId,
+                                  setRaw,
+                                ),
+                              )
+                            }
+                          >
+                            从此批次未完成处继续
+                          </button>
+                          <button
+                            disabled={busy}
+                            onClick={() =>
+                              void perform(async () => {
+                                const next = await forkGeneratorRecovery(
+                                  step.id,
+                                );
+                                await refresh(next.id);
+                                setSetup(false);
+                                setSelectedResults([]);
+                                setVersions({});
+                                setRaw("");
+                                notify(
+                                  "已建立独立恢复会话；点击继续才会发送请求",
+                                );
+                              })
+                            }
+                          >
+                            在独立会话恢复
+                          </button>
+                          <RecoveryEditor
+                            raw={step.raw}
+                            disabled={
+                              busy || !generatorStepIsCurrent(current, step)
+                            }
+                            onRecover={(value) =>
+                              void perform(() =>
+                                recoverGeneratorStep(step.id, value),
+                              )
+                            }
+                          />
+                        </>
+                      )}
                       {step.kind === "legacy" && (
                         <>
                           <RecoveryEditor
@@ -1116,15 +1145,27 @@ function GeneratorDialog({
                     <div className="generator-inline">
                       <button
                         disabled={busy}
-                        onClick={() =>
+                        onClick={() => {
+                          const draft = ref.current?.editor;
+                          if (draft?.resultId === r.id) {
+                            patch({ editor: { ...draft, collapsed: false } });
+                            return;
+                          }
+                          if (
+                            draft &&
+                            !window.confirm(
+                              "已有尚未保存为结果版本的编辑草稿。放弃这些修改，改为编辑另一版？",
+                            )
+                          )
+                            return;
                           patch({
                             editor: {
                               resultId: r.id,
                               card: r.card && structuredClone(r.card),
                               world: r.world && structuredClone(r.world),
                             },
-                          })
-                        }
+                          });
+                        }}
                       >
                         编辑这版
                       </button>
@@ -1167,7 +1208,25 @@ function GeneratorDialog({
                     )}
                   </article>
                 ))}
-                {current.editor && (
+                {current.editor?.collapsed && (
+                  <div
+                    className="generator-result generator-inline"
+                    role="status"
+                  >
+                    <span>编辑草稿已收起，修改内容仍保留。</span>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        patch({
+                          editor: { ...current.editor!, collapsed: false },
+                        })
+                      }
+                    >
+                      继续编辑草稿
+                    </button>
+                  </div>
+                )}
+                {current.editor && !current.editor.collapsed && (
                   <fieldset disabled={busy} className="generator-editor">
                     <legend>编辑内容 · 自动保存为编辑草稿</legend>
                     {current.editor.card && (
@@ -1368,8 +1427,26 @@ function GeneratorDialog({
                     >
                       保存为新的结果版本
                     </button>
-                    <button onClick={() => patch({ editor: undefined })}>
+                    <button
+                      onClick={() =>
+                        patch({
+                          editor: { ...current.editor!, collapsed: true },
+                        })
+                      }
+                    >
                       收起编辑草稿
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            "放弃这份编辑草稿的修改？已保存的结果版本不受影响。",
+                          )
+                        )
+                          patch({ editor: undefined });
+                      }}
+                    >
+                      放弃修改
                     </button>
                   </fieldset>
                 )}

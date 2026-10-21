@@ -120,6 +120,7 @@ export const generatorSchemas = {
     editor: z
       .object({
         resultId: id,
+        collapsed: z.boolean().optional(),
         card: cardSchema.optional(),
         world: worldSchema.optional(),
       })
@@ -166,6 +167,7 @@ export const generatorSchemas = {
     resultId: str.optional(),
     legacyData: str.optional(),
     promptTexts: z.record(str).optional(),
+    referenceResultIds: ids.optional(),
   }),
   generatorResults: z.object({
     id,

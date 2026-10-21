@@ -265,6 +265,141 @@ test("refresh restores answers and original snapshots; retry keeps original prom
   expect(requests.filter((x) => x.p.task === "interview")).toHaveLength(2);
 });
 for (const width of [1280, 390, 360])
+  test(`draft ${width}: collapse, reload and resume preserve manual edits; world rename keeps versions`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await seed(page);
+    const requests = await mocked(page);
+    await setup(page);
+    const d = dialog(page);
+    await d.getByRole("button", { name: "确认目标与参考，开始访谈" }).click();
+    await expect(
+      d.getByRole("checkbox", { name: "照顾家人", exact: true }),
+    ).toBeVisible();
+    await answer(page);
+    if (width < 700)
+      await d.getByRole("tab", { name: "结果", exact: true }).click();
+    await expect(d.getByTestId("generator-result")).toHaveCount(2);
+    const roleResult = d
+      .getByTestId("generator-result")
+      .filter({ hasText: "河畔书屋的店主" });
+    await roleResult.getByRole("button", { name: "编辑这版" }).click();
+    await d
+      .getByLabel("公开简介", { exact: true })
+      .fill("还没采用的修改，收起之后也要在。");
+    await d.getByRole("button", { name: "收起编辑草稿" }).click();
+    await expect(d.getByLabel("公开简介", { exact: true })).toHaveCount(0);
+    await d
+      .getByRole("button", { name: "继续编辑草稿" })
+      .scrollIntoViewIfNeeded();
+    await mkdir("outputs/generator-fixes", { recursive: true });
+    await page.screenshot({
+      path: `outputs/generator-fixes/${width}-collapsed.png`,
+      fullPage: true,
+    });
+    await d.getByRole("button", { name: "关闭", exact: true }).click();
+    await page.reload();
+    await open(page);
+    if (width < 700)
+      await d.getByRole("tab", { name: "结果", exact: true }).click();
+    await expect(d.getByRole("button", { name: "继续编辑草稿" })).toBeVisible();
+    // Re-selecting the same version resumes the draft instead of resetting it.
+    await roleResult.getByRole("button", { name: "编辑这版" }).click();
+    await expect(d.getByLabel("公开简介", { exact: true })).toHaveValue(
+      "还没采用的修改，收起之后也要在。",
+    );
+    page.once("dialog", (confirm) => confirm.dismiss());
+    await d.getByRole("button", { name: "放弃修改", exact: true }).click();
+    await expect(d.getByLabel("公开简介", { exact: true })).toHaveValue(
+      "还没采用的修改，收起之后也要在。",
+    );
+    await d.getByRole("button", { name: "保存为新的结果版本" }).click();
+    await expect(d.getByLabel("公开简介", { exact: true })).toHaveCount(0);
+    const worldResult = d
+      .getByTestId("generator-result")
+      .filter({ hasText: "IF 河畔书屋" });
+    await worldResult.getByRole("button", { name: "编辑这版" }).click();
+    await d.getByLabel("标题", { exact: true }).fill("深冬仍然亮灯的书屋");
+    await d.getByRole("button", { name: "保存为新的结果版本" }).click();
+    await expect(d.getByTestId("generator-result")).toHaveCount(2);
+    const renamed = d
+      .getByTestId("generator-result")
+      .filter({ hasText: "深冬仍然亮灯的书屋" });
+    await expect(renamed.getByLabel("结果版本").locator("option")).toHaveCount(
+      2,
+    );
+    await renamed.scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: `outputs/generator-fixes/${width}-versions.png`,
+      fullPage: true,
+    });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await renamed.getByLabel("结果版本").selectOption({ label: "版本 1" });
+    await worldResult.getByRole("button", { name: "恢复为新版本" }).click();
+    await expect(
+      worldResult.getByLabel("结果版本").locator("option"),
+    ).toHaveCount(3);
+    expect(requests).toHaveLength(4);
+  });
+
+test("superseded requests recover in an independent conversation without another automatic API call", async ({
+  page,
+}) => {
+  await seed(page);
+  await setup(page);
+  await page.route("https://generator.fixture.test/**", (route) =>
+    route.fulfill({ status: 500, body: "旧请求失败" }),
+  );
+  const d = dialog(page);
+  await d.getByRole("button", { name: "确认目标与参考，开始访谈" }).click();
+  await expect(d.getByRole("alert")).toContainText("500");
+  await page.unroute("https://generator.fixture.test/**");
+  const requests = await mocked(page);
+  await d
+    .getByLabel("补充想法", { exact: true })
+    .fill("这是新的方向，不要被旧回复覆盖");
+  await d.getByRole("button", { name: "发送并继续", exact: true }).click();
+  await expect(
+    d.getByRole("checkbox", { name: "照顾家人", exact: true }),
+  ).toBeVisible();
+  const before = (await readStore(page, "generatorSessions"))[0];
+  await d.getByText("请求记录与恢复", { exact: true }).click();
+  await expect(
+    d.getByRole("button", { name: "从此批次未完成处继续" }),
+  ).toBeDisabled();
+  await d.getByRole("button", { name: "在独立会话恢复" }).click();
+  await expect
+    .poll(async () => (await readStore(page, "generatorSessions")).length)
+    .toBe(2);
+  await expect(
+    d.getByRole("button", { name: "从此批次未完成处继续" }),
+  ).toBeEnabled();
+  expect(requests).toHaveLength(1);
+  await mkdir("outputs/generator-fixes", { recursive: true });
+  await d
+    .getByRole("button", { name: "从此批次未完成处继续" })
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: "outputs/generator-fixes/recovery.png",
+    fullPage: true,
+  });
+  await d.getByRole("button", { name: "从此批次未完成处继续" }).click();
+  await expect(d.getByTestId("generator-result")).toHaveCount(2);
+  expect(requests[1].p.history.map((t: any) => t.text)).not.toContain(
+    "这是新的方向，不要被旧回复覆盖",
+  );
+  expect(
+    (await readStore(page, "generatorSessions")).find((s) => s.id === before.id)
+      .turnIds,
+  ).toEqual(before.turnIds);
+});
+
+for (const width of [1280, 390, 360])
   test(`visual ${width}: material picker, questions, results and connection stay within viewport`, async ({
     page,
   }) => {

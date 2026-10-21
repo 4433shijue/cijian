@@ -1,4 +1,5 @@
 import { generatorTables, generatorSchemas } from "./generator-types";
+import { completionBackupRows } from "./completion-backup";
 import { validateGeneratorBackup, remapGenerator } from "./generator-backup";
 import { ensureAutomation } from "./phone-automation";
 import { extraSchemas, extraTables, automationTables } from "./work-types";
@@ -578,7 +579,9 @@ export async function exportBackup() {
   return db.transaction(
     "r",
     [
-      ...[...phoneTables, ...extraTables, ...generatorTables].map(t => db.table(t)),
+      ...[...phoneTables, ...extraTables, ...generatorTables].map((t) =>
+        db.table(t),
+      ),
       db.roles,
       db.stories,
       db.world,
@@ -588,50 +591,66 @@ export async function exportBackup() {
       db.preferences,
       db.chatBatches,
       db.theaters,
+      db.roleCompletionDrafts,
     ],
-    async () => ({
-      format: "little-scene",
-      version: 8,
-      ...Object.fromEntries(await Promise.all([...extraTables,...generatorTables].map(async t => [t, await db.table(t).toArray()]))),
-      phoneSpaces: await db.phoneSpaces.toArray(),
-      phoneConversations: await db.phoneConversations.toArray(),
-      phoneRecords: await db.phoneRecords.toArray(),
-      phoneAssets: await db.phoneAssets.toArray(),
-      phoneRuns: await db.phoneRuns.toArray(),
-      created: new Date().toISOString(),
-      roles: await db.roles.toArray(),
-      stories: (await db.stories.toArray()).map(
-        ({
-          inspiration,
-          inspirationRequest,
-          inspirationRevision,
-          memorySelection,
-          ...story
-        }) => ({
-          ...story,
-          theaterDensity: story.theaterDensity ?? "standard",
-        }),
-      ),
-      world: await db.world.toArray(),
-      events: (await db.events.toArray()).map(({ request, ...e }) => e),
-      memories: await db.memories.toArray(),
-      profiles: (await db.profiles.toArray()).map(({ key, ...p }) => ({
-        ...p,
-        remember: false,
-      })),
-      preferences: (await db.preferences.toArray()).map((preferences) => ({
-        ...preferences,
-        theaterPresets: preferences.theaterPresets?.map(resolveTheaterPreset),
-      })),
-      chatBatches: (await db.chatBatches.toArray()).map(
-        ({ request, ...batch }) => batch,
-      ),
-      theaters: (await db.theaters.toArray()).map((theater) => ({
-        ...theater,
-        presets: theater.presets.map(normalizeTheaterPresetSnapshot),
-        density: theater.density ?? "standard",
-      })),
-    }),
+    async () => {
+      const legacy = completionBackupRows(
+        await db.roleCompletionDrafts.get("role-completion"),
+      );
+      return {
+        format: "little-scene",
+        version: 8,
+        ...Object.fromEntries(
+          await Promise.all(
+            [...extraTables, ...generatorTables].map(async (t) => [
+              t,
+              [
+                ...(await db.table(t).toArray()),
+                ...(t in legacy ? legacy[t as keyof typeof legacy] : []),
+              ],
+            ]),
+          ),
+        ),
+        phoneSpaces: await db.phoneSpaces.toArray(),
+        phoneConversations: await db.phoneConversations.toArray(),
+        phoneRecords: await db.phoneRecords.toArray(),
+        phoneAssets: await db.phoneAssets.toArray(),
+        phoneRuns: await db.phoneRuns.toArray(),
+        created: new Date().toISOString(),
+        roles: await db.roles.toArray(),
+        stories: (await db.stories.toArray()).map(
+          ({
+            inspiration,
+            inspirationRequest,
+            inspirationRevision,
+            memorySelection,
+            ...story
+          }) => ({
+            ...story,
+            theaterDensity: story.theaterDensity ?? "standard",
+          }),
+        ),
+        world: await db.world.toArray(),
+        events: (await db.events.toArray()).map(({ request, ...e }) => e),
+        memories: await db.memories.toArray(),
+        profiles: (await db.profiles.toArray()).map(({ key, ...p }) => ({
+          ...p,
+          remember: false,
+        })),
+        preferences: (await db.preferences.toArray()).map((preferences) => ({
+          ...preferences,
+          theaterPresets: preferences.theaterPresets?.map(resolveTheaterPreset),
+        })),
+        chatBatches: (await db.chatBatches.toArray()).map(
+          ({ request, ...batch }) => batch,
+        ),
+        theaters: (await db.theaters.toArray()).map((theater) => ({
+          ...theater,
+          presets: theater.presets.map(normalizeTheaterPresetSnapshot),
+          density: theater.density ?? "standard",
+        })),
+      };
+    },
   );
 }
 export async function importBackup(value: unknown, replace = false) {

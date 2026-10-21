@@ -20,7 +20,10 @@ import {
   migrateCompletionGenerator,
   deleteGenerator,
   recoverGeneratorStep,
+  forkGeneratorRecovery,
+  saveGeneratorDraft,
 } from "../src/generator";
+import { generatorResultGroups } from "../src/generator-results";
 import {
   generatorTables,
   newGeneratorInput,
@@ -655,7 +658,7 @@ it("restores a migrated legacy failed card after backup import without querying 
   )!;
   const step = (
     await db.generatorSteps.where("sessionId").equals(copy.id).toArray()
-  )[0];
+  ).find((s) => s.status !== "complete")!;
   const m = mock();
   const target = copy.input.targets[0];
   await recoverGeneratorStep(
@@ -710,6 +713,289 @@ it("does not let a stale request overwrite a step completed by a replacement own
   );
   expect((await db.generatorSteps.get(step.id))!.status).toBe("complete");
 });
+it("preserves collapsed manual drafts through both backup paths", async () => {
+  const s = await setup();
+  mock();
+  await advanceGenerator(s.id, "", [], true);
+  const d = await generatorData(s.id),
+    r = d.results[0];
+  await saveGeneratorDraft({
+    ...d.session,
+    editor: {
+      resultId: r.id,
+      card: { ...r.card!, bio: "尚未采用的手写修改" },
+      collapsed: true,
+    },
+  });
+  for (const b of [
+    await exportBackup(),
+    JSON.parse(await (await exportBackupBlob(uid())).blob.text()),
+  ]) {
+    validateBackup(b);
+    expect(b.generatorSessions[0].editor.collapsed).toBe(true);
+    await importBackup(b, true);
+    const restored = (await db.generatorSessions.toArray())[0];
+    expect(restored.editor?.card?.bio).toBe("尚未采用的手写修改");
+    expect(restored.editor?.collapsed).toBe(true);
+    expect(
+      await db.generatorResults.get(restored.editor!.resultId),
+    ).toBeDefined();
+  }
+});
+
+it.each(["direct", "streamed"])(
+  "backs up latest legacy edits and recovery data after migration with %s export",
+  async (path) => {
+    const old = emptyCompletionDraft();
+    old.input.source = "迁移之前";
+    await db.roleCompletionDrafts.put(old);
+    await migrateCompletionGenerator();
+    old.input.source = "迁移之后又编辑的原文";
+    old.input.creativity = "creative";
+    old.input.targets = "新的候选";
+    old.candidates = [
+      {
+        id: "latest-target",
+        name: "新人物",
+        description: "未生成的候选",
+        selected: true,
+      },
+    ];
+    old.cards = [
+      {
+        id: "latest-card",
+        candidateId: "latest-target",
+        name: "新人物",
+        bio: "最新手写简介",
+        sections: completionDimensions.map((title) => ({
+          title,
+          content: "新设定",
+          basis: "created",
+          evidence: "",
+          edited: true,
+        })),
+        selected: false,
+        savedRoleId: role.id,
+      },
+    ];
+    old.raw = "另外保留的未完成输出";
+    old.attempts = [
+      {
+        id: "latest-attempt",
+        stage: "card",
+        target: old.candidates[0],
+        inputKey: "new",
+        sourceKey: "new",
+        raw: "失败输出",
+        recoveryText: "手工修复中",
+        state: "failed",
+        error: "连接中断",
+        created: 2,
+        updated: 3,
+      },
+    ];
+    await db.roleCompletionDrafts.put(old);
+    await migrateCompletionGenerator();
+    const b: any =
+      path === "direct"
+        ? await exportBackup()
+        : JSON.parse(await (await exportBackupBlob(uid())).blob.text());
+    const snapshot = b.generatorSessions.find(
+      (s: any) => s.title === "旧版补全 · 最新编辑备份",
+    );
+    expect(snapshot.input.source).toBe(old.input.source);
+    expect(
+      (await db.generatorSessions.get("legacy-role-completion"))!.input.source,
+    ).toBe("迁移之前");
+    expect(await db.roleCompletionDrafts.get(old.id)).toEqual(old);
+    validateBackup(b);
+    await db.roleCompletionDrafts.clear();
+    if (path === "direct") await importBackup(b, true);
+    else {
+      const sid = uid();
+      await stageBackup(new Blob([JSON.stringify(b)]), sid);
+      await commitStaged(sid, { replace: true, applySettings: true });
+    }
+    const imported = (await db.generatorSessions.toArray()).find(
+      (s) => s.title === snapshot.title,
+    )!;
+    const data = await generatorData(imported.id);
+    expect(data.results[0].card!.bio).toBe("最新手写简介");
+    expect(await db.roles.get(data.results[0].savedId)).toBeDefined();
+    const archive = data.steps.map((s) => JSON.parse(s.legacyData!));
+    expect(
+      archive.some(
+        (a) =>
+          a.input?.creativity === "creative" &&
+          a.candidates[0].description === "未生成的候选",
+      ),
+    ).toBe(true);
+    expect(archive.some((a) => a.attempt?.recoveryText === "手工修复中")).toBe(
+      true,
+    );
+    expect(
+      archive.some(
+        (a) => a.card?.sections[0].edited && a.card?.selected === false,
+      ),
+    ).toBe(true);
+    expect(data.steps.some((s) => s.raw === old.raw)).toBe(true);
+    expect(await db.roleCompletionDrafts.count()).toBe(0);
+  },
+);
+
+it("rejects stale interview retries and local recovery, then resumes independently with frozen settings", async () => {
+  const s = await setup();
+  mock(() => new Response("failed", { status: 500 }));
+  await expect(advanceGenerator(s.id, "旧回答")).rejects.toThrow();
+  const failed = (await generatorData(s.id)).steps[0];
+  const m = mock(() => ({ ...interview, confirmed: ["新的方向"] }));
+  await advanceGenerator(s.id, "新回答");
+  const before = await generatorData(s.id);
+  await expect(retryGenerator(s.id, failed.batchId)).rejects.toThrow(
+    "独立会话恢复",
+  );
+  await expect(
+    recoverGeneratorStep(failed.id, JSON.stringify(interview)),
+  ).rejects.toThrow("独立会话恢复");
+  expect(m.requests).toHaveLength(1);
+  expect((await generatorData(s.id)).session.turnIds).toEqual(
+    before.session.turnIds,
+  );
+  expect(await db.generatorSteps.get(failed.id)).toEqual(failed);
+  await db.profiles.update(profile.id, { temperature: 0.9 });
+  const fork = await forkGeneratorRecovery(failed.id);
+  expect(m.requests).toHaveLength(1);
+  const copied = (await generatorData(fork.id)).steps[0];
+  await retryGenerator(fork.id, copied.batchId);
+  expect(m.requests).toHaveLength(2);
+  expect(m.requests[1].body.temperature).toBe(failed.profile!.temperature);
+  expect(m.requests[1].payload.history.map((t: any) => t.text)).toEqual([
+    "旧回答",
+  ]);
+  expect((await generatorData(s.id)).session.turnIds).toEqual(
+    before.session.turnIds,
+  );
+  expect((await generatorData(fork.id)).session.turnIds).toHaveLength(2);
+  validateBackup(await exportBackup());
+});
+
+it("recovers a superseded multi-person batch without regenerating its successful cards", async () => {
+  const s = await setup(true);
+  mock((p) =>
+    p.targetId === "target-b"
+      ? new Response("failed", { status: 500 })
+      : card(p.targetId, "林舟"),
+  );
+  await expect(
+    advanceGenerator(s.id, "旧版双人卡", [], true),
+  ).rejects.toThrow();
+  const failed = (await generatorData(s.id)).steps.find(
+    (s) => s.status === "failed",
+  )!;
+  mock();
+  await advanceGenerator(s.id, "已继续下一轮", [], true);
+  const original = await generatorData(s.id);
+  const fork = await forkGeneratorRecovery(failed.id);
+  const copy = await generatorData(fork.id);
+  const m = mock();
+  await retryGenerator(fork.id, copy.steps[0].batchId);
+  expect(m.requests.map((r) => r.payload.task)).toEqual(["card", "world"]);
+  expect(m.requests[0].payload.targetId).toBe(fork.input.targets[1].id);
+  expect(m.requests[0].payload.completedCards[0].targetId).toBe(
+    fork.input.targets[0].id,
+  );
+  expect((await generatorData(s.id)).results).toEqual(original.results);
+  expect(
+    (await generatorData(fork.id)).results.filter((r) => !r.needsReview),
+  ).toHaveLength(2);
+  validateBackup(await exportBackup());
+});
+
+it("refuses retries based on edited result versions and preserves them in a recovery fork", async () => {
+  const s = await setup();
+  mock();
+  await advanceGenerator(s.id, "", [], true);
+  const result = (await generatorData(s.id)).results[0];
+  mock(() => new Response("failed", { status: 500 }));
+  await expect(advanceGenerator(s.id, "请再想想")).rejects.toThrow();
+  const failed = (await generatorData(s.id)).steps.find(
+    (s) => s.status === "failed",
+  )!;
+  await editGeneratorResult(result.id, {
+    card: { ...result.card!, bio: "之后手改的设定" },
+  });
+  const m = mock(() => interview);
+  await expect(retryGenerator(s.id, failed.batchId)).rejects.toThrow(
+    "参考结果已被编辑",
+  );
+  expect(m.requests).toHaveLength(0);
+  const fork = await forkGeneratorRecovery(failed.id);
+  const step = (await generatorData(fork.id)).steps[0];
+  await retryGenerator(fork.id, step.batchId);
+  expect(m.requests[0].payload.existingResults[0].card.bio).toBe(
+    result.card!.bio,
+  );
+  expect(
+    (await generatorData(s.id)).results.some(
+      (r) => r.card?.bio === "之后手改的设定",
+    ),
+  ).toBe(true);
+});
+
+it("keeps renamed worlds in one version chain and distinct same-title worlds separate in requests and backups", async () => {
+  const s = await setup();
+  const world = {
+    title: "旧标题",
+    text: "旧设定",
+    type: "world",
+    audience: "author",
+    roleIds: [],
+    knownBy: [],
+  };
+  mock((p) =>
+    p.task === "world"
+      ? { worlds: [world, { ...world, text: "同名的另一条设定" }] }
+      : card(p.targetId, "林舟"),
+  );
+  await advanceGenerator(s.id, "", [], true);
+  const original = (await generatorData(s.id)).results.find(
+    (r) => r.world?.text === "旧设定",
+  )!;
+  // Even same-millisecond edits/restores must remain ordered by version ancestry.
+  const clock = vi.spyOn(Date, "now").mockReturnValue(original.created);
+  const renamed = await editGeneratorResult(original.id, {
+    world: { ...original.world!, title: "新标题" },
+  });
+  const d = await generatorData(s.id);
+  expect(
+    [...generatorResultGroups(d.results).values()].map((l) => l.length).sort(),
+  ).toEqual([1, 1, 2]);
+  await expect(
+    saveGeneratorResults(s.id, [original.id, renamed.id]),
+  ).rejects.toThrow("一个版本");
+  const m = mock(() => interview);
+  await advanceGenerator(s.id, "继续完善");
+  const refs = m.requests[0].payload.existingResults
+    .filter((r: any) => r.world)
+    .map((r: any) => r.world);
+  expect(refs).toHaveLength(2);
+  expect(refs.find((r: any) => r.text === "旧设定").title).toBe("新标题");
+  await importBackup(await exportBackup(), true);
+  const copy = (await db.generatorSessions.toArray())[0];
+  const restored = await generatorData(copy.id);
+  const chain = [...generatorResultGroups(restored.results).values()].find(
+    (l) => l.length === 2,
+  )!;
+  expect(chain[1].world!.title).toBe("新标题");
+  await editGeneratorResult(chain[0].id, { world: chain[0].world });
+  expect(
+    [...generatorResultGroups((await generatorData(copy.id)).results).values()]
+      .find((l) => l.length === 3)!
+      .at(-1)!.world!.title,
+  ).toBe("旧标题");
+  clock.mockRestore();
+});
+
 it("records migration independently so deleting or importing a compatibility session does not recreate it", async () => {
   const old = emptyCompletionDraft();
   old.input.source = "只迁移一次";

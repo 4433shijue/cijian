@@ -1,4 +1,5 @@
 import { generatorTables } from "./generator-types";
+import { completionBackupRows } from "./completion-backup";
 import { generatorLinks, checkGeneratorRow, remapGenerator } from "./generator-backup";
 import { ensureAutomation } from "./phone-automation";
 import { extraTables } from "./work-types";
@@ -575,10 +576,11 @@ export async function exportBackupBlob(
         }).slice(0, -1),
       );
       let records = 0;
+      const legacy = completionBackupRows(s ? undefined : await db.roleCompletionDrafts.get("role-completion"));
       for (const table of backupTables) {
         await writer.write(',"' + table + '":[');
         let first = true;
-        await visitRows(db.table(table), async (raw: any) => {
+        const writeRow = async (raw: any) => {
           control.check();
           if (s) {
             if (generatorTables.includes(table as any)) return;
@@ -624,7 +626,9 @@ export async function exportBackupBlob(
               totalBytes: 0,
               records,
             });
-        });
+        };
+        await visitRows(db.table(table), writeRow);
+        if (table in legacy) for (const row of legacy[table as keyof typeof legacy]) await writeRow(row);
         await writer.write("]");
       }
       await writer.write("}");

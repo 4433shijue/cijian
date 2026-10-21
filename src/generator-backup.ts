@@ -20,6 +20,8 @@ export function generatorLinks(table: string, row: any): [string, string][] {
     if (row.editor) links.push(["generatorResults", row.editor.resultId]);
   }
   if (table === "generatorSteps") {
+    for (const id of row.referenceResultIds || [])
+      links.push(["generatorResults", id]);
     links.push(
       ...row.materialIds.map((id: string): [string, string] => [
         "generatorMaterials",
@@ -122,6 +124,7 @@ export function remapGenerator(
     "resultId",
     "questionId",
     "candidateId",
+    "savedRoleId",
   ]);
   const lists = new Set([
     "materialIds",
@@ -130,6 +133,7 @@ export function remapGenerator(
     "roleIds",
     "knownBy",
     "options",
+    "referenceResultIds",
   ]);
   const remap = (v: any, key = ""): any => {
     if (Array.isArray(v))

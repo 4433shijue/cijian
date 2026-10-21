@@ -4,6 +4,12 @@ import { assemble } from "./context";
 import { generate } from "./model";
 import { samplingParameters } from "./sampling";
 import { prompt } from "./prompts";
+import {
+  generatorResultGroups,
+  generatorStepIsCurrent,
+  generatorStepTurnIds,
+} from "./generator-results";
+import { remapGenerator } from "./generator-backup";
 import { parseCompletionJSON } from "./role-json";
 import { completionDimensions } from "./role-completion-types";
 import {
@@ -241,13 +247,24 @@ export async function editGeneratorResult(
       if (!r) throw Error("结果已不存在");
       const s = await session(r.sessionId);
       idle(s);
+      if (r.revision !== s.revision || r.needsReview)
+        throw Error(
+          "这份结果属于以前的资料修订，请先核对当前结果；编辑草稿仍保留。",
+        );
+      const existing = (
+        await db.generatorResults.where("sessionId").equals(s.id).toArray()
+      ).filter((x) => x.revision === s.revision && !x.needsReview);
+      const versions = [...generatorResultGroups(existing).values()].find(
+        (list) => list.some((x) => x.id === r.id),
+      )!;
+      const previous = r.kind === "world" ? versions.at(-1)! : r;
       const next = generatorSchemas.generatorResults.parse({
         ...r,
         ...changes,
         id: uid(),
-        previousId: r.id,
+        previousId: previous.id,
         savedId: "",
-        created: Date.now(),
+        created: Math.max(Date.now(), previous.created),
       });
       validateResult(
         next,
@@ -316,6 +333,13 @@ export async function saveGeneratorResults(
           .size !== rows.filter((r) => r.kind === "card").length
       )
         throw Error("同一人物只能同时保存一个版本");
+      const allResults = await db.generatorResults
+        .where("sessionId")
+        .equals(sessionId)
+        .toArray();
+      for (const list of generatorResultGroups(allResults).values())
+        if (list.filter((r) => resultIds.includes(r.id)).length > 1)
+          throw Error("同一条结果只能同时保存一个版本");
       const mapping = new Map<string, string>();
       // Explicitly selected cards define the world links; never silently link a reference character.
       for (const r of rows.filter((r) => r.kind === "card")) {
@@ -427,16 +451,9 @@ async function makeSteps(
   const existing = (
     await db.generatorResults.where("sessionId").equals(s.id).toArray()
   ).filter((r) => r.revision === s.revision && !r.needsReview);
-  const latest = [
-    ...new Map(
-      existing
-        .sort((a, b) => a.created - b.created)
-        .map((r) => [
-          r.kind === "card" ? r.targetId : "world:" + r.world?.title,
-          r,
-        ]),
-    ).values(),
-  ];
+  const latest = [...generatorResultGroups(existing).values()].map((list) =>
+    list.at(-1)!,
+  );
   // Manual renaming changes the next request's display name, never its stable target ID.
   const input = {
     ...s.input,
@@ -489,7 +506,11 @@ async function makeSteps(
         text: m.text,
       })),
       history,
-      existingResults: latest.map((r) => ({ card: r.card, world: r.world })),
+      existingResults: latest.map((r) => ({
+        id: r.id,
+        card: r.card,
+        world: r.world,
+      })),
       instruction:
         task.kind === "interview"
           ? "继续访谈，或在足够时声明 ready。"
@@ -520,6 +541,7 @@ async function makeSteps(
         ...task,
         targets: input.targets,
         materialIds: s.materialIds,
+        referenceResultIds: latest.map((r) => r.id),
         status: "pending" as const,
         created: Date.now(),
         raw: "",
@@ -626,6 +648,30 @@ function validateInterview(value: unknown) {
     throw Error("访谈状态与问题不一致，原始回复已保留");
   return v;
 }
+async function checkStepContext(step: GeneratorStep, s: GeneratorSession) {
+  if (!generatorStepIsCurrent(s, step))
+    throw Error(
+      "这条请求之后对话或资料已有变化，请在独立会话恢复；当前对话和旧输出均已保留。",
+    );
+  if (step.referenceResultIds) {
+    const existing = (
+      await db.generatorResults.where("sessionId").equals(s.id).toArray()
+    ).filter(
+      (r) =>
+        r.revision === s.revision &&
+        !r.needsReview &&
+        r.batchId !== step.batchId,
+    );
+    const latest = [...generatorResultGroups(existing).values()]
+      .map((list) => list.at(-1)!.id)
+      .sort();
+    const expected = [...step.referenceResultIds].sort();
+    if (JSON.stringify(latest) !== JSON.stringify(expected))
+      throw Error(
+        "参考结果已被编辑，请在独立会话恢复原请求；当前结果未被覆盖。",
+      );
+  }
+}
 async function executeStep(
   step: GeneratorStep,
   token: string,
@@ -635,7 +681,10 @@ async function executeStep(
   if (step.status === "complete") return;
   if (step.kind === "legacy")
     throw Error("旧请求保存在兼容恢复入口；可重新解析或建立新访谈。");
-  await checkRun(step.sessionId, token, step.revision, signal);
+  await checkStepContext(
+    step,
+    await checkRun(step.sessionId, token, step.revision, signal),
+  );
   if (!step.profile) throw Error("这一步缺少接口快照，请使用当前设置重新生成");
   const profiles = await db.profiles.toArray();
   const live =
@@ -779,6 +828,7 @@ async function acceptStep(
     async () => {
       const s = await checkRun(step.sessionId, token, step.revision, signal);
       if ((await db.generatorSteps.get(step.id))?.status === "complete") return;
+      await checkStepContext(step, s);
       let resultId = "";
       if (step.kind === "interview") {
         const interview = validateInterview(parsed);
@@ -846,14 +896,27 @@ async function acceptStep(
             card,
           });
         } else {
-          for (const world of worldsSchema.parse(parsed).worlds)
+          const worlds = worldsSchema.parse(parsed).worlds;
+          const references = JSON.parse(step.user).existingResults || [];
+          for (const world of worlds) {
+            // Preserve an unambiguous existing entry when the model revises it.
+            // Equal titles in independent entries never collapse into one identity.
+            const matches = references.filter(
+              (r: any) => r.world?.title === world.title && r.id,
+            );
             results.push({
               ...base,
+              previousId:
+                matches.length === 1 &&
+                worlds.filter((w) => w.title === world.title).length === 1
+                  ? matches[0].id
+                  : "",
               id: uid(),
               targetId: "",
               kind: "world",
               world,
             });
+          }
         }
         results.forEach((r) => {
           validateResult(
@@ -991,6 +1054,7 @@ export async function retryGenerator(
     const decision = steps.find((s) => s.kind === "interview");
     const finished = decision && (await db.generatorSteps.get(decision.id));
     if (finished?.resultId && !steps.some((s) => s.kind === "card")) {
+      await checkStepContext(finished, await session(id));
       const turn = await db.generatorTurns.get(finished.resultId);
       if (turn?.interview?.ready) {
         const current = await session(id);
@@ -1015,6 +1079,117 @@ export async function retryGenerator(
       }
     }
   });
+}
+// Fork only on an explicit user action. Preserve the frozen requests and completed
+// substeps, while keeping any later conversation/results out of the active branch.
+export async function forkGeneratorRecovery(stepId: string) {
+  return db.transaction(
+    "rw",
+    generatorTables.map((t) => db.table(t)),
+    async () => {
+      const step = await db.generatorSteps.get(stepId);
+      if (!step || step.kind === "legacy")
+        throw Error("请选择带参考快照的访谈请求");
+      const data = await generatorData(step.sessionId);
+      idle(data.session);
+      const batch = data.steps.filter((s) => s.batchId === step.batchId);
+      const anchor =
+        batch.find((s) => s.kind === "card") ||
+        batch.find((s) => s.kind === "interview") ||
+        step;
+      const turnIds = generatorStepTurnIds(anchor);
+      if (
+        !turnIds ||
+        turnIds.some((id) => !data.turns.some((t) => t.id === id))
+      )
+        throw Error("原请求的问答快照不完整，请保留原始输出并新建访谈");
+      const payload = JSON.parse(anchor.user);
+      const references: string[] =
+        anchor.referenceResultIds ||
+        (payload.existingResults || []).flatMap((x: any) => {
+          const match = data.results
+            .filter(
+              (r) =>
+                r.created <= anchor.created &&
+                JSON.stringify({ card: r.card, world: r.world }) ===
+                  JSON.stringify({ card: x.card, world: x.world }),
+            )
+            .sort((a, b) => b.created - a.created)[0];
+          return match ? [match.id] : [];
+        });
+      const keep = new Set(references);
+      for (const r of data.results)
+        if (
+          r.batchId === step.batchId &&
+          (!r.previousId || references.includes(r.previousId))
+        )
+          keep.add(r.id);
+      for (const s of batch)
+        if (s.kind === "world" && s.resultId) keep.add(s.resultId);
+      const ids = new Map<string, string>();
+      const map = (id: string) => {
+        if (!ids.has(id)) ids.set(id, uid());
+        return ids.get(id)!;
+      };
+      const source: GeneratorSession = {
+        ...data.session,
+        title: data.session.title + " · 独立恢复",
+        input: inputSchema.parse(payload.input),
+        revision: step.revision,
+        materialIds: anchor.materialIds,
+        turnIds,
+        draft: "",
+        answers: [],
+        editor: undefined,
+        setupDraft: undefined,
+        selectionDraft: undefined,
+        version: 0,
+        created: Date.now(),
+        updated: Date.now(),
+        lease: undefined,
+      };
+      const next: GeneratorSession = remapGenerator(
+        "generatorSessions",
+        source,
+        map,
+      );
+      await db.generatorSessions.add(bounded(next));
+      for (const m of data.materials)
+        await db.generatorMaterials.add(
+          bounded({
+            ...remapGenerator("generatorMaterials", m, map),
+            sourceId: m.sourceId,
+          }),
+        );
+      for (const t of data.turns)
+        await db.generatorTurns.add(
+          bounded(remapGenerator("generatorTurns", t, map)),
+        );
+      for (const r of data.results) {
+        const row = remapGenerator(
+          "generatorResults",
+          { ...r, needsReview: !keep.has(r.id) },
+          map,
+        );
+        // Already saved library entries remain references, not copies made by recovery.
+        row.savedId = r.savedId;
+        await db.generatorResults.add(bounded(row));
+      }
+      for (const s of batch) {
+        const row = remapGenerator(
+          "generatorSteps",
+          {
+            ...s,
+            referenceResultIds: s.referenceResultIds || references,
+          },
+          map,
+        );
+        row.profile = s.profile;
+        await db.generatorSteps.add(bounded(row));
+      }
+      return next;
+    },
+  );
 }
 export async function recoverGeneratorStep(stepId: string, editedRaw: string) {
   const step = await db.generatorSteps.get(stepId);
