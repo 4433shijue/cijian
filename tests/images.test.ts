@@ -609,6 +609,10 @@ it("claims a duplicate job once, discards stopped results, and retries only afte
   await expect(retryImageJob(a!.id)).rejects.toThrow("正在停止");
   finish(imageResponse());
   await completion;
+  // With Web Locks (browsers and Node 24), the duplicate run returns early.
+  // Join the original execution's lock before checking its settled state.
+  if (typeof navigator !== "undefined" && navigator.locks)
+    await navigator.locks.request(`cijian-image:${a!.id}`, () => {});
   expect((await db.imageJobs.get(a!.id))?.status).toBe("interrupted");
   expect(await db.imageAssets.count()).toBe(0);
   await retryImageJob(a!.id);
