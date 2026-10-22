@@ -1,3 +1,5 @@
+import { imageTables } from "./image-types";
+import { imageLinks, checkImageRow, remapImage } from "./image-backup";
 import { generatorTables } from "./generator-types";
 import { completionBackupRows } from "./completion-backup";
 import { generatorLinks, checkGeneratorRow, remapGenerator } from "./generator-backup";
@@ -154,6 +156,11 @@ async function checkStaged(
       throw Error("故事角色关联不完整");
     stories.set(s.id, roles); storyKinds.set(s.id,s.kind);
     if(version>=6)for(const id of s.worldIds){const entry=await staged(session,"storyWorld",id);if(entry?.storyId!==s.id)throw Error("作品世界书副本缺失");}
+  });
+  for (const table of imageTables) await eachStaged(session, table, async row => {
+    const related = new Map<string, any>();
+    for (const [t, id] of imageLinks(table, row)) related.set(`${t}:${id}`, await staged(session, t as BackupTable, id));
+    checkImageRow(table, row, related);
   });
   for (const table of generatorTables) await eachStaged(session, table, async row => {
     const related = new Map<string, any>();
@@ -313,6 +320,7 @@ export function backupRemapper() {
     styleIds,
     theaterPresetIds,
     row(table: BackupTable, x: any, replace: boolean): any {
+      if (imageTables.includes(table as any)) return remapImage(table, x, id);
       if (generatorTables.includes(table as any)) return remapGenerator(table,x,id);
       if (extraTables.includes(table as any)) return remapExtra(table, x, id);
       if (table.startsWith("phone")) return remapPhone(table, x, id);
@@ -442,6 +450,7 @@ export async function commitStaged(
       control.transaction = Dexie.currentTransaction!;
       control.check();
       if (
+        (await db.imageJobs.where("status").anyOf("pending", "planning", "generating").count()) ||
         (await db.generatorSessions.filter(s => !!s.lease && s.lease.until > Date.now()).count()) ||
       (await db.phoneAutomationRuns.where("status").equals("running").count()) ||
       (await db.phoneRuns.where("status").equals("running").count()) ||
@@ -481,7 +490,7 @@ export async function commitStaged(
             table.name.startsWith("transfer") ||
             table.name === "roleDrafts" ||
             table.name === "roleCompletionDrafts" ||
-            (!apply && ["profiles", "preferences"].includes(table.name))
+            (!apply && ["profiles", "imageProfiles", "preferences"].includes(table.name))
           )
             continue;
           await table.clear();
@@ -489,7 +498,7 @@ export async function commitStaged(
       }
       let records = 0;
       for (const table of backupTables) {
-        if (table === "preferences" || (table === "profiles" && !apply))
+        if (table === "preferences" || (["profiles", "imageProfiles"].includes(table) && !apply))
           continue;
         await eachStaged(session, table, async (value) => {
           control.check();
@@ -521,7 +530,7 @@ export async function commitStaged(
           prompts: {},
         }),
         ...(apply && imported
-          ? { ...imported, activeProfile: remap.id(imported.activeProfile), generatorProfileId: imported.generatorProfileId ? remap.id(imported.generatorProfileId) : undefined }
+          ? { ...imported, activeProfile: remap.id(imported.activeProfile), activeImageProfile: imported.activeImageProfile ? remap.id(imported.activeImageProfile) : undefined, generatorProfileId: imported.generatorProfileId ? remap.id(imported.generatorProfileId) : undefined }
           : {}),
         stylePresets: styles,
         theaterPresets: theaterPresets.presets,
@@ -569,7 +578,7 @@ export async function exportBackupBlob(
       await writer.write(
         JSON.stringify({
           format: "little-scene",
-          version: 8,
+          version: 9,
           created: new Date().toISOString(),
           scope: s ? "story" : "library",
           ...(s ? { title: s.title } : {}),
@@ -584,10 +593,10 @@ export async function exportBackupBlob(
           control.check();
           if (s) {
             if (generatorTables.includes(table as any)) return;
-            if (["profiles", "roleDrafts", "roles", "world"].includes(table)) return;
+            if (["profiles", "imageProfiles", "roleDrafts", "roles", "world"].includes(table)) return;
             if (table === "stories" && raw.id !== s.id) return;
             if (
-              [...phoneTables, ...extraTables, "events", "memories", "chatBatches", "theaters"].includes(table) &&
+              [...phoneTables, ...extraTables, "imageJobs", "imageAssets", "events", "memories", "chatBatches", "theaters"].includes(table) &&
               raw.storyId !== s.id
             )
               return;
@@ -597,7 +606,7 @@ export async function exportBackupBlob(
           // Schema parsing deliberately excludes request traces, transient ideas,
           // and future internal fields from portable backups.
           const row: any = recordSchemas[table].parse(raw);
-          if (table === "profiles") {
+          if (table === "profiles" || table === "imageProfiles") {
             delete row.key;
             row.remember = false;
           }
@@ -606,6 +615,7 @@ export async function exportBackupBlob(
           if (s && table === "world") row.storyIds = [s.id];
           if (s && table === "preferences") {
             row.activeProfile = "";
+            delete row.activeImageProfile;
             delete row.generatorProfileId; delete row.generatorConnection; delete row.generatorLegacyMigrated;
             row.developer = false;
             row.prompts = {};

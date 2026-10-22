@@ -120,6 +120,9 @@ export interface Paragraph {
   public: boolean;
 }
 export interface Role {
+  imageAppearance?: string;
+  imageReference?: string;
+  photoHabit?: string;
   id: string;
   name: string;
   bio: string;
@@ -144,6 +147,7 @@ export interface WorldEntry {
   audience: "all" | "roles" | "author";
 }
 export interface Story {
+  images?: import("./image-types").ImageSettings;
   kind: "novel" | "phone";
   id: string;
   title: string;
@@ -287,6 +291,7 @@ export interface Profile {
   testedWithoutKey?: boolean;
 }
 export interface Preferences {
+  activeImageProfile?: string;
   id: "preferences";
   activeProfile: string;
   generatorProfileId?: string;

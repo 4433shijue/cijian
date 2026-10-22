@@ -22,6 +22,8 @@ export function phoneLinks(table: string, r: any): [string, string][] {
     add("phoneRuns", [r.runId]);
   }
   if (table === "phoneRuns") {
+    add("phoneAssets", [...r.steps, ...(r.rewriteBase?.steps || [])].flatMap((s: any) => (s.imageAssets || []).map((a: any) => a.id)));
+    add("phoneAssets", Object.values(r.staged || {}).flatMap((b: any) => b.flatMap((m: any) => m.assets)));
     add("phoneConversations", [r.conversationId]);
     add("phoneRecords", [
       r.parentId,

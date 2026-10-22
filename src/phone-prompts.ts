@@ -70,6 +70,7 @@ export const contentWire = object({
         enum: ["text", "image", "sticker", "audio", "transfer", "call"],
       },
       text: string,
+      imagePrompt: string,
       assets: strings,
       quoteId: string,
       amount: string,

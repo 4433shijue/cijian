@@ -29,6 +29,9 @@ import {
   type TheaterRecord,
 } from "./types";
 export class SceneDB extends Dexie {
+  imageProfiles!: Table<import("./image-types").ImageProfile, string>;
+  imageJobs!: Table<import("./image-types").ImageJob, string>;
+  imageAssets!: Table<import("./image-types").ImageAsset, string>;
   generatorSessions!: Table<GeneratorSession, string>;
   generatorMaterials!: Table<GeneratorMaterial, string>;
   generatorTurns!: Table<GeneratorTurn, string>;
@@ -70,6 +73,7 @@ export class SceneDB extends Dexie {
   transferChunks!: Table<TransferChunk, [string, number]>;
   constructor(name = "little-scene-v1") {
     super(name);
+    this.version(14).stores({ imageProfiles: "id", imageJobs: "id,storyId,sourceId,runId,status", imageAssets: "id,storyId" });
     this.version(1).stores({
       roles: "id",
       stories: "id,updated",
@@ -540,11 +544,13 @@ export async function setTimelineMode(
   });
 }
 export async function deleteStory(id: string) {
+  await (await import("./image-generation")).stopStoryImages(id);
   await (await import("./phone-automation")).pauseStoryAutomation(id);
   await db.transaction(
     "rw",
     [
       db.stories,
+      db.imageJobs, db.imageAssets,
       db.events,
       db.memories,
       db.jobs,
@@ -553,6 +559,8 @@ export async function deleteStory(id: string) {
       db.phoneAutomationSettings, db.phoneAutomationRuns, db.phoneAutomationSteps, db.phoneKnowledge, db.phoneWorldEvents, db.storyWorld, db.storyMigrations, db.legacyArchives, db.phoneBackgrounds, db.phoneDocuments, db.phoneReading, db.phoneDrafts, db.phoneEdits, db.theaters, db.phoneSpaces, db.phoneConversations, db.phoneRecords, db.phoneAssets, db.phoneRuns,
     ],
     async () => {
+      await db.imageJobs.where("storyId").equals(id).delete();
+      await db.imageAssets.where("storyId").equals(id).delete();
       for (const table of [db.phoneAutomationSettings, db.phoneAutomationRuns, db.phoneAutomationSteps, db.phoneKnowledge, db.phoneWorldEvents, db.storyWorld, db.storyMigrations, db.legacyArchives, db.phoneBackgrounds, db.phoneDocuments, db.phoneReading, db.phoneDrafts, db.phoneEdits, db.phoneSpaces, db.phoneConversations, db.phoneRecords, db.phoneAssets, db.phoneRuns]) await table.where("storyId").equals(id).delete();
       await db.events.where("storyId").equals(id).delete();
       await db.memories.where("storyId").equals(id).delete();

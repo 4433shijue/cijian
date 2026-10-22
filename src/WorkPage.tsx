@@ -1,3 +1,4 @@
+import { StoryImageSettings, RoleImageFields } from "./ImageSettings";
 import { PhoneAutomation } from "./PhoneAutomation";
 import { useState, type ComponentType } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -315,6 +316,7 @@ function WorkSettings({
           }
         />
       </label>
+      <StoryImageSettings story={story} />
       <h3>本作品角色</h3>
       {story.roles.map((r) => (
         <details key={r.id}>
@@ -365,6 +367,12 @@ function WorkSettings({
               }}
             />
           </label>
+          <RoleImageFields role={r} onChange={patch => {
+            void db.transaction("rw", db.stories, async () => {
+              const current = await db.stories.get(story.id);
+              if (current) await db.stories.update(story.id, { roles: current.roles.map(x => x.id === r.id ? { ...x, ...patch, updated: Date.now() } : x) });
+            }).catch(e => notify(String(e)));
+          }} />
           <p className="hint">完整人设只向角色本人提供，公开信息写在简介中。</p>
         </details>
       ))}

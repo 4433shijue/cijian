@@ -1,3 +1,5 @@
+import { imageTables, imageSchemas, imageSettingsSchema } from "./image-types";
+import { imageLinks, checkImageRow, remapImage } from "./image-backup";
 import { generatorTables, generatorSchemas } from "./generator-types";
 import { completionBackupRows } from "./completion-backup";
 import { validateGeneratorBackup, remapGenerator } from "./generator-backup";
@@ -25,6 +27,7 @@ const paragraph = z.object({
   public: z.boolean(),
 });
 const role = z.object({
+  imageAppearance: str.optional(), imageReference: str.optional(), photoHabit: str.optional(),
   id: str,
   name: str,
   bio: str,
@@ -133,6 +136,7 @@ const theater = z.object({
   }
 });
 const story = z.object({
+  images: imageSettingsSchema.optional(),
   kind: z.enum(["novel", "phone"]).optional(),
   id: str,
   title: str,
@@ -263,6 +267,7 @@ const profile = z.object({
   key: str.optional(),
 });
 const prefs = z.object({
+  activeImageProfile: str.optional(),
   id: z.literal("preferences"),
   activeProfile: str,
   generatorConnection: z.enum(["inherit","dedicated"]).optional(),
@@ -299,7 +304,7 @@ const prefs = z.object({
   ),
 });
 export const recordSchemas = {
-  ...phoneSchemas, ...extraSchemas, ...generatorSchemas,
+  ...phoneSchemas, ...extraSchemas, ...generatorSchemas, ...imageSchemas,
   roles: role,
   stories: story,
   world,
@@ -312,6 +317,9 @@ export const recordSchemas = {
   roleDrafts: z.object({ id: str, role }),
 };
 const schema = z.object({
+  imageProfiles: z.array(imageSchemas.imageProfiles).default([]),
+  imageJobs: z.array(imageSchemas.imageJobs).default([]),
+  imageAssets: z.array(imageSchemas.imageAssets).default([]),
   generatorSessions: z.array(generatorSchemas.generatorSessions).default([]),
   generatorMaterials: z.array(generatorSchemas.generatorMaterials).default([]),
   generatorTurns: z.array(generatorSchemas.generatorTurns).default([]),
@@ -337,7 +345,7 @@ const schema = z.object({
   phoneAssets: z.array(phoneSchemas.phoneAssets).default([]),
   phoneRuns: z.array(phoneSchemas.phoneRuns).default([]),
   format: z.literal("little-scene"),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9)]),
   created: str,
   roles: z.array(role),
   stories: z.array(story),
@@ -400,6 +408,11 @@ export function remapTheaterContent(
 
 export function validateBackup(raw: unknown) {
   const b = schema.parse(raw);
+  if (b.version >= 9) for (const table of imageTables) if (!Array.isArray((raw as any)[table])) throw Error("备份缺少资料区：" + table);
+  const imageRelated = new Map<string, any>();
+  for (const table of ["stories", "events", "phoneRecords", "phoneAssets", ...imageTables] as const)
+    for (const row of b[table]) imageRelated.set(`${table}:${row.id}`, row);
+  for (const table of imageTables) for (const row of b[table]) checkImageRow(table, row, imageRelated);
   if (b.version >= 8) for (const table of generatorTables) if (!Array.isArray((raw as any)[table])) throw Error("备份缺少资料区：" + table);
   validateGeneratorBackup(b);
   if (b.version >= 5) for (const table of phoneTables) if (!Array.isArray((raw as any)[table])) throw Error("备份缺少资料区：" + table);
@@ -579,7 +592,7 @@ export async function exportBackup() {
   return db.transaction(
     "r",
     [
-      ...[...phoneTables, ...extraTables, ...generatorTables].map((t) =>
+      ...[...phoneTables, ...extraTables, ...generatorTables, ...imageTables].map((t) =>
         db.table(t),
       ),
       db.roles,
@@ -599,7 +612,10 @@ export async function exportBackup() {
       );
       return {
         format: "little-scene",
-        version: 8,
+        version: 9,
+        imageProfiles: (await db.imageProfiles.toArray()).map(p => ({ ...imageSchemas.imageProfiles.parse(p), remember: false })),
+        imageJobs: await db.imageJobs.toArray(),
+        imageAssets: await db.imageAssets.toArray(),
         ...Object.fromEntries(
           await Promise.all(
             [...extraTables, ...generatorTables].map(async (t) => [
@@ -674,6 +690,7 @@ export async function importBackup(value: unknown, replace = false) {
   });
   await db.transaction("rw", db.tables, async () => {
     if (
+      (await db.imageJobs.where("status").anyOf("pending", "planning", "generating").count()) ||
       (await db.generatorSessions.filter(s => !!s.lease && s.lease.until > Date.now()).count()) ||
       (await db.phoneAutomationRuns.where("status").equals("running").count()) ||
       (await db.phoneRuns.where("status").equals("running").count()) ||
@@ -694,6 +711,7 @@ export async function importBackup(value: unknown, replace = false) {
     if (replace)
       for (const table of db.tables)
         if (![db.roleDrafts.name, db.roleCompletionDrafts.name].includes(table.name)) await table.clear();
+    for (const table of imageTables) await db.table(table).bulkAdd(b[table].map(row => remapImage(table, row, remap)));
     for (const table of generatorTables) await db.table(table).bulkAdd(b[table].map(row => remapGenerator(table,row,remap)));
     for (const table of extraTables) await db.table(table).bulkAdd(b[table].map(row => remapExtra(table, row, remap)));
     for (const table of phoneTables) await db.table(table).bulkAdd(b[table].map(row => remapPhone(table, row, remap)));
@@ -842,6 +860,7 @@ export async function importBackup(value: unknown, replace = false) {
               ...imported,
               theaterPresets: theaterPresets.presets,
               activeProfile: remap(imported.activeProfile),
+              activeImageProfile: imported.activeImageProfile ? remap(imported.activeImageProfile) : undefined,
               generatorProfileId: imported.generatorProfileId ? remap(imported.generatorProfileId) : undefined,
               stylePresets: imported.stylePresets?.map((preset) => ({
                 ...preset,

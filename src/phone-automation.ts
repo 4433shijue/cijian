@@ -1,4 +1,6 @@
 import { liveQuery } from "dexie";
+import { schedulePhoneImages } from "./image-scheduling";
+import { phoneImageInstruction } from "./image-generation";
 import { z } from "zod";
 import { db, keyFor } from "./db";
 import { uid, type Preferences, type PromptKind, type Profile } from "./types";
@@ -509,7 +511,7 @@ async function freezeRound(run: PhoneAutomationRun, round: number) {
               "phoneDocument",
               "phoneEvent",
             ] as PromptKind[]
-          ).map((k) => [k, phoneInstruction(k, prefs)]),
+          ).map((k) => [k, phoneInstruction(k, prefs) + "\n" + phoneImageInstruction(story, actorId)]),
         ),
         profile: { ...safeProfile, remember: false },
         time: addMinutes(options.startTime, (round - 1) * options.minutes),
@@ -649,7 +651,7 @@ async function enrichStep(step: PhoneAutomationStep) {
     }
 }
 function describe(step: PhoneAutomationStep, waiting: Record<string, number>) {
-  return `${step.context}\n【当前行动习惯】${JSON.stringify(step.options.habits[step.actorId] || defaultHabit())}\n【剧情自由度】${step.options.freedom === "limited" ? "有限创造，仅日常小事" : "主动发展，遵守作者方向与已有角色边界"}\n【作者方向】${step.options.direction}\n【剧情时间】${step.time}\n【角色编号】${JSON.stringify(step.roles)}\n【本人编号】${step.actorId}\n【用户控制角色】${step.options.takeover ? "无" : step.options.controlledRole}\n【等待用户的会话，不能继续催促】${JSON.stringify(Object.keys(waiting).filter((id) => step.snapshot.conversations.some((c) => c.id === id)))}\n【当前可用会话】${JSON.stringify(step.snapshot.conversations.map((c) => ({ id: c.id, title: c.title, members: c.members })))}\n【已读手机经历】${JSON.stringify(step.snapshot.records.map((r) => ({ id: r.id, conversationId: r.conversationId, kind: r.kind, parentId: r.parentId, speakerId: r.speakerId, audience: r.audience, text: recordText(r), time: r.time, pending: r.pending })))}\n【可知文档】${JSON.stringify(step.snapshot.documents.map((d) => ({ id: d.id, ownerId: d.ownerId, kind: d.kind, title: d.title, text: d.text, audience: d.audience })))}\n【已知事件】${JSON.stringify(step.snapshot.events.map((e) => ({ title: e.title, text: e.text, time: e.time })))}\n【可复用素材】${JSON.stringify(step.assets)}`;
+  return `${step.context}\n【当前行动习惯】${JSON.stringify(step.options.habits[step.actorId] || defaultHabit())}\n【剧情自由度】${step.options.freedom === "limited" ? "有限创造，仅日常小事" : "主动发展，遵守作者方向与已有角色边界"}\n【作者方向】${step.options.direction}\n【剧情时间】${step.time}\n【角色编号】${JSON.stringify(step.roles)}\n【本人编号】${step.actorId}\n【用户控制角色】${step.options.takeover ? "无" : step.options.controlledRole}\n【等待用户的会话，不能继续催促】${JSON.stringify(Object.keys(waiting).filter((id) => step.snapshot.conversations.some((c) => c.id === id)))}\n【当前可用会话】${JSON.stringify(step.snapshot.conversations.map((c) => ({ id: c.id, title: c.title, members: c.members })))}\n【已读手机经历】${JSON.stringify(step.snapshot.records.map((r) => ({ id: r.id, conversationId: r.conversationId, kind: r.kind, parentId: r.parentId, speakerId: r.speakerId, audience: r.audience, text: recordText(r), assets: r.retracted ? [] : r.body.assets, time: r.time, pending: r.pending })))}\n【可知文档】${JSON.stringify(step.snapshot.documents.map((d) => ({ id: d.id, ownerId: d.ownerId, kind: d.kind, title: d.title, text: d.text, assets: d.assets, audience: d.audience })))}\n【已知事件】${JSON.stringify(step.snapshot.events.map((e) => ({ title: e.title, text: e.text, time: e.time })))}\n【可复用素材】${JSON.stringify(step.assets)}`;
 }
 function actionPrompt() {
   return "选择且只选择一个行动，返回指定 JSON。kind 为 chat/moment/comment/like/note/draft/event/wait。字段无关时用空字符串、空数组或 false。chat 使用已有 conversationId；开启私聊则填写 recipientId。评论与点赞填写原动态 parentId，回复评论另填 replyTo。修改私密文档填写 documentId，且只能修改自己的文档。audience 用角色 ID，必须包含本人；评论继承动态受众。不要选择等待用户的会话。awaitUser 仅用于需要用户答复的聊天。instruction 写内容生成要求，不把计划描述成已发生。";
@@ -1196,6 +1198,7 @@ async function applyResult(step: PhoneAutomationStep, checked = false) {
     }
   await remember(step);
   step.applied = true;
+  schedulePhoneImages(out.records.map(r => r.id), step.runId);
 }
 async function performStep(
   step: PhoneAutomationStep,

@@ -13,6 +13,8 @@ const entries = [
   "playwright.config.ts",
   "README.md",
   "PRIVACY.md",
+  "docs/image-generation.md",
+  "docs/image-generation-verification.md",
   "docs/role-generator.md",
   "docs/role-generator-verification.md",
   "docs/phone-upgrade.md",

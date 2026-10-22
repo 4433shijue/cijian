@@ -1,8 +1,9 @@
+import { imageTables } from "./image-types";
 import { generatorTables } from "./generator-types";
 import { extraTables } from "./work-types";
 import { phoneTables } from "./phone-types";
 export const backupTables = [
-  ...phoneTables, ...extraTables, ...generatorTables,
+  ...phoneTables, ...extraTables, ...generatorTables, ...imageTables,
   "roles",
   "stories",
   "world",

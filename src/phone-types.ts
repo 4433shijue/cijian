@@ -35,6 +35,7 @@ export const phoneConversationSchema = z.object({
   updated: z.number(),
 });
 export const phoneBodySchema = z.object({
+  imagePrompt: z.string().max(12000).optional(),
   type: z.enum([
     "text",
     "image",
@@ -130,6 +131,7 @@ export const phoneProfileSchema = z.object({id, name:id, protocol:z.enum(["chat"
   frequencyPenalty:z.number().nullable().optional(),outputMode:z.enum(["auto","schema","json","compatible"]).optional(),
   cachePolicy:z.enum(["auto","off"]).optional(),prefixReuse:z.enum(["auto","on","off"]).optional(),remember:z.literal(false)});
 const step = z.object({
+  imageAssets: z.array(z.object({ id: z.string(), description: z.string() })).optional(),
   request: z.object({system:id,user:id}).optional(),
   speakerId: id,
   status,

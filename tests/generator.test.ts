@@ -522,7 +522,7 @@ it("round-trips complete sessions with remapped identities in both backup paths 
   mock();
   await advanceGenerator(s.id);
   const b = await exportBackup();
-  expect(b.version).toBe(8);
+  expect(b.version).toBe(9);
   validateBackup(b);
   await importBackup(b);
   expect(await db.generatorSessions.count()).toBe(2);

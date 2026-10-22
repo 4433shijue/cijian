@@ -1,4 +1,5 @@
 import { requireStory } from "./story-service";
+import { schedulePhoneImages } from "./image-scheduling";
 import { db } from "./db";
 import { uid, type Story } from "./types";
 import { withStoryLock } from "./locks";
@@ -20,7 +21,7 @@ export const phoneTime = () =>
 export function recordText(r: Pick<PhoneRecord, "body" | "retracted">) {
   if (r.retracted) return "[撤回了一条消息]";
   const b = r.body;
-  return `${r.retracted ? "[已撤回] " : ""}${b.type === "text" ? "" : `[${{ image: "图片", sticker: "表情", audio: "语音", transfer: "剧情转账", call: "通话记录", system: "系统" }[b.type]}] `}${b.text}${b.amount ? ` ¥${b.amount}` : ""}${b.duration ? ` ${b.duration}` : ""}${b.type === "call" ? ` ${b.callState === "missed" ? "未接来电" : b.callState === "declined" ? "已拒绝" : "已结束"}` : ""}`;
+  return `${r.retracted ? "[已撤回] " : ""}${b.type === "text" ? "" : `[${{ image: "图片", sticker: "表情", audio: "语音", transfer: "剧情转账", call: "通话记录", system: "系统" }[b.type]}] `}${b.text}${b.type === "image" && b.imagePrompt ? `（图片内容：${b.imagePrompt}）` : ""}${b.type === "image" && !b.assets.length ? "（图片尚未生成）" : ""}${b.amount ? ` ¥${b.amount}` : ""}${b.duration ? ` ${b.duration}` : ""}${b.type === "call" ? ` ${b.callState === "missed" ? "未接来电" : b.callState === "declined" ? "已拒绝" : "已结束"}` : ""}`;
 }
 export const canSee = (r: PhoneRecord, owner: string) =>
   !r.deleted && r.audience.includes(owner);
@@ -439,6 +440,7 @@ export async function addRecord(
         },
       ];
       await db.phoneRecords.add(r);
+      if (r.body.type === "image" && !r.body.assets.length && (r.origin === "ai" || r.body.imagePrompt)) schedulePhoneImages([r.id]);
       if (r.conversationId)
         await db.phoneConversations.update(r.conversationId, { updated: now });
       return r;
@@ -639,6 +641,7 @@ export function remapPhone(
         steps: r.rewriteBase.steps.map((s: any) => ({
           ...s,
           speakerId: id(s.speakerId),
+          imageAssets: s.imageAssets?.map((a: any) => ({ ...a, id: id(a.id) })),
           outputIds: s.outputIds.map(id),
         })),
         versions: Object.fromEntries(
@@ -670,6 +673,7 @@ export function remapPhone(
     r.steps = r.steps.map((s: any) => ({
       ...s,
       speakerId: id(s.speakerId),
+      imageAssets: s.imageAssets?.map((a: any) => ({ ...a, id: id(a.id) })),
       outputIds: s.outputIds.map(id),
       status: s.status === "running" ? "pending" : s.status,
     }));

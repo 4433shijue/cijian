@@ -6,6 +6,8 @@ import { CreateStory } from "./CreateStory";
 import { WorkPage, MigrationNotice, WorkWorldEditor } from "./WorkPage";
 import { updateStory } from "./story-service";
 import PhonePanel from "./PhonePanel";
+import { ImageConnectionSettings, StoryImageSettings, RoleImageFields } from "./ImageSettings";
+import { NovelImagePanel } from "./ImagePanel";
 import { useEffect, useLayoutEffect, useState, useRef, type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
@@ -564,6 +566,7 @@ function RoleEditor({
               onChange={(e) => update({ bio: e.target.value })}
             />
           </Field>
+          <RoleImageFields role={r} onChange={update} onBusyChange={v => { pendingFiles.current += v ? 1 : -1; setReading(pendingFiles.current > 0); }} />
           <Field label="导入 TXT / Markdown 人设">
             <input
               type="file"
@@ -2139,6 +2142,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
                     </button>
                   </div>
                 )}
+                {e.kind === "novel" && e.status === "complete" && (reading || !e.collapsed) && <NovelImagePanel event={e} />}
                 {e.status === "draft" && (e.raw || e.theater) && <EventRawOutput event={e} />}
                 {e.status === "draft" && e.request && (
                   <button
@@ -2403,6 +2407,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
       {panel === "settings" && (
         <Modal title="这本故事的设定" onClose={() => setPanel("")}>
           <StoryTheaterSettings story={s} prefs={prefs} update={update} />
+          <StoryImageSettings story={s} />
           <WorkWorldEditor story={s} />
           <Field label="故事名字">
             <input
@@ -2893,6 +2898,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
           <p className="hint">还没有接口。添加一个，就可以开始扩写和聊天。</p>
         )}
       </section>
+      <ImageConnectionSettings />
       <BackupSettings notify={notify} />
       <section className="settings-card">
         <h2>开发者模式</h2>

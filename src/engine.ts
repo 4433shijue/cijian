@@ -1,4 +1,5 @@
 import { requireStory } from "./story-service";
+import { scheduleNovelImage } from "./image-scheduling";
 import { withStoryLock } from "./locks";
 import { active, isBusy } from "./generation-state";
 export { isBusy, stop } from "./generation-state";
@@ -396,6 +397,8 @@ async function runUnlocked(
         if (control.signal.aborted) throw Error("已停止生成，收到的正文保留为草稿。");
       },
     );
+    const imageEventId = old?.id || event!.id;
+    void import("./image-generation").then(m => m.createNovelImage(imageEventId, true)).catch(() => {});
     event = undefined;
   } catch (error) {
     // Drain queued stream writes before releasing the lock or exposing adoption.
@@ -572,6 +575,7 @@ export async function adoptDraft(
         await ensureStoryRounds(story.id);
         await consumeMemorySelection(story.id, draft.request?.memoryContext?.selectionToken);
         scheduleAutomaticMemory(story.id);
+        scheduleNovelImage(target.id);
         return target.id;
       },
     ),

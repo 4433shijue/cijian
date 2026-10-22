@@ -1,3 +1,4 @@
+import { PhoneImageStatus } from "./ImagePanel";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "./db";
@@ -104,6 +105,9 @@ function BodyEditor({
         value={value.text}
         onChange={(e) => onChange({ ...value, text: e.target.value })}
       />
+      {value.type === "image" && <label className="field">照片画面说明
+        <textarea aria-label="照片画面说明" value={value.imagePrompt || ""} onChange={e => onChange({ ...value, imagePrompt: e.target.value })} placeholder="画面里具体有什么；禁止自拍和拍摄者本人入镜" />
+      </label>}
       {(moment || ["image", "sticker", "audio"].includes(value.type)) && (
         <label className="phone-upload">
           {uploading
@@ -504,6 +508,7 @@ export default function PhonePanel({ story }: { story: Story }) {
           {["image", "sticker"].includes(r.body.type) &&
             !r.body.assets.length && <small>图片描述</small>}
           <p>{r.body.text}</p>
+          <PhoneImageStatus record={r} readOnly={immersive} />
         </>
       )}
     </>
@@ -1481,7 +1486,8 @@ export default function PhonePanel({ story }: { story: Story }) {
             const run=await db.phoneRuns.get(id);
             const generated=run?.staged?.["0"]?.[0];
             if(!generated)throw Error(run?.error || "动态尚未生成完成，可在生成记录中恢复");
-            setMomentBody({...generated,assets:momentBody.assets,type:momentBody.assets.length?"image":generated.type});
+            const selectedAssets = momentBody.assets.length ? momentBody.assets : generated.assets;
+            setMomentBody({...generated,assets:selectedAssets,type:selectedAssets.length?"image":generated.type});
           })}>AI 生成到编辑器</button>
           <button
             disabled={busy || activeRun}
