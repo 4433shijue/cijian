@@ -101,7 +101,7 @@ test("desktop full journey with controlled protocol fixture", async ({
   await expect(page.locator(".transfer-panel [role=alert]")).toHaveCount(0);
   const download = await downloadPromise;
   const path = await download.path();
-  await page.locator("input[type=file]").setInputFiles(path!);
+  await page.getByLabel("导入备份", { exact: true }).setInputFiles(path!);
   await expect(page.getByRole("dialog", { name: "导入预览" })).toBeVisible();
   await page.getByRole("button", { name: "作为副本合并" }).click();
   await page.getByRole("link", { name: "故事", exact: true }).click();

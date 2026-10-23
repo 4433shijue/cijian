@@ -11,10 +11,40 @@
 }
 .image-settings input,
 .image-settings select,
+.image-settings textarea,
 .story-image-settings input,
 .story-image-settings select {
   max-width: 100%;
   min-width: 0;
+}
+.image-connection-actions {
+  flex-wrap: wrap;
+  margin-block: 12px;
+}
+.image-endpoint,
+.image-connection-message {
+  overflow-wrap: anywhere;
+}
+.image-endpoint code {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  white-space: normal;
+}
+.image-connection-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+.image-custom-settings {
+  border-left: 2px solid var(--border, #d5ddd3);
+  padding-left: 12px;
+}
+.image-settings textarea {
+  min-height: 85px;
+  width: 100%;
 }
 .image-settings details,
 .role-image-fields,

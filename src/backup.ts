@@ -345,7 +345,7 @@ const schema = z.object({
   phoneAssets: z.array(phoneSchemas.phoneAssets).default([]),
   phoneRuns: z.array(phoneSchemas.phoneRuns).default([]),
   format: z.literal("little-scene"),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10)]),
   created: str,
   roles: z.array(role),
   stories: z.array(story),
@@ -612,7 +612,7 @@ export async function exportBackup() {
       );
       return {
         format: "little-scene",
-        version: 9,
+        version: 10,
         imageProfiles: (await db.imageProfiles.toArray()).map(p => ({ ...imageSchemas.imageProfiles.parse(p), remember: false })),
         imageJobs: await db.imageJobs.toArray(),
         imageAssets: await db.imageAssets.toArray(),

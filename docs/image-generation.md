@@ -1,17 +1,47 @@
-# 3.3 图片生成
+# 3.4 图片生成与多协议连接
 
 小说正文可以配插画，手机角色可以按语境发送照片。生图不会阻塞已完成文字的保存，也不会推进正文之外的剧情。默认只允许手动配图；自动生成由每本作品单独开启。
 
 ## 连接与开启
 
 1. 先连接可用的文字模型。它负责从本轮内容整理画面。
-2. 在「设置 → 图片生成」填写生图接口地址、API Key 与图片模型名。可以带入当前文字接口的地址和密钥，但仍须填写服务实际支持的图片模型。
-3. 选择服务支持的尺寸与质量。保存配置不发请求；「生成测试图（消耗一次额度）」会直接生成一张窗台绿植图。
-4. 小说在作品设置选择「手动点击配图」「每轮正文自动配一张图」或「AI 判断有合适场景时配图」。手机开启「允许角色根据语境生成照片」。
+2. 在「设置 → 图片生成」填写 URL 和 API Key，点击「拉取生图模型」，搜索并选择模型。模型列表失败或为空时仍可手动填写。拉取只读取列表，不生成测试图；服务提供输出能力时显示标签，未知能力不按名称猜测或隐藏。
+3. 核对生图协议与实际请求地址。可以带入当前文字连接的地址、密钥和协议，但需要重新选择支持图片输出的模型。
+4. 选择服务支持的尺寸、比例、质量或分辨率。保存配置不会发出请求。「生成测试图（消耗一次额度）」会生成窗台绿植图，可上传物品或风景参考图单独验证编辑能力。
+5. 小说在作品设置选择手动、每轮或 AI 按场景配图；手机开启「允许角色根据语境生成照片」。
 
-支持 Images API 兼容接口的 `/images/generations`，返回 `data[0].b64_json` 或 `data[0].url`。接口地址可填站点根地址、版本地址或完整图片接口地址。公网须使用 HTTPS，本机 localhost 可使用 HTTP。网页直连要求接口允许 CORS；图片链接也须可跨域下载。原生 Gemini 图片协议、任务轮询型接口与任意聊天生图协议不属于此适配器。
+模型列表支持 OpenAI 兼容的 `data[]`、原生 Gemini `models[]` 和简单数组；识别模型 ID、名称与服务显式提供的输入/输出能力。支持 Gemini pageToken 与 has_more/after 分页。列表成功不代表模型一定支持生图，当前生图测试和历史成功记录单独显示。切换地址、鉴权、协议或密钥会清除旧模型列表。模型列表地址可在兼容设置中单独指定，但必须同源，避免密钥被送往另一个站点。
 
-尺寸、质量、返回格式和参考图参数取决于服务与模型。默认不指定返回格式；兼容设置可选 Base64 或图片链接。图片等待时间可设为 10～600 秒。一次操作只发送一次图片请求，不会悄悄换模型、降级或重发。
+## 协议与地址
+
+| 协议 | 请求方式 | 图片结果 |
+| --- | --- | --- |
+| Images | `/v1/images/generations`；参考图通过 `/v1/images/edits`，支持 multipart 与兼容 JSON | `data[].b64_json` 或 `data[].url` |
+| Chat Completions | `/v1/chat/completions`，messages 与图片输出 modalities | message.images、图片内容块、Markdown 图片、数据地址 |
+| Responses | `/v1/responses`，主模型调用 image_generation 工具 | image_generation_call.result |
+| Gemini 原生 | `/v1beta/models/{model}:generateContent`，或流式 streamGenerateContent | candidates 中的 inlineData / inline_data |
+| OpenRouter Image API | `/api/v1/images`，支持 input_references | data 中的图片数据 |
+| 自定义 | 保留完整地址，发送 JSON 模板，可附加任务查询 GET | 配置图片字段路径或使用常见格式识别 |
+
+自动模式优先识别完整端点，识别 Google/OpenRouter 官方域名，其余基础地址默认使用 Images。根地址、`/api` 和版本路径默认作为基础地址；其他路径保留原样。兼容设置可明确选为「基础地址」或「完整端点」。基础地址才会追加协议路径；完整路径不会被改写成另一种接口。完整地址与明确选择的协议矛盾时会提示修正，自定义协议可自行定义格式。完整 Gemini 地址中的模型必须与所选模型一致。
+
+固定 `/images/edits` 端点需要参考图，不能用于手机无参考图的照片生成；建议这类服务填写基础地址，让 Images 协议在请求前按输入选择 generations 或 edits。固定 generations 也不会在携带参考图时被悄悄改成 edits。
+
+Responses 上方模型选择器用于主模型，图片工具模型可单独填写，留空遵循服务默认。不同服务的模型、参考图、参数与图片输出能力并不相同，尤其聊天端点生图属于相应服务支持的能力，普通文字模型不会因此自动获得生图能力。
+
+支持常见 JSON 图片、PNG/JPEG/WebP 图片响应和 SSE 返回；流式模式读取完整结果后保存，不把中途预览图作为成品。图片链接使用不携带 API Key、Cookie 的独立下载请求。公网地址需要 HTTPS，本机 localhost 可用 HTTP；接口和图片地址均需要允许网页跨域访问。
+
+## 自定义与测试记录
+
+自定义协议支持 JSON 请求模板。`{{prompt}}` 必须作为值的一部分传入，包含当前画面与禁止自拍规则；支持 `{{model}}`、`{{references}}`、`{{size}}`、`{{quality}}`、`{{aspectRatio}}`、`{{resolution}}`、`{{stream}}`。references 是图片数据地址数组，使用时单独放在字段值中，如 `"pictures":"{{references}}"`。模板不执行 JavaScript。
+
+结果路径使用点分隔字段和数字下标，如 `output.0.url` 或 `output[0].url`。同步服务无需任务配置。异步服务填写同源查询地址 `/tasks/{id}`、编号字段、状态字段、成功/失败值与查询间隔；一次提交 POST，之后仅发送 GET，最长仍受 10～600 秒总等待时间限制。状态值以逗号分隔；默认成功值为 completed、succeeded、success、done。未知服务的私有协议仍需按文档配置；不支持自动猜测任意鉴权、二进制上传协议或脚本。
+
+额外 JSON 参数可添加 seed 等服务选项；画面、模型、参考图、工具、张数、流式开关不能通过此入口覆盖。鉴权支持 Bearer、x-api-key、x-goog-api-key 或无需密钥。密钥只填写在 API Key 字段，不能放进 URL、JSON 模板或参数。
+
+每次成功测试可随保存保留最多 10 组「模型＋协议＋参数」组合。历史记录不包含密钥和测试图片，可恢复后重新保存；它证明过去某次测试成功，不证明当前密钥、额度、图片编辑或服务状态仍可用。更改配置、密钥和测试参考图后会清除当前测试成功状态。
+
+一次操作只提交一次生成请求，不会探测多个付费端点、切换模型或自动重发。模型列表、测试图与日常配图错误均说明操作阶段，不展示服务可能回显的密钥或私人请求正文。
 
 ## 小说插画
 
@@ -21,7 +51,7 @@
 
 在角色编辑中展开「人物插画与拍照习惯」，可填写固定外貌、上传 PNG/JPEG/WebP 参考图或沿用头像。小说使用作品内角色副本；角色库后续修改不会自动覆盖已建立的作品。
 
-接口支持参考图时，在兼容设置选择 multipart 或 JSON 图片编辑接口。实际出现在画面中的角色才会发送参考图；人物外貌和参考图在创建任务时冻结，重试不会混入后来修改的角色。未开启图片编辑能力时只用外貌文字。
+接口支持参考图时，在兼容设置启用按协议发送参考图，也可指定 Images 的 multipart 或 JSON 编辑格式。实际出现在画面中的角色才会发送参考图；人物外貌和参考图在创建任务时冻结，重试不会混入后来修改的角色。未开启图片编辑能力时只用外貌文字。
 
 ## 手机角色照片
 
@@ -47,7 +77,7 @@
 
 图片保存在当前浏览器数据库，单张输入最多 10 MiB，浏览器保存时将最长边限制为 1600 像素。不依赖临时远程链接维持阅读。删除作品一并删除该作品的图片与恢复记录。
 
-数据库升级到 14，备份版本为 9，兼容导入版本 1～8。完整备份携带图片、外貌、参考图、作品开关、任务恢复资料及不含 Key 的生图接口；单本备份只携带相关作品资料。导入后不自动请求，未完成任务转为中断。Key 默认只保存在当前页面；只有明确勾选记住才存入本机数据库，备份始终排除独立 Key 字段。
+数据库升级到 15，备份版本为 10，兼容导入版本 1～9。旧生图配置迁移时保留原 Images 路由方式。完整备份携带图片、外貌、参考图、作品开关、任务恢复资料及不含独立 Key 的生图接口、兼容参数与历史测试组合；单本备份只携带相关作品资料。导入后不自动请求，未完成任务转为中断。Key 默认只保存在当前页面；只有明确勾选记住才存入本机数据库，备份始终排除独立 Key 字段。
 
 小说作品设置可「导出图文阅读页」，生成单文件离线 HTML，包含当前已完成正文与对应最新完成插画，可在浏览器阅读或打印。旧版本配图、任务记录、接口信息不进入阅读页。手机继续用现有离线阅读包，按选中机主的可见范围携带照片。其他现有文字导出格式维持各自原有规则。导出不发布到网络。
 
@@ -57,5 +87,10 @@
 
 - [OpenAI Images · Generate](https://developers.openai.com/api/reference/resources/images/methods/generate)
 - [OpenAI Images · Edit](https://developers.openai.com/api/reference/resources/images/methods/edit)
+- [OpenAI Image generation / Responses](https://developers.openai.com/api/docs/guides/image-generation)
+- [OpenRouter Image API](https://openrouter.ai/docs/guides/overview/multimodal/image-generation)
+- [OpenRouter Chat Completions](https://openrouter.ai/docs/api/api-reference/chat/send-chat-completion-request)
+- [Gemini generateContent](https://ai.google.dev/api/generate-content)
+- [Gemini models](https://ai.google.dev/api/models)
 
 这些页面用于核对兼容协议字段，不代表已替用户验证所有服务商或进行付费出图。

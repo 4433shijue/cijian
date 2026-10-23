@@ -1,5 +1,6 @@
 import type { GeneratorSession, GeneratorMaterial, GeneratorTurn, GeneratorStep, GeneratorResult } from "./generator-types";
 import { mainlineEvents } from "./mainline";
+import { migrateImageProfile } from "./image-types";
 import type { PhoneSpace, PhoneConversation, PhoneRecord, PhoneAsset, PhoneGenerationRun } from "./phone-types";
 import Dexie, { type Table } from "dexie";
 import { sharedTimeline } from "./timeline";
@@ -74,6 +75,11 @@ export class SceneDB extends Dexie {
   constructor(name = "little-scene-v1") {
     super(name);
     this.version(14).stores({ imageProfiles: "id", imageJobs: "id,storyId,sourceId,runId,status", imageAssets: "id,storyId" });
+    this.version(15).stores({}).upgrade(async tx => {
+      await tx.table("imageProfiles").toCollection().modify(p => {
+        Object.assign(p, migrateImageProfile(p));
+      });
+    });
     this.version(1).stores({
       roles: "id",
       stories: "id,updated",

@@ -6,7 +6,7 @@ import { seedJourney, openPhoneChat, readStore } from "./fixtures";
 const bitmap = readFileSync("src/assets/decor/chat-banner-v1.webp").toString(
   "base64",
 );
-async function setup(page: Page) {
+async function setup(page: Page, chat = false) {
   await seedJourney(page);
   await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -50,7 +50,7 @@ async function setup(page: Page) {
   await page.goto("/#settings");
   await page
     .getByLabel("生图接口地址", { exact: true })
-    .fill("https://image.fixture.test/v1");
+    .fill("https://image.fixture.test/v1" + (chat ? "/chat/completions" : ""));
   await page
     .getByLabel("生图 API Key", { exact: true })
     .fill("fixture-image-key");
@@ -65,7 +65,7 @@ async function setup(page: Page) {
 }
 async function mock(
   page: Page,
-  options: { selfie?: boolean; failFirstImage?: boolean } = {},
+  options: { selfie?: boolean; failFirstImage?: boolean; chat?: boolean } = {},
 ) {
   const calls = { text: 0, image: 0, plan: 0 };
   await page.route("https://text-image.fixture.test/**", async (route) => {
@@ -115,14 +115,33 @@ async function mock(
   await page.route("https://image.fixture.test/**", async (route) => {
     calls.image++;
     const request = route.request().postDataJSON();
-    expect(request.n).toBe(1);
-    expect(request.prompt).toContain("禁止生成自拍");
+    if (options.chat) {
+      expect(route.request().url()).toContain("/chat/completions");
+      expect(request.messages[0].content).toContain("禁止生成自拍");
+    } else {
+      expect(request.n).toBe(1);
+      expect(request.prompt).toContain("禁止生成自拍");
+    }
     if (options.failFirstImage && calls.image === 1)
       return route.fulfill({
         status: 429,
         json: { error: { message: "fixture quota failure" } },
       });
-    await route.fulfill({ json: { data: [{ b64_json: bitmap }] } });
+    await route.fulfill({
+      json: options.chat
+        ? {
+            choices: [
+              {
+                message: {
+                  images: [
+                    { image_url: { url: "data:image/webp;base64," + bitmap } },
+                  ],
+                },
+              },
+            ],
+          }
+        : { data: [{ b64_json: bitmap }] },
+    });
   });
   return calls;
 }
@@ -187,8 +206,8 @@ test("phone image failure can retry without regenerating its reply or its image 
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  const calls = await mock(page, { failFirstImage: true });
-  await setup(page);
+  const calls = await mock(page, { failFirstImage: true, chat: true });
+  await setup(page, true);
   await openPhoneChat(page);
   await page.getByRole("button", { name: "作品设置", exact: true }).click();
   await page

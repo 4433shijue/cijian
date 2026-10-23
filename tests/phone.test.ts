@@ -414,7 +414,7 @@ it.each(["legacy", "stream"])(
       method === "legacy"
         ? await exportBackup()
         : JSON.parse(await (await exportBackupBlob(uid(), s.id)).blob.text());
-    expect(backup.version).toBe(9);
+    expect(backup.version).toBe(10);
     validateBackup(backup);
     if (method === "legacy") await importBackup(backup);
     else {

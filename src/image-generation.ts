@@ -5,6 +5,7 @@ import { assemble } from "./context";
 import { parseJSON } from "./output";
 import {
   imageSettings,
+  imageProfileSchema,
   imagePlanSchema,
   imageWorking,
   isSelfie,
@@ -12,14 +13,16 @@ import {
   type ImageJob,
   type ImageProfile,
 } from "./image-types";
-import { imageEndpoint, requestImage } from "./image-provider";
+import { requestImage } from "./image-provider";
+import { validateImageConnection } from "./image-protocol";
 
 const controls = new Map<string, AbortController>();
 const chains = new Map<string, Promise<unknown>>();
 export const imageKey = (p: ImageProfile) =>
   sessionKeys.get(`image:${p.id}`) || (p.remember ? p.key : "") || "";
 export async function saveImageProfile(profile: ImageProfile, key: string) {
-  imageEndpoint(profile.url);
+  profile = imageProfileSchema.parse(profile);
+  validateImageConnection(profile);
   await db.transaction("rw", db.imageProfiles, db.preferences, async () => {
     await db.imageProfiles.put({
       ...profile,
@@ -352,9 +355,9 @@ async function executeJob(id: string) {
       profile =
         prefs?.activeImageProfile &&
         (await db.imageProfiles.get(prefs.activeImageProfile));
-    if (!profile || !imageKey(profile))
+    if (!profile || (!imageKey(profile) && profile.auth !== "none"))
       throw Error("先到设置保存生图接口与 API Key，再重试这张图片");
-    imageEndpoint(profile.url);
+    validateImageConnection(profile);
     control.signal.throwIfAborted();
     if ((await db.imageJobs.get(id))?.status !== "planning")
       throw Error("任务已停止");

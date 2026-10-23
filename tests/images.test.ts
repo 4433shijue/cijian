@@ -365,7 +365,7 @@ it("backs up pictures, settings and recovery records without keys; remaps relati
   });
   const job = await settled((await createNovelImage((await prose()).id))!.id);
   const backup = await exportBackup();
-  expect(backup.version).toBe(9);
+  expect(backup.version).toBe(10);
   expect(JSON.stringify(backup)).not.toContain("image-secret-fixture");
   expect(() => validateBackup(backup)).not.toThrow();
   await importBackup(backup);
@@ -556,7 +556,7 @@ it("automation drafts do not spend image calls; adoption generates once, export 
 
 it("normalizes only supported endpoints, omits optional fields, and never forwards the API key to image URLs", async () => {
   expect(imageEndpoint("https://example.test/v1/chat/completions")).toBe(
-    "https://example.test/v1/images/generations",
+    "https://example.test/v1/chat/completions",
   );
   expect(() => imageEndpoint("http://public.example/v1")).toThrow("HTTPS");
   expect(() => imageEndpoint("https://example.test/v1?key=secret")).toThrow(

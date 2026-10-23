@@ -182,7 +182,7 @@ test("mobile export controls and single-story backup round trip", async ({
   expect(backup.events).toHaveLength(5);
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await settings(page);
-  await page.locator("input[type=file]").setInputFiles(path);
+  await page.getByLabel("导入备份", { exact: true }).setInputFiles(path);
   await expect(page.getByRole("dialog", { name: "导入预览" })).toBeVisible();
   await expect(page.getByRole("button", { name: "替换全部资料" })).toHaveCount(
     0,
@@ -226,7 +226,7 @@ test("100 MB backup imports and exports without blocking the main UI or whole-fi
   });
   let peakHeap = startHeap;
   const started = Date.now();
-  await page.locator("input[type=file]").setInputFiles(fixture.path);
+  await page.getByLabel("导入备份", { exact: true }).setInputFiles(fixture.path);
   await expect(page.getByText("正在分块读取", { exact: true })).toBeVisible();
   const monitor = setInterval(() => {
     void heap()
@@ -337,7 +337,7 @@ test("cancel and a terminated import worker leave the previous archive intact, a
     "interrupted-transfer-fixture",
     250,
   );
-  await page.locator("input[type=file]").setInputFiles(fixture.path);
+  await page.getByLabel("导入备份", { exact: true }).setInputFiles(fixture.path);
   await expect(page.getByText("正在分块读取", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "取消操作", exact: true }).click();
   await expect(
@@ -359,7 +359,7 @@ test("cancel and a terminated import worker leave the previous archive intact, a
       }
     };
   });
-  await page.locator("input[type=file]").setInputFiles(fixture.path);
+  await page.getByLabel("导入备份", { exact: true }).setInputFiles(fixture.path);
   await expect(page.getByRole("dialog", { name: "导入预览" })).toBeVisible({
     timeout: 60000,
   });

@@ -251,7 +251,7 @@ test("group composition, moments visibility and backup restore", async ({
   await page.getByRole("button", { name: "导出完整备份（不含 Key）" }).click();
   const download = await downloading;
   await page
-    .locator("input[type=file]")
+    .getByLabel("导入备份", { exact: true })
     .setInputFiles((await download.path())!);
   await page.getByRole("button", { name: "作为副本合并" }).click();
   await expect

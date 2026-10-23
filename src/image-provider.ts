@@ -1,64 +1,18 @@
-import type { ImageProfile } from "./image-types";
+import { imageConnectionSchema, type ImageProfile } from "./image-types";
+import {
+  imageHeaders,
+  imageHttpError,
+  limitedImageBody,
+  safeImageUrl,
+} from "./image-connection";
+import {
+  buildImageRequest,
+  imageValueAt,
+  readImageResponse,
+} from "./image-protocol";
+export { imageEndpoint } from "./image-connection";
 
 const MAX_IMAGE = 10 * 1024 * 1024;
-function safeUrl(raw: string) {
-  const u = new URL(raw);
-  if (
-    u.username ||
-    u.password ||
-    u.hash ||
-    (u.protocol !== "https:" &&
-      !(
-        u.protocol === "http:" &&
-        ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname)
-      ))
-  )
-    throw Error("图片接口和图片地址需要 HTTPS；本机 localhost 可使用 HTTP");
-  return u;
-}
-export function imageEndpoint(raw: string, edits = false) {
-  const u = safeUrl(raw.trim());
-  if (u.search)
-    throw Error("请把密钥填入 API Key，不要放在接口地址的查询参数中");
-  let path = u.pathname
-    .replace(/\/+$/, "")
-    .replace(
-      /\/(?:chat\/completions|responses|images\/(?:generations|edits))$/,
-      "",
-    );
-  if (!path) path = "/v1";
-  u.pathname = path + (edits ? "/images/edits" : "/images/generations");
-  return u.toString();
-}
-async function limitedBody(response: Response, max: number) {
-  if (Number(response.headers.get("content-length")) > max)
-    throw Error("图片响应过大，未写入本机");
-  const reader = response.body?.getReader();
-  if (!reader) throw Error("生图服务返回了空响应");
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.length;
-      if (size > max) {
-        await reader.cancel();
-        throw Error("图片响应过大，未写入本机");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return bytes;
-}
 function mimeOf(b: Uint8Array) {
   if (b[0] === 137 && b[1] === 80 && b[2] === 78 && b[3] === 71)
     return "image/png" as const;
@@ -76,17 +30,6 @@ function base64(bytes: Uint8Array) {
   for (let i = 0; i < bytes.length; i += 8192)
     result += String.fromCharCode(...bytes.subarray(i, i + 8192));
   return btoa(result);
-}
-function fromDataUrl(data: string) {
-  if (
-    !/^data:image\/(png|jpeg|webp);base64,/.test(data) ||
-    data.length > 15 * 1024 * 1024
-  )
-    throw Error("参考图格式或大小无效");
-  const bytes = Uint8Array.from(atob(data.split(",")[1]), (x) =>
-    x.charCodeAt(0),
-  );
-  return new Blob([bytes], { type: mimeOf(bytes) });
 }
 export async function normalizeImage(bytes: Uint8Array) {
   if (!bytes.length || bytes.length > MAX_IMAGE)
@@ -128,7 +71,22 @@ export async function referenceFile(file: File) {
   return (await normalizeImage(new Uint8Array(await file.arrayBuffer()))).data;
 }
 
-/** Exactly one provider request. Never fallback/retry a possibly billed request. */
+function waitForPoll(ms: number, signal: AbortSignal) {
+  signal.throwIfAborted();
+  return new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+/** One generation POST. Polling/download never resubmit a possibly billed job. */
 export async function requestImage(
   profile: ImageProfile,
   key: string,
@@ -137,71 +95,107 @@ export async function requestImage(
   signal: AbortSignal,
   fetcher = fetch,
 ) {
-  if (!key.trim() || !profile.model.trim())
-    throw Error("请先保存生图模型和 API Key");
-  const edits = !!references.length && profile.references !== "off";
-  if (edits) references.forEach(fromDataUrl);
-  const options: Record<string, unknown> = {
-    model: profile.model.trim(),
-    prompt,
-    n: 1,
-  };
-  if (profile.size) options.size = profile.size;
-  if (profile.quality) options.quality = profile.quality;
-  if (profile.responseFormat) options.response_format = profile.responseFormat;
-  const headers: Record<string, string> = { Authorization: `Bearer ${key}` };
-  let body: BodyInit;
-  if (edits && profile.references === "multipart") {
-    const form = new FormData();
-    for (const [k, v] of Object.entries(options)) form.append(k, String(v));
-    references.forEach((data, i) =>
-      form.append("image[]", fromDataUrl(data), `reference-${i + 1}.png`),
-    );
-    body = form;
-  } else {
-    headers["Content-Type"] = "application/json";
-    if (edits) options.images = references.map((image_url) => ({ image_url }));
-    body = JSON.stringify(options);
-  }
-  const timeout = AbortSignal.timeout(profile.timeout * 1000);
-  const requestSignal = AbortSignal.any([signal, timeout]);
+  const p = imageConnectionSchema.parse(profile);
+  const request = buildImageRequest(p, key, prompt, references);
+  const timeout = AbortSignal.timeout(p.timeout * 1000),
+    requestSignal = AbortSignal.any([signal, timeout]);
   try {
-    const response = await fetcher(imageEndpoint(profile.url, edits), {
+    requestSignal.throwIfAborted();
+    const response = await fetcher(request.url, {
       method: "POST",
-      headers,
-      body,
+      headers: request.headers,
+      body: request.body,
       signal: requestSignal,
       credentials: "omit",
       redirect: "error",
     });
-    if (!response.ok)
-      throw Error(
-        `生图接口返回 HTTP ${response.status}，请核对模型、尺寸、质量、额度与协议。未自动重试。`,
-      );
-    const json = JSON.parse(
-      new TextDecoder().decode(await limitedBody(response, 20 * 1024 * 1024)),
-    );
-    const item = json?.data?.[0];
+    if (!response.ok) throw imageHttpError(response.status);
     let bytes: Uint8Array;
-    if (typeof item?.b64_json === "string") {
-      if (item.b64_json.length > 15 * 1024 * 1024)
-        throw Error("生成图片超过 10 MiB");
-      bytes = Uint8Array.from(atob(item.b64_json), (x) => x.charCodeAt(0));
-    } else if (typeof item?.url === "string") {
-      const url = safeUrl(item.url);
-      const download = await fetcher(url.toString(), {
-        signal: requestSignal,
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-      });
-      if (!download.ok) throw Error("图片已生成，但下载失败；未自动重新生图");
-      bytes = await limitedBody(download, MAX_IMAGE);
-    } else
-      throw Error(
-        "响应没有图片数据；此处需要 Images API，文字聊天接口不能直接用于生图",
-      );
+    if (
+      /^image\/(png|jpeg|webp)(?:;|$)/i.test(
+        response.headers.get("content-type") || "",
+      )
+    ) {
+      bytes = await limitedImageBody(response, MAX_IMAGE);
+    } else {
+      let { data, image } = await readImageResponse(response, p.resultPath);
+      if (p.pollUrl && !image) {
+        const id = imageValueAt(data, p.taskIdPath);
+        if (
+          (typeof id !== "string" && typeof id !== "number") ||
+          !String(id).trim() ||
+          String(id).length > 1000
+        )
+          throw Error("服务已接收请求，但未返回可读取的任务编号；未重新提交");
+        const pollUrl = safeImageUrl(
+          new URL(
+            p.pollUrl.replaceAll("{id}", encodeURIComponent(String(id))),
+            request.url,
+          ).toString(),
+          true,
+        );
+        if (pollUrl.origin !== new URL(request.url).origin)
+          throw Error("任务查询地址须与生图接口同源");
+        const success = p.successStates
+            .split(",")
+            .map((s) => s.trim().toLowerCase()),
+          failure = p.failureStates
+            .split(",")
+            .map((s) => s.trim().toLowerCase());
+        for (;;) {
+          await waitForPoll(p.pollInterval * 1000, requestSignal);
+          const result = await fetcher(pollUrl.toString(), {
+            headers: imageHeaders(p, key),
+            signal: requestSignal,
+            credentials: "omit",
+            redirect: "error",
+          });
+          if (!result.ok) throw imageHttpError(result.status);
+          const parsed = await readImageResponse(result, p.resultPath);
+          data = parsed.data;
+          const state = String(
+            imageValueAt(data, p.statusPath) ?? "",
+          ).toLowerCase();
+          if (failure.includes(state))
+            throw Error("服务报告图片任务失败，未重新提交；请查看服务记录");
+          if (success.includes(state)) {
+            image = parsed.image;
+            break;
+          }
+          if (!state)
+            throw Error("任务响应缺少状态字段，请核对状态路径；未重新提交");
+        }
+      }
+      if (!image)
+        throw Error(
+          "响应中没有可读取的图片；请核对模型是否支持图片输出、所选协议和结果字段路径。未自动重试。",
+        );
+      if (/^https?:\/\//.test(image)) {
+        const url = safeImageUrl(image);
+        const download = await fetcher(url.toString(), {
+          signal: requestSignal,
+          credentials: "omit",
+          redirect: "error",
+          referrerPolicy: "no-referrer",
+        });
+        if (!download.ok) throw Error("图片已生成，但下载失败；未自动重新生图");
+        bytes = await limitedImageBody(download, MAX_IMAGE);
+      } else {
+        const b64 = image.startsWith("data:")
+          ? image.slice(image.indexOf(",") + 1)
+          : image;
+        if (b64.length > 15 * 1024 * 1024) throw Error("生成图片超过 10 MiB");
+        try {
+          bytes = Uint8Array.from(atob(b64), (x) => x.charCodeAt(0));
+        } catch {
+          throw Error("图片 Base64 不完整或无法解码，未自动重试");
+        }
+      }
+    }
     requestSignal.throwIfAborted();
-    return await normalizeImage(bytes);
+    const normalized = await normalizeImage(bytes);
+    requestSignal.throwIfAborted();
+    return normalized;
   } catch (e) {
     if (signal.aborted)
       throw Error("生图已停止；服务端可能已计费，请确认后再重试");

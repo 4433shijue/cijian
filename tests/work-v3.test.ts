@@ -452,7 +452,7 @@ it("round trips v6 documents, variants, rules, copied worlds and background thro
   });
   await ensureReading(s.id);
   const raw = await exportBackup();
-  expect(raw.version).toBe(9);
+  expect(raw.version).toBe(10);
   validateBackup(raw);
   await importBackup(raw);
   const imported = (
