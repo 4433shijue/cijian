@@ -1,4 +1,5 @@
 import { imageTables, imageSchemas, imageSettingsSchema } from "./image-types";
+import { decodeBackupRecords } from "./backup-records";
 import { imageLinks, checkImageRow, remapImage } from "./image-backup";
 import { generatorTables, generatorSchemas } from "./generator-types";
 import { completionBackupRows } from "./completion-backup";
@@ -345,7 +346,7 @@ const schema = z.object({
   phoneAssets: z.array(phoneSchemas.phoneAssets).default([]),
   phoneRuns: z.array(phoneSchemas.phoneRuns).default([]),
   format: z.literal("little-scene"),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11)]),
   created: str,
   roles: z.array(role),
   stories: z.array(story),
@@ -407,6 +408,7 @@ export function remapTheaterContent(
 }
 
 export function validateBackup(raw: unknown) {
+  raw = decodeBackupRecords(raw);
   const b = schema.parse(raw);
   if (b.version >= 9) for (const table of imageTables) if (!Array.isArray((raw as any)[table])) throw Error("备份缺少资料区：" + table);
   const imageRelated = new Map<string, any>();
@@ -612,9 +614,9 @@ export async function exportBackup() {
       );
       return {
         format: "little-scene",
-        version: 10,
+        version: 11,
         imageProfiles: (await db.imageProfiles.toArray()).map(p => ({ ...imageSchemas.imageProfiles.parse(p), remember: false })),
-        imageJobs: await db.imageJobs.toArray(),
+        imageJobs: (await db.imageJobs.toArray()).map(({ downloadUrl, ...job }) => job),
         imageAssets: await db.imageAssets.toArray(),
         ...Object.fromEntries(
           await Promise.all(
@@ -872,15 +874,4 @@ export async function importBackup(value: unknown, replace = false) {
     for(const story of await db.stories.where("kind").equals("phone").toArray())await ensureAutomation(story.id);
   });
 }
-export function download(
-  name: string,
-  text: string,
-  type = "application/json",
-) {
-  const url = URL.createObjectURL(new Blob([text], { type }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
+export { download } from "./export-utils";

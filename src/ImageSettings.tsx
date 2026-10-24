@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "./db";
 import type { Role, Story } from "./types";
 import { imageSettings, type ImageSettings } from "./image-types";
 import { referenceFile } from "./image-provider";
 import { StoryImageJobs } from "./ImagePanel";
 import { exportIllustratedStory } from "./image-export";
-export { ImageConnectionSettings } from "./ImageConnectionSettings";
+import { compactImageStorage, imageStorageUsage } from "./image-storage";
 import "./images.css";
 
 export function RoleImageFields({
@@ -99,6 +100,9 @@ export function RoleImageFields({
 export function StoryImageSettings({ story }: { story: Story }) {
   const [settings, setSettings] = useState(() => imageSettings(story.images));
   const [error, setError] = useState("");
+  const [cleaning, setCleaning] = useState(false);
+  const [storageMessage, setStorageMessage] = useState("");
+  const usage = useLiveQuery(() => imageStorageUsage(story.id), [story.id]);
   useEffect(
     () => setSettings(imageSettings(story.images)),
     [story.id, story.images],
@@ -213,6 +217,32 @@ export function StoryImageSettings({ story }: { story: Story }) {
         </button>
       )}
       {error && <p role="alert">{error}</p>}
+      {story.kind === "novel" && (
+        <div className="image-storage">
+          <p className="hint">
+            正文配图与任务参考图 {usage?.count ?? 0} 张，图片内容约{" "}
+            {((usage?.bytes ?? 0) / 1024 / 1024).toFixed(1)} MiB。
+            清理会合并相同图片并移除未引用素材，保留正文、历史版本和所有仍在使用的图片。
+          </p>
+          <button
+            disabled={cleaning}
+            onClick={async () => {
+              setCleaning(true);
+              try {
+                const count = await compactImageStorage(story.id);
+                setStorageMessage(`清理完成，移除 ${count} 份重复或未引用素材`);
+              } catch (e) {
+                setError(String(e));
+              } finally {
+                setCleaning(false);
+              }
+            }}
+          >
+            {cleaning ? "正在清理配图素材…" : "清理重复与未引用配图"}
+          </button>
+          {storageMessage && <p role="status">{storageMessage}</p>}
+        </div>
+      )}
       <StoryImageJobs storyId={story.id} />
     </section>
   );

@@ -5,12 +5,13 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { db, deleteStory } from "./db";
 import { attachWorld, migrateStories, updateStory } from "./story-service";
 import { paragraphs, uid, type Story } from "./types";
-import PhonePanel from "./PhonePanel";
-import { StoryTransfer } from "./TransferPanels";
+import { lazyPanel } from "./lazy-panel";
+const PhonePanel = lazyPanel(() => import("./PhonePanel"));
+const StoryTransfer = lazyPanel(() => import("./TransferPanels").then(m => ({ default: m.StoryTransfer })));
 import { Modal } from "./Modal";
-import { PhoneDocuments } from "./PhoneDocuments";
-import { PhoneBatch } from "./PhoneBatch";
-import { PhoneReaderEditor } from "./PhoneReaderEditor";
+const PhoneDocuments = lazyPanel(() => import("./PhoneDocuments").then(m => ({ default: m.PhoneDocuments })));
+const PhoneBatch = lazyPanel(() => import("./PhoneBatch").then(m => ({ default: m.PhoneBatch })));
+const PhoneReaderEditor = lazyPanel(() => import("./PhoneReaderEditor").then(m => ({ default: m.PhoneReaderEditor })));
 import "./work.css";
 
 export function MigrationNotice() {

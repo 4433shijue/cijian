@@ -270,3 +270,63 @@ test("a model-requested selfie is visibly blocked and never reaches the image AP
   expect(calls.image).toBe(0);
   expect(calls.plan).toBe(0);
 });
+
+test("failed downloads survive reload without another generation and reading hides creation controls", async ({
+  page,
+}) => {
+  const calls = await mock(page);
+  await setup(page);
+  let posts = 0,
+    downloads = 0;
+  await page.unroute("https://image.fixture.test/**");
+  await page.route("https://image.fixture.test/**", async (route) => {
+    posts++;
+    await route.fulfill({
+      json: { data: [{ url: "https://cdn.fixture.test/result.webp" }] },
+    });
+  });
+  await page.route("https://cdn.fixture.test/**", async (route) => {
+    downloads++;
+    await route.fulfill(
+      downloads === 1
+        ? { status: 503, body: "unavailable" }
+        : {
+            contentType: "image/webp",
+            body: Buffer.from(bitmap, "base64"),
+          },
+    );
+  });
+  await page.goto("/#story/fixture-story");
+  await page.getByRole("button", { name: "故事设置", exact: true }).click();
+  await page.getByLabel("正文配图方式", { exact: true }).selectOption("every");
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "扩写这一刻", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "重新下载图片", exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "沉浸阅读", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "重新下载图片", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "为这一幕配图", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "重新生成图片", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "退出阅读", exact: true }).click();
+  await page.getByRole("button", { name: "重新下载图片", exact: true }).click();
+  await expect(
+    page.locator('.image-job[data-image-status="complete"]'),
+  ).toBeVisible();
+  expect(posts).toBe(1);
+  expect(downloads).toBe(2);
+  expect(calls.plan).toBe(1);
+  await page.getByRole("button", { name: "沉浸阅读", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "再画一张", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "查看配图大图", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "故事配图" })).toBeVisible();
+});

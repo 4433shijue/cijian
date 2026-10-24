@@ -16,6 +16,7 @@ import { recordSchemas, mergeTheaterPresets, normalizeTheaterPresetSnapshot, rem
 import { samplingParameters } from "./sampling";
 import { uid, type Preferences, type Role, type Story } from "./types";
 import { BackupParser, READ_CHUNK_BYTES } from "./backup-parser";
+import { BackupRecordDecoder, encodeBackupRecord } from "./backup-records";
 import {
   backupTables,
   emptyCounts,
@@ -70,7 +71,10 @@ export async function stageBackup(
     pending = [];
     chars = 0;
   };
-  const parser = new BackupParser(async (name, raw) => {
+  const recordsDecoder = new BackupRecordDecoder();
+  const parser = new BackupParser(async (name, fragment) => {
+    const raw = recordsDecoder.push(name, fragment);
+    if (raw === undefined) return;
     const table = name as BackupTable;
     const value = recordSchemas[table].parse(raw);
     if (!value.id || value.id.length > 2048) throw Error("备份资料 ID 无效");
@@ -107,6 +111,7 @@ export async function stageBackup(
     });
   }
   const meta = parser.finish();
+  recordsDecoder.finish();
   if (counts.preferences > 1) throw Error("备份有多份全局设置");
   await checkStaged(session, control, records, file.size, Number(meta.version));
   const summary: ImportSummary = {
@@ -578,7 +583,7 @@ export async function exportBackupBlob(
       await writer.write(
         JSON.stringify({
           format: "little-scene",
-          version: 10,
+          version: 11,
           created: new Date().toISOString(),
           scope: s ? "story" : "library",
           ...(s ? { title: s.title } : {}),
@@ -606,6 +611,7 @@ export async function exportBackupBlob(
           // Schema parsing deliberately excludes request traces, transient ideas,
           // and future internal fields from portable backups.
           const row: any = recordSchemas[table].parse(raw);
+          if (table === "imageJobs") delete row.downloadUrl;
           if (table === "profiles" || table === "imageProfiles") {
             delete row.key;
             row.remember = false;
@@ -626,8 +632,11 @@ export async function exportBackupBlob(
               (p: any) => relatedTheaterPresets.has(p.id),
             );
           }
-          await writer.write((first ? "" : ",") + JSON.stringify(row));
-          first = false;
+          for (const piece of encodeBackupRecord(row)) {
+            control.check();
+            await writer.write((first ? "" : ",") + piece);
+            first = false;
+          }
           records++;
           if (records === 1 || records % 16 === 0)
             control.report({

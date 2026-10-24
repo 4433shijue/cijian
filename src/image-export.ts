@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { download } from "./backup";
-import { xmlText, safeFilename } from "./work-export";
+import { download } from "./export-utils";
+import { xmlText, safeFilename } from "./export-utils";
 
 export async function illustratedStoryHtml(storyId: string) {
   return db.transaction(

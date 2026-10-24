@@ -16,7 +16,7 @@ import {
   type ReaderTarget,
   type ReaderRule,
 } from "./work-types";
-import { download } from "./backup";
+import { download } from "./export-utils";
 import { Modal } from "./Modal";
 
 export function PhoneReaderEditor({ story }: { story: Story }) {

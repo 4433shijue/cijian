@@ -142,6 +142,8 @@ export const imageJobSchema = z.object({
   plan: imagePlanSchema.optional(),
   prompt: z.string(),
   assetId: z.string(),
+  // Temporary signed URLs stay local and are deliberately excluded from backups.
+  downloadUrl: z.string().max(16000).optional(),
   error: z.string(),
   attempts: z.number().int().nonnegative(),
   executionId: z.string().optional(),
@@ -155,6 +157,7 @@ export const imageAssetSchema = z.object({
   storyId: z.string(),
   name: z.string(),
   mime: z.enum(["image/png", "image/jpeg", "image/webp"]),
+  contentHash: z.string().optional(),
   data: z.string().max(15 * 1024 * 1024),
   size: z
     .number()

@@ -36,7 +36,7 @@ it("upgrades an existing v14 profile without changing its effective image route 
   try {
     await updated.open();
     const saved = (await updated.imageProfiles.get("old"))!;
-    expect(updated.verno).toBe(15);
+    expect(updated.verno).toBe(16);
     expect(saved.key).toBe(row.key);
     expect(saved.protocol).toBe("images");
     expect(resolveImageEndpoint(imageConnectionSchema.parse(saved))).toBe(
@@ -73,7 +73,7 @@ it("round-trips protocol settings and historical combinations through both backu
     ];
     await saveImageProfile(p, "fixture-only-secret");
     const backup = await exportBackup();
-    expect(backup.version).toBe(10);
+    expect(backup.version).toBe(11);
     expect(JSON.stringify(backup)).not.toContain("fixture-only-secret");
     expect(backup.imageProfiles[0]).toMatchObject({
       protocol: "custom",

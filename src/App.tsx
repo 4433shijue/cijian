@@ -5,8 +5,10 @@ import { phonePromptLabels } from "./phone-prompts";
 import { CreateStory } from "./CreateStory";
 import { WorkPage, MigrationNotice, WorkWorldEditor } from "./WorkPage";
 import { updateStory } from "./story-service";
-import PhonePanel from "./PhonePanel";
-import { ImageConnectionSettings, StoryImageSettings, RoleImageFields } from "./ImageSettings";
+import { StoryImageSettings, RoleImageFields } from "./ImageSettings";
+import { lazyPanel } from "./lazy-panel";
+const PhonePanel = lazyPanel(() => import("./PhonePanel"));
+const ImageConnectionSettings = lazyPanel(() => import("./ImageConnectionSettings").then(m => ({ default: m.ImageConnectionSettings })));
 import { NovelImagePanel } from "./ImagePanel";
 import { useEffect, useLayoutEffect, useState, useRef, type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -40,9 +42,10 @@ import {
 import { db, makeStory, deleteStory, reviseEvent, setTimelineMode, ensureStoryRounds } from "./db";
 import { sharedTimeline, visibleText } from "./timeline";
 import { loadRoleDraft, saveRoleDraft, saveCreatedRole } from "./role-draft";
-import { InspirationAssistant } from "./InspirationAssistant";
-import { RoleGenerator as RoleCompletionAssistant } from "./RoleGenerator";
-import { TheaterPanel, EventRawOutput } from "./TheaterPanel";
+const InspirationAssistant = lazyPanel(() => import("./InspirationAssistant").then(m => ({ default: m.InspirationAssistant })));
+const RoleCompletionAssistant = lazyPanel(() => import("./RoleGenerator").then(m => ({ default: m.RoleGenerator })));
+const TheaterPanel = lazyPanel(() => import("./TheaterPanel").then(m => ({ default: m.TheaterPanel })));
+const EventRawOutput = lazyPanel(() => import("./TheaterPanel").then(m => ({ default: m.EventRawOutput })));
 import { StoryTheaterSettings, TheaterPresetSettings } from "./TheaterSettings";
 import { inspirationCount, chooseInspiration } from "./inspiration";
 import { memoryInterval, memoryReadLimit, memoryValid, roundLabel, selectRoundContext } from "./rounds";
@@ -92,7 +95,8 @@ import {
   resolveStylePreset,
 } from "./style-presets";
 import { Modal } from "./Modal";
-import { BackupSettings, StoryTransfer } from "./TransferPanels";
+const BackupSettings = lazyPanel(() => import("./TransferPanels").then(m => ({ default: m.BackupSettings })));
+const StoryTransfer = lazyPanel(() => import("./TransferPanels").then(m => ({ default: m.StoryTransfer })));
 type Notice = (message: string) => void;
 const date = (n: number) =>
   new Date(n).toLocaleString("zh-CN", {
@@ -2142,7 +2146,7 @@ function StoryPage({ id, notify, reading, onReadingChange }: {
                     </button>
                   </div>
                 )}
-                {e.kind === "novel" && e.status === "complete" && (reading || !e.collapsed) && <NovelImagePanel event={e} />}
+                {e.kind === "novel" && e.status === "complete" && (reading || !e.collapsed) && <NovelImagePanel event={e} readOnly={reading} />}
                 {e.status === "draft" && (e.raw || e.theater) && <EventRawOutput event={e} />}
                 {e.status === "draft" && e.request && (
                   <button

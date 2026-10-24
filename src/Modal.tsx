@@ -1,5 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
+const modalStack: HTMLElement[] = [];
+let pageOverflow = "";
 export function Modal({
   title,
   children,
@@ -13,6 +15,17 @@ export function Modal({
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {
+    const element = modalRef.current!;
+    if (!modalStack.length) pageOverflow = document.body.style.overflow;
+    modalStack.push(element);
+    modalStack.sort((a, b) =>
+      a === b
+        ? 0
+        : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING
+          ? -1
+          : 1,
+    );
+    document.body.style.overflow = "hidden";
     const previous = document.activeElement as HTMLElement;
     const focusables = () =>
       Array.from(
@@ -20,10 +33,18 @@ export function Modal({
           "button:not(:disabled),input:not(:disabled),textarea,select,a[href],summary",
         ) || [],
       ).filter((e) => e.offsetParent !== null);
-    if (!modalRef.current?.contains(document.activeElement))
+    if (
+      modalStack.at(-1) === element &&
+      !modalRef.current?.contains(document.activeElement)
+    )
       focusables()[0]?.focus();
     const close = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeRef.current();
+      if (modalStack.at(-1) !== element || e.defaultPrevented) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        closeRef.current();
+      }
       if (e.key === "Tab") {
         const items = focusables();
         if (!items.length) return;
@@ -39,12 +60,16 @@ export function Modal({
       }
     };
     document.addEventListener("keydown", close);
-    const old = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("keydown", close);
-      document.body.style.overflow = old;
-      previous?.focus();
+      const index = modalStack.indexOf(element);
+      if (index >= 0) modalStack.splice(index, 1);
+      if (!modalStack.length) document.body.style.overflow = pageOverflow;
+      if (
+        previous?.isConnected &&
+        (!modalStack.length || modalStack.at(-1)?.contains(previous))
+      )
+        previous.focus();
     };
   }, []);
   return (

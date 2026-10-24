@@ -13,8 +13,9 @@ import {
   type ImageJob,
   type ImageProfile,
 } from "./image-types";
-import { requestImage } from "./image-provider";
+import { requestImage, downloadGeneratedImage } from "./image-provider";
 import { validateImageConnection } from "./image-protocol";
+import { imageContentHash, storeImageReference } from "./image-storage";
 
 const controls = new Map<string, AbortController>();
 const chains = new Map<string, Promise<unknown>>();
@@ -94,6 +95,10 @@ function baseJob(
   };
 }
 async function insertJob(job: ImageJob) {
+  const hashes = new Map<string, string>();
+  for (const role of job.roles)
+    if (role.reference && !hashes.has(role.reference))
+      hashes.set(role.reference, await imageContentHash(role.reference));
   return db.transaction(
     "rw",
     db.imageJobs,
@@ -137,22 +142,12 @@ async function insertJob(job: ImageJob) {
       // Store each reference separately so a job remains small in chunked backups.
       for (const role of job.roles)
         if (role.reference) {
-          const match =
-            /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(
-              role.reference,
-            );
-          if (!match || match[2].length > 14 * 1024 * 1024)
-            throw Error("人物参考图格式或大小无效，请重新上传");
-          const id = uid();
-          await db.imageAssets.add({
-            id,
-            storyId: job.storyId,
-            name: role.name + "参考图",
-            mime: match[1] as "image/png" | "image/jpeg" | "image/webp",
-            data: role.reference,
-            size: atob(match[2]).length,
-          });
-          role.reference = id;
+          role.reference = await storeImageReference(
+            job.storyId,
+            role.name,
+            role.reference,
+            hashes.get(role.reference)!,
+          );
         }
       await db.imageJobs.add(job);
       return { job, added: true };
@@ -350,19 +345,24 @@ async function executeJob(id: string) {
   controls.set(id, control);
   let watcher: ReturnType<typeof setInterval> | undefined;
   try {
-    await currentSource(job);
+    const sourceStory = await currentSource(job);
+    if (!job.downloadUrl) assertAutomaticImagesEnabled(job, sourceStory);
     const prefs = await db.preferences.get("preferences"),
       profile =
         prefs?.activeImageProfile &&
         (await db.imageProfiles.get(prefs.activeImageProfile));
-    if (!profile || (!imageKey(profile) && profile.auth !== "none"))
+    if (
+      !job.downloadUrl &&
+      (!profile || (!imageKey(profile) && profile.auth !== "none"))
+    )
       throw Error("先到设置保存生图接口与 API Key，再重试这张图片");
-    validateImageConnection(profile);
+    if (!job.downloadUrl && profile) validateImageConnection(profile);
     control.signal.throwIfAborted();
     if ((await db.imageJobs.get(id))?.status !== "planning")
       throw Error("任务已停止");
     await db.imageJobs.update(id, {
-      leaseUntil: Date.now() + (profile.timeout + 900) * 1000,
+      leaseUntil:
+        Date.now() + (((profile && profile.timeout) || 180) + 900) * 1000,
       updated: Date.now(),
       error: "",
     });
@@ -375,125 +375,168 @@ async function executeJob(id: string) {
         })
         .catch(() => control.abort());
     }, 1000);
-    if (!job.plan) {
-      if (job.sourceKind === "phone" && isSelfie(job.sourceText)) {
-        await db.imageJobs.update(id, {
-          status: "blocked",
-          leaseUntil: 0,
-          error: "已阻止自拍请求，未调用生图接口",
-        });
-        return;
-      }
-      job.plan = await planImage(job, control);
-      control.signal.throwIfAborted();
-      const current = await db.imageJobs.get(id);
-      if (
-        !current ||
-        current.status !== "planning" ||
-        current.executionId !== executionId
-      )
-        throw Error("任务已停止");
-      await db.imageJobs.update(id, { plan: job.plan });
-    }
-    if (job.plan.selfie || isSelfie(job.plan.description)) {
-      await db.imageJobs.update(id, {
-        status: "blocked",
-        leaseUntil: 0,
-        error: "画面方案涉及自拍，已阻止生图",
-      });
-      return;
-    }
-    if (!job.plan.generate) {
-      await db.imageJobs.update(id, {
-        status: "skipped",
-        leaseUntil: 0,
-        error: job.plan.reason || "本轮没有适合的配图",
-      });
-      return;
-    }
-    if (!job.plan.description.trim())
-      throw Error("画面说明为空，未发送生图请求");
-    if (
-      isSelfie(job.style) ||
-      job.roles.some(
-        (r) => job.plan!.roleIds.includes(r.id) && isSelfie(r.appearance),
-      )
-    )
-      throw Error(
-        "画风或外貌设定包含自拍内容，请修改设定后重新创建配图；未发送生图请求",
-      );
-    const selected = job.roles.filter((r) => job!.plan!.roleIds.includes(r.id));
-    const references: string[] = [];
-    if (profile.references !== "off")
-      for (const role of selected.filter((r) => r.reference)) {
-        const reference = await db.imageAssets.get(role.reference);
-        if (!reference || reference.storyId !== job.storyId)
-          throw Error("人物参考图已缺失，请为当前正文重新创建配图");
-        references.push(reference.data);
-      }
-    const prompt = `${job.plan.description}\n画风：${job.style}\n${selected.map((r) => `${r.name}的固定外貌：${r.appearance || "按场景描述"}`).join("\n")}\n${
-      references.length
-        ? "参考图只用于保持对应人物的外貌，不复制参考图构图。参考图顺序：" +
-          selected
-            .filter((r) => r.reference)
-            .map((r) => r.name)
-            .join("、")
-        : ""
-    }\n${NO_SELFIE}${job.sourceKind === "phone" ? "后置镜头朝向外部，拍摄者及其脸、身体、镜面倒影均不出现在画面中。" : ""}\n只绘制已描述的瞬间，不加文字、水印或后续剧情。`;
-    if (prompt.length > 32000)
-      throw Error("画面描述与外貌设定过长，请精简后重试");
-    await db.transaction(
-      "rw",
-      db.stories,
-      db.events,
-      db.phoneRecords,
-      db.phoneConversations,
-      db.imageJobs,
-      async () => {
-        const story = await currentSource(job!);
+    let image: Awaited<ReturnType<typeof requestImage>>;
+    if (job.downloadUrl) {
+      await db.transaction("rw", db.imageJobs, async () => {
         const current = await db.imageJobs.get(id);
         if (
           !current ||
           current.executionId !== executionId ||
-          !imageWorking(current.status) ||
+          current.status !== "planning" ||
           control.signal.aborted
         )
           throw Error("任务已停止");
-        if (job!.automatic && job!.sourceKind === "phone") {
-          const settings = imageSettings(story.images);
-          if (!settings.phoneEnabled) throw Error("已关闭角色自动生图");
-          const all = await db.imageJobs
-            .where("storyId")
-            .equals(job!.storyId)
-            .toArray();
-          if (
-            all
-              .filter((j) => j.groupId === job!.groupId)
-              .reduce((n, j) => n + j.attempts, 0) >= settings.perTurn ||
-            all
-              .filter((j) => j.runId === job!.runId)
-              .reduce((n, j) => n + j.attempts, 0) >= settings.perRun
-          )
-            throw Error(
-              "本轮或本次推进的生图请求已达上限，请调整配图设置后重试",
-            );
-        }
-        job!.attempts = current.attempts + 1;
         await db.imageJobs.update(id, {
-          prompt,
           status: "generating",
-          attempts: job!.attempts,
           updated: Date.now(),
         });
-      },
-    );
-    const image = await requestImage(
-      profile,
-      imageKey(profile),
-      prompt,
-      references,
-      control.signal,
-    );
+      });
+      image = await downloadGeneratedImage(
+        job.downloadUrl,
+        control.signal,
+        (profile && profile.timeout) || 180,
+      );
+    } else {
+      if (!profile) throw Error("生图接口不存在");
+      if (!job.plan) {
+        if (job.sourceKind === "phone" && isSelfie(job.sourceText)) {
+          await db.imageJobs.update(id, {
+            status: "blocked",
+            leaseUntil: 0,
+            error: "已阻止自拍请求，未调用生图接口",
+          });
+          return;
+        }
+        job.plan = await planImage(job, control);
+        control.signal.throwIfAborted();
+        const current = await db.imageJobs.get(id);
+        if (
+          !current ||
+          current.status !== "planning" ||
+          current.executionId !== executionId
+        )
+          throw Error("任务已停止");
+        await db.imageJobs.update(id, { plan: job.plan });
+      }
+      if (job.plan.selfie || isSelfie(job.plan.description)) {
+        await db.imageJobs.update(id, {
+          status: "blocked",
+          leaseUntil: 0,
+          error: "画面方案涉及自拍，已阻止生图",
+        });
+        return;
+      }
+      if (!job.plan.generate) {
+        await db.imageJobs.update(id, {
+          status: "skipped",
+          leaseUntil: 0,
+          error: job.plan.reason || "本轮没有适合的配图",
+        });
+        return;
+      }
+      if (!job.plan.description.trim())
+        throw Error("画面说明为空，未发送生图请求");
+      if (
+        isSelfie(job.style) ||
+        job.roles.some(
+          (r) => job.plan!.roleIds.includes(r.id) && isSelfie(r.appearance),
+        )
+      )
+        throw Error(
+          "画风或外貌设定包含自拍内容，请修改设定后重新创建配图；未发送生图请求",
+        );
+      const selected = job.roles.filter((r) =>
+        job!.plan!.roleIds.includes(r.id),
+      );
+      const references: string[] = [];
+      if (profile.references !== "off")
+        for (const role of selected.filter((r) => r.reference)) {
+          const reference = await db.imageAssets.get(role.reference);
+          if (!reference || reference.storyId !== job.storyId)
+            throw Error("人物参考图已缺失，请为当前正文重新创建配图");
+          references.push(reference.data);
+        }
+      const prompt = `${job.plan.description}\n画风：${job.style}\n${selected.map((r) => `${r.name}的固定外貌：${r.appearance || "按场景描述"}`).join("\n")}\n${
+        references.length
+          ? "参考图只用于保持对应人物的外貌，不复制参考图构图。参考图顺序：" +
+            selected
+              .filter((r) => r.reference)
+              .map((r) => r.name)
+              .join("、")
+          : ""
+      }\n${NO_SELFIE}${job.sourceKind === "phone" ? "后置镜头朝向外部，拍摄者及其脸、身体、镜面倒影均不出现在画面中。" : ""}\n只绘制已描述的瞬间，不加文字、水印或后续剧情。`;
+      if (prompt.length > 32000)
+        throw Error("画面描述与外貌设定过长，请精简后重试");
+      await db.transaction(
+        "rw",
+        db.stories,
+        db.events,
+        db.phoneRecords,
+        db.phoneConversations,
+        db.imageJobs,
+        async () => {
+          const story = await currentSource(job!);
+          assertAutomaticImagesEnabled(job!, story);
+          const current = await db.imageJobs.get(id);
+          if (
+            !current ||
+            current.executionId !== executionId ||
+            !imageWorking(current.status) ||
+            control.signal.aborted
+          )
+            throw Error("任务已停止");
+          if (job!.automatic && job!.sourceKind === "phone") {
+            const settings = imageSettings(story.images);
+            if (!settings.phoneEnabled) throw Error("已关闭角色自动生图");
+            const all = await db.imageJobs
+              .where("storyId")
+              .equals(job!.storyId)
+              .toArray();
+            if (
+              all
+                .filter((j) => j.groupId === job!.groupId)
+                .reduce((n, j) => n + j.attempts, 0) >= settings.perTurn ||
+              all
+                .filter((j) => j.runId === job!.runId)
+                .reduce((n, j) => n + j.attempts, 0) >= settings.perRun
+            )
+              throw Error(
+                "本轮或本次推进的生图请求已达上限，请调整配图设置后重试",
+              );
+          }
+          job!.attempts = current.attempts + 1;
+          await db.imageJobs.update(id, {
+            prompt,
+            status: "generating",
+            attempts: job!.attempts,
+            updated: Date.now(),
+          });
+        },
+      );
+      image = await requestImage(
+        profile,
+        imageKey(profile),
+        prompt,
+        references,
+        control.signal,
+        fetch,
+        async (url) => {
+          if (url.length > 16000)
+            throw Error("图片下载地址过长，无法保存恢复信息");
+          await db.transaction("rw", db.imageJobs, async () => {
+            const current = await db.imageJobs.get(id);
+            if (
+              !current ||
+              current.executionId !== executionId ||
+              current.status !== "generating" ||
+              control.signal.aborted
+            )
+              throw Error("任务已停止");
+            await db.imageJobs.update(id, { downloadUrl: url });
+          });
+        },
+      );
+    }
     control.signal.throwIfAborted();
     await db.transaction("rw", db.tables, async () => {
       await currentSource(job!);
@@ -550,6 +593,7 @@ async function executeJob(id: string) {
       await db.imageJobs.update(id, {
         status: "complete",
         assetId: asset.id,
+        downloadUrl: undefined,
         error: "",
         leaseUntil: 0,
         updated: Date.now(),
@@ -571,6 +615,14 @@ async function executeJob(id: string) {
     if (watcher) clearInterval(watcher);
     controls.delete(id);
   }
+}
+function assertAutomaticImagesEnabled(job: ImageJob, story: Story) {
+  if (!job.automatic) return;
+  const settings = imageSettings(story.images);
+  if (job.sourceKind === "novel" && settings.novelMode === "manual")
+    throw Error("已关闭正文自动配图，尚未发送的生图请求已取消");
+  if (job.sourceKind === "phone" && !settings.phoneEnabled)
+    throw Error("已关闭角色自动生图，尚未发送的生图请求已取消");
 }
 async function queueJobWork(job: ImageJob) {
   const previous = chains.get(job.storyId) || Promise.resolve();
@@ -601,7 +653,7 @@ function launchImageJob(id: string) {
       .catch(() => {});
   });
 }
-export async function retryImageJob(id: string) {
+export async function retryImageJob(id: string, regenerate = false) {
   const retry = async () => {
     if (controls.has(id)) throw Error("上次请求正在停止，请稍后重试");
     const job = await db.imageJobs.get(id);
@@ -621,6 +673,7 @@ export async function retryImageJob(id: string) {
       await db.imageJobs.update(id, {
         status: "pending",
         executionId: uid(),
+        ...(regenerate ? { downloadUrl: undefined } : {}),
         error: "",
         leaseUntil: Date.now() + 30 * 60_000,
       });

@@ -70,6 +70,48 @@ export async function normalizeImage(bytes: Uint8Array) {
 export async function referenceFile(file: File) {
   return (await normalizeImage(new Uint8Array(await file.arrayBuffer()))).data;
 }
+async function downloadImageBytes(
+  url: string,
+  signal: AbortSignal,
+  fetcher = fetch,
+) {
+  const download = await fetcher(safeImageUrl(url).toString(), {
+    signal,
+    credentials: "omit",
+    redirect: "error",
+    referrerPolicy: "no-referrer",
+  });
+  if (!download.ok)
+    throw Error(
+      "图片已生成，但下载失败；可重新下载，未重新生图。若链接已过期，可自行选择重新生成",
+    );
+  return limitedImageBody(download, MAX_IMAGE);
+}
+export async function downloadGeneratedImage(
+  url: string,
+  signal: AbortSignal,
+  timeout = 180,
+  fetcher = fetch,
+) {
+  const downloadSignal = AbortSignal.any([
+    signal,
+    AbortSignal.timeout(timeout * 1000),
+  ]);
+  try {
+    downloadSignal.throwIfAborted();
+    const result = await normalizeImage(
+      await downloadImageBytes(url, downloadSignal, fetcher),
+    );
+    downloadSignal.throwIfAborted();
+    return result;
+  } catch (e) {
+    if (downloadSignal.aborted)
+      throw Error("图片下载已停止或超时；地址已保留，没有重新生图");
+    if (e instanceof TypeError)
+      throw Error("图片下载连接失败，请检查网络与跨域支持；没有重新生图");
+    throw e;
+  }
+}
 
 function waitForPoll(ms: number, signal: AbortSignal) {
   signal.throwIfAborted();
@@ -94,6 +136,7 @@ export async function requestImage(
   references: string[],
   signal: AbortSignal,
   fetcher = fetch,
+  onDownloadReady?: (url: string) => Promise<void>,
 ) {
   const p = imageConnectionSchema.parse(profile);
   const request = buildImageRequest(p, key, prompt, references);
@@ -172,14 +215,12 @@ export async function requestImage(
         );
       if (/^https?:\/\//.test(image)) {
         const url = safeImageUrl(image);
-        const download = await fetcher(url.toString(), {
-          signal: requestSignal,
-          credentials: "omit",
-          redirect: "error",
-          referrerPolicy: "no-referrer",
-        });
-        if (!download.ok) throw Error("图片已生成，但下载失败；未自动重新生图");
-        bytes = await limitedImageBody(download, MAX_IMAGE);
+        await onDownloadReady?.(url.toString());
+        bytes = await downloadImageBytes(
+          url.toString(),
+          requestSignal,
+          fetcher,
+        );
       } else {
         const b64 = image.startsWith("data:")
           ? image.slice(image.indexOf(",") + 1)

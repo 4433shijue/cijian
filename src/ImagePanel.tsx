@@ -27,10 +27,12 @@ export function ImageJobCard({
   job,
   current = true,
   showImage = true,
+  readOnly = false,
 }: {
   job: ImageJob;
   current?: boolean;
   showImage?: boolean;
+  readOnly?: boolean;
 }) {
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -70,17 +72,34 @@ export function ImageJobCard({
         <span role="status">
           {current ? labels[job.status] : `旧版本 · ${labels[job.status]}`}
         </span>
-        {imageWorking(job.status) && (
+        {!readOnly && imageWorking(job.status) && (
           <button onClick={() => void action(() => stopImageJob(job.id))}>
             停止配图
           </button>
         )}
-        {current &&
+        {!readOnly &&
+          current &&
           !imageWorking(job.status) &&
           !["complete", "skipped"].includes(job.status) && (
-            <button onClick={() => void action(() => retryImageJob(job.id))}>
-              重试配图
-            </button>
+            <>
+              <button onClick={() => void action(() => retryImageJob(job.id))}>
+                {job.downloadUrl ? "重新下载图片" : "重试配图"}
+              </button>
+              {job.downloadUrl && (
+                <button
+                  onClick={() => {
+                    if (
+                      confirm(
+                        "重新生成会再次调用生图服务，可能产生费用。确认重新生成？",
+                      )
+                    )
+                      void action(() => retryImageJob(job.id, true));
+                  }}
+                >
+                  重新生成图片
+                </button>
+              )}
+            </>
           )}
         {asset && (
           <a
@@ -104,7 +123,13 @@ export function ImageJobCard({
     </div>
   );
 }
-export function NovelImagePanel({ event }: { event: SceneEvent }) {
+export function NovelImagePanel({
+  event,
+  readOnly = false,
+}: {
+  event: SceneEvent;
+  readOnly?: boolean;
+}) {
   const jobs =
     useLiveQuery(
       () => db.imageJobs.where("sourceId").equals(event.id).sortBy("created"),
@@ -119,26 +144,28 @@ export function NovelImagePanel({ event }: { event: SceneEvent }) {
     <section className="novel-image-panel" aria-label="正文插画">
       <div className="row">
         <strong>这一幕的插画</strong>
-        <button
-          disabled={busy || current.some((j) => imageWorking(j.status))}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await createNovelImage(event.id);
-              setError("");
-            } catch (e) {
-              setError(String(e));
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {current.some((j) => j.status === "complete")
-            ? "再画一张"
-            : "为这一幕配图"}
-        </button>
+        {!readOnly && (
+          <button
+            disabled={busy || current.some((j) => imageWorking(j.status))}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await createNovelImage(event.id);
+                setError("");
+              } catch (e) {
+                setError(String(e));
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {current.some((j) => j.status === "complete")
+              ? "再画一张"
+              : "为这一幕配图"}
+          </button>
+        )}
       </div>
-      {latest && <ImageJobCard job={latest} />}
+      {latest && <ImageJobCard job={latest} readOnly={readOnly} />}
       {error && <p role="alert">{error}</p>}
       {!!older.length && (
         <details>
@@ -148,6 +175,7 @@ export function NovelImagePanel({ event }: { event: SceneEvent }) {
               key={job.id}
               job={job}
               current={job.sourceVersionId === event.versionId}
+              readOnly={readOnly}
             />
           ))}
         </details>

@@ -3,11 +3,12 @@ import { generatorTables } from "./generator-types";
 import { phoneTables } from "./phone-types";
 import { extraTables, automationTables } from "./work-types";
 import { backupTables } from "./transfer-types";
+import { MAX_RECORD_CHARS, MAX_RESTORED_RECORD_CHARS } from "./backup-records";
+export { MAX_RECORD_CHARS } from "./backup-records";
 
 // Only one top-level array item is assembled at a time. The decoder and scanner
 // both retain their state across chunks, including split UTF-8 and JSON escapes.
 export const READ_CHUNK_BYTES = 1024 * 1024;
-export const MAX_RECORD_CHARS = 16 * 1024 * 1024;
 export class BackupParser {
   private state:
     | "root"
@@ -132,9 +133,11 @@ export class BackupParser {
       }
       this.parts.push(text.slice(start, i));
       this.length += i - start;
-      if (this.length > MAX_RECORD_CHARS)
+      const limit = this.state === "item" && this.metadata.version !== 11
+        ? MAX_RESTORED_RECORD_CHARS : MAX_RECORD_CHARS;
+      if (this.length > limit)
         throw Error(
-          "单条资料超过 16 MiB 文本，请先缩小其中的头像或拆分版本历史；原资料未改变",
+          `单条资料超过 ${limit / 1024 / 1024} MiB 文本，请缩小素材或拆分版本历史；原资料未改变`,
         );
       if (!complete) return;
       const value = JSON.parse(this.parts.join(""));
@@ -170,10 +173,10 @@ export class BackupParser {
       throw Error("备份文件被截断，没有读到完整结尾");
     if (
       this.metadata.format !== "little-scene" ||
-      ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(this.metadata.version as number) ||
+      ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(this.metadata.version as number) ||
       typeof this.metadata.created !== "string"
     )
-      throw Error("这不是支持的此间备份（需要 version 1～10）");
+      throw Error("这不是支持的此间备份（需要 version 1～11）");
     for (const key of backupTables.filter(
       (t) => !imageTables.includes(t as any) && !generatorTables.includes(t as any) && !extraTables.includes(t as any) && !t.startsWith("phone") && t !== "chatBatches" && t !== "roleDrafts" && t !== "theaters",
     ))

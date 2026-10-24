@@ -365,7 +365,7 @@ it("backs up pictures, settings and recovery records without keys; remaps relati
   });
   const job = await settled((await createNovelImage((await prose()).id))!.id);
   const backup = await exportBackup();
-  expect(backup.version).toBe(10);
+  expect(backup.version).toBe(11);
   expect(JSON.stringify(backup)).not.toContain("image-secret-fixture");
   expect(() => validateBackup(backup)).not.toThrow();
   await importBackup(backup);

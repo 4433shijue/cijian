@@ -92,6 +92,7 @@ export function remapImage(
     status: imageWorking(j.status) ? "interrupted" : j.status,
     leaseUntil: 0,
     executionId: undefined,
+    downloadUrl: undefined,
     error: imageWorking(j.status)
       ? "导入的生图任务已中断，点击重试才会请求"
       : j.error,

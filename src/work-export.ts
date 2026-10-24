@@ -1,3 +1,5 @@
+import { xmlText, safeFilename } from "./export-utils";
+export { xmlText, safeFilename } from "./export-utils";
 import { recordText } from "./phone-store";
 import { Zip, ZipDeflate, ZipPassThrough, strToU8 } from "fflate";
 import { db } from "./db";
@@ -11,23 +13,8 @@ import {
   TransferControl,
 } from "./transfer-store";
 
-export const xmlText = (s: string) =>
-  s
-    .replace(
-      /[\u0000-\u0008\u000B\u000C\u000E-\u001F]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
-      "�",
-    )
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
 const mdText = (s: string) => s.replace(/([\\`*_{}[\]<>#+.!|~-])/g, "\\$1");
-export const safeFilename = (s: string) =>
-  s
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
-    .replace(/[ .]+$/, "")
-    .slice(0, 90) || "此间作品";
+
 type Block = {
   kind: "title" | "heading" | "prose" | "chat" | "theater";
   text: string;

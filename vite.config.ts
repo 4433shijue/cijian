@@ -34,15 +34,8 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id: string) {
+          if (/[\\/]node_modules[\\/]fflate[\\/]/.test(id)) return "archive-vendor";
           if (id.includes("node_modules")) return "vendor";
-          if (/[\\/]src[\\/](theater|theater-|FreeTheater|Theater)/.test(id))
-            return "theater";
-          if (
-            /[\\/]src[\\/](backup|backup-|transfer|TransferPanels|work-export)/.test(
-              id,
-            )
-          )
-            return "transfer";
           return undefined;
         },
       },

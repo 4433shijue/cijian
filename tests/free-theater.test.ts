@@ -306,7 +306,7 @@ it.each(["legacy", "stream"])(
         : JSON.parse(
             await (await exportBackupBlob(uid(), story.id)).blob.text(),
           );
-    expect(backup.version).toBe(10);
+    expect(backup.version).toBe(11);
     if (method === "legacy") await importBackup(backup);
     else {
       const staged = await stageBackup(

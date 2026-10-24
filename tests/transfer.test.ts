@@ -230,7 +230,7 @@ it("scans every character boundary without treating quotes or escaped braces as 
 it("stops an oversized individual record before parsing it or touching the archive", async () => {
   const record = vi.fn();
   const parser = new BackupParser(record);
-  await parser.push('{"roles":[{"id":"large","persona":"');
+  await parser.push('{"version":11,"roles":[{"id":"large","persona":"');
   const chunk = "a".repeat(READ_CHUNK_BYTES);
   for (let i = 0; i < MAX_RECORD_CHARS / READ_CHUNK_BYTES - 1; i++)
     await parser.push(chunk);

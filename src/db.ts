@@ -74,6 +74,7 @@ export class SceneDB extends Dexie {
   transferChunks!: Table<TransferChunk, [string, number]>;
   constructor(name = "little-scene-v1") {
     super(name);
+    this.version(16).stores({ imageAssets: "id,storyId,[storyId+contentHash]" });
     this.version(14).stores({ imageProfiles: "id", imageJobs: "id,storyId,sourceId,runId,status", imageAssets: "id,storyId" });
     this.version(15).stores({}).upgrade(async tx => {
       await tx.table("imageProfiles").toCollection().modify(p => {
