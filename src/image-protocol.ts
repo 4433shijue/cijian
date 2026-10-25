@@ -5,7 +5,6 @@ import {
 } from "./image-types";
 import {
   imageHeaders,
-  limitedImageBody,
   imageBodyChunks,
   type ImageBodyOptions,
   resolveImageEndpoint,
@@ -405,6 +404,9 @@ function providerFailure(data: any) {
     ["error", "response.failed", "response.incomplete"].includes(data?.type) ||
     data?.response?.error ||
     ["failed", "incomplete"].includes(data?.status) ||
+    array(data?.choices).some((c: any) =>
+      ["length", "content_filter"].includes(c?.finish_reason),
+    ) ||
     data?.promptFeedback?.blockReason ||
     array(data?.candidates).some((c: any) =>
       ["SAFETY", "IMAGE_SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST"].includes(
@@ -417,27 +419,10 @@ function providerFailure(data: any) {
 export async function readImageResponse(
   response: Response,
   resultPath = "",
-  options: ImageBodyOptions = {},
+  options: ImageBodyOptions & {
+    onFormat?: (format: "json" | "sse") => void | Promise<void>;
+  } = {},
 ) {
-  if (
-    !response.headers
-      .get("content-type")
-      ?.toLowerCase()
-      .includes("text/event-stream")
-  ) {
-    const text = new TextDecoder().decode(
-      await limitedImageBody(response, undefined, options),
-    );
-    let data: any;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw Error("生图接口未返回可读取的 JSON 或 SSE，请核对协议");
-    }
-    if (Array.isArray(data)) data.forEach(providerFailure);
-    else providerFailure(data);
-    return { data, image: extractImageResult(data, resultPath) };
-  }
   let last: any,
     result: string | undefined,
     content = "";
@@ -481,6 +466,7 @@ export async function readImageResponse(
         /^(?:data:|https?:\/\/)/.test(value) ? value : prior + value,
       );
     }
+    if (data?.choices?.[0]?.finish_reason === "stop") return true;
     return [
       "response.completed",
       "image_generation.completed",
@@ -489,9 +475,24 @@ export async function readImageResponse(
   };
   const decoder = new TextDecoder();
   let buffer = "",
-    complete = false;
+    complete = false,
+    format: "json" | "sse" | undefined;
   for await (const bytes of imageBodyChunks(response, undefined, options)) {
     buffer += decoder.decode(bytes, { stream: true });
+    if (!format) {
+      const start = buffer.trimStart();
+      // Relays sometimes label SSE as JSON/plain text. Wait for split field prefixes.
+      if (/^(?:data:|event:|id:|retry:|:)/.test(start)) format = "sse";
+      else if (
+        !start ||
+        ["data:", "event:", "id:", "retry:"].some((p) => p.startsWith(start))
+      )
+        continue;
+      else format = "json";
+      buffer = start;
+      await options.onFormat?.(format);
+    }
+    if (format === "json") continue;
     let separator: RegExpExecArray | null;
     while ((separator = /\r?\n\r?\n|\r\r/.exec(buffer))) {
       const block = buffer.slice(0, separator.index);
@@ -505,7 +506,18 @@ export async function readImageResponse(
   }
   if (!complete) {
     buffer += decoder.decode();
-    if (buffer.trim()) event(buffer);
+    if (format === "sse" && buffer.trim()) event(buffer);
+  }
+  if (format !== "sse") {
+    let data: any;
+    try {
+      data = JSON.parse(buffer);
+    } catch {
+      throw Error("生图接口未返回可读取的 JSON 或 SSE，请核对协议");
+    }
+    if (Array.isArray(data)) data.forEach(providerFailure);
+    else providerFailure(data);
+    return { data, image: extractImageResult(data, resultPath) };
   }
   if (!last) throw Error("生图服务返回了空流式响应");
   result ||= extractImageResult({

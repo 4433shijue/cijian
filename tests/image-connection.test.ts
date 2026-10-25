@@ -6,6 +6,7 @@ import {
   type ImageProfile,
 } from "../src/image-types";
 import {
+  chatImageCompatibility,
   fetchImageModels,
   imageModelsEndpoint,
   resolveImageEndpoint,
@@ -42,6 +43,79 @@ const run = (
   signal = new AbortController().signal,
 ) => requestImage(p, "fixture-secret", "窗边的花瓶", refs, signal, fetcher);
 afterEach(() => vi.useRealTimers());
+
+it.each([
+  "https://images.fixture.test/proxy/v1",
+  "https://images.fixture.test/proxy/v1/images/edits",
+  "https://images.fixture.test/proxy/v1/images/generations",
+])(
+  "prepares an explicit same-provider streaming alternative for %s without copying secrets",
+  (url) => {
+    const original = profile({
+      url,
+      model: "[按次]画室别名",
+      references: "multipart",
+      extraBody: '{"seed":42}',
+      resultPath: "data[0].url",
+    });
+    const connection = chatImageCompatibility({
+      ...original,
+      key: "fixture-secret",
+    } as ImageProfile)!;
+    expect(connection).toMatchObject({
+      url: "https://images.fixture.test/proxy/v1/chat/completions",
+      model: original.model,
+      protocol: "chat",
+      endpointMode: "full",
+      stream: true,
+      references: "auto",
+      extraBody: "",
+      resultPath: "",
+    });
+    expect(JSON.stringify(connection)).not.toContain("fixture-secret");
+    const saved = imageProfileSchema.parse({
+      ...original,
+      ...connection,
+      compatibilityBackup: { ...original, key: "fixture-secret" },
+    });
+    expect(saved.compatibilityBackup).toEqual(
+      imageConnectionSchema.parse(original),
+    );
+    expect(JSON.stringify(saved)).not.toContain("fixture-secret");
+    const req = buildImageRequest(saved, "fixture-secret", "花瓶", [dataUrl]);
+    expect(JSON.parse(req.body as string)).toMatchObject({
+      model: original.model,
+      stream: true,
+    });
+    expect(req.body).toContain("禁止生成自拍");
+    expect(original.url).toBe(url);
+  },
+);
+
+it("does not invent chat routes for custom or incompatible endpoints", () => {
+  expect(
+    chatImageCompatibility(
+      profile({
+        protocol: "custom",
+        url: "https://images.fixture.test/render",
+      }),
+    ),
+  ).toBeUndefined();
+  expect(
+    chatImageCompatibility(
+      profile({
+        protocol: "images",
+        url: "https://images.fixture.test/render",
+      }),
+    ),
+  ).toBeUndefined();
+  expect(
+    chatImageCompatibility(
+      profile({ url: "https://images.fixture.test/v1/chat/completions" }),
+    ),
+  ).toBeUndefined();
+  expect(chatImageCompatibility(profile({ url: "not a URL" }))).toBeUndefined();
+});
 
 it.each([
   [

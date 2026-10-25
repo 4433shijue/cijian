@@ -29,6 +29,74 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it.each(["application/json", "text/plain", "text/event-stream", ""])(
+  "recognizes split SSE fields and chat finish_reason under %s without waiting for EOF",
+  async (contentType) => {
+    const cancel = vi.fn(() => never<void>());
+    const chunks = [
+      ": heartbeat\r\n\r\n",
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "窗边的花。![image](data:image/png;base64," } }] })}\r\n\r\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: PNG + ")" } }] })}\r\n\r\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\r\n\r\n`,
+    ].join("");
+    const encoded = new TextEncoder().encode(chunks);
+    const format = vi.fn();
+    const result = await readImageResponse(
+      new Response(
+        new ReadableStream({
+          start(c) {
+            for (const byte of encoded) c.enqueue(new Uint8Array([byte]));
+          },
+          cancel,
+        }),
+        { headers: { "content-type": contentType } },
+      ),
+      "",
+      { onFormat: format },
+    );
+    expect(result.image).toBe(`data:image/png;base64,${PNG}`);
+    expect(format).toHaveBeenCalledExactlyOnceWith("sse");
+    expect(cancel).toHaveBeenCalledOnce();
+  },
+);
+
+it("reads a complete JSON fallback despite an SSE content type", async () => {
+  const format = vi.fn();
+  const result = await readImageResponse(
+    new Response(JSON.stringify({ data: [{ b64_json: PNG }] }), {
+      headers: { "content-type": "text/event-stream" },
+    }),
+    "",
+    { onFormat: format },
+  );
+  expect(result.image).toBe(PNG);
+  expect(format).toHaveBeenCalledExactlyOnceWith("json");
+});
+
+it.each(["length", "content_filter"])(
+  "rejects partial chat image output finished by %s",
+  async (finish_reason) => {
+    const data = {
+      choices: [
+        {
+          message: {
+            images: [{ image_url: { url: `data:image/png;base64,${PNG}` } }],
+          },
+          finish_reason,
+        },
+      ],
+    };
+    for (const body of [
+      JSON.stringify(data),
+      `data: ${JSON.stringify(data)}\n\ndata: [DONE]\n\n`,
+    ]) {
+      await expect(readImageResponse(new Response(body))).rejects.toThrow(
+        "未完成",
+      );
+    }
+  },
+);
+
 it("identifies a non-stream request with no response and never resubmits", async () => {
   vi.useFakeTimers();
   const fetcher = vi.fn(() => never<Response>());

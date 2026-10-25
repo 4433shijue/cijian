@@ -124,6 +124,35 @@ export function resolveImageEndpoint(
   if (protocol === "gemini" && p.stream) u.searchParams.set("alt", "sse");
   return u.toString();
 }
+// Explicit opt-in only; never use this to resubmit a failed generation.
+export function chatImageCompatibility(
+  p: ImageConnection,
+): ImageConnection | undefined {
+  try {
+    if (resolvedImageProtocol(p) !== "images") return;
+    const url = safeImageUrl(resolveImageEndpoint(p), true);
+    if (!/\/images\/(?:generations|edits)\/?$/.test(url.pathname)) return;
+    url.pathname = url.pathname.replace(
+      /\/images\/(?:generations|edits)\/?$/,
+      "/chat/completions",
+    );
+    return imageConnectionSchema.parse({
+      ...p,
+      url: url.toString(),
+      protocol: "chat",
+      endpointMode: "full",
+      stream: true,
+      references: p.references === "off" ? "off" : "auto",
+      extraBody: "",
+      resultPath: "",
+      pollUrl: "",
+      toolModel: "",
+    });
+  } catch {
+    return;
+  }
+}
+
 // Compatibility entry point for callers that only need address validation.
 export function imageEndpoint(url: string, edits = false) {
   return resolveImageEndpoint(

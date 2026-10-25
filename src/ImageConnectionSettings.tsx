@@ -16,6 +16,7 @@ import {
 import { ImageDiagnostics } from "./ImageDiagnostics";
 import type { ImageDiagnostic } from "./image-diagnostics";
 import {
+  chatImageCompatibility,
   fetchImageModels,
   imageModelsEndpoint,
   imageProtocols,
@@ -88,7 +89,23 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
       setListed(false);
       setSearch("");
     }
-    setProfile((p) => ({ ...p, ...patch }));
+    setProfile((p) => ({
+      ...p,
+      ...patch,
+      compatibilityBackup: [
+        "url",
+        "protocol",
+        "model",
+        "auth",
+        "endpointMode",
+      ].some(
+        (k) =>
+          k in patch &&
+          patch[k as keyof ImageProfile] !== p[k as keyof ImageProfile],
+      )
+        ? undefined
+        : p.compatibilityBackup,
+    }));
     setMessage("");
     setTested("");
     setPreview("");
@@ -139,6 +156,35 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
       if (mounted.current) setBusy("");
     }
   };
+  const compatible = chatImageCompatibility(profile);
+  const saveCompatibility = (restore = false) =>
+    void task("compatibility", async () => {
+      const connection = restore ? profile.compatibilityBackup : compatible;
+      if (!connection) return;
+      const next = imageProfileSchema.parse({
+        ...profile,
+        ...connection,
+        compatibilityBackup: restore
+          ? undefined
+          : imageConnectionSchema.parse(profile),
+      });
+      await saveImageProfile(next, key.trim());
+      if (!mounted.current) return;
+      setProfile(next);
+      setModels([]);
+      setManual(true);
+      setSearch("");
+      setListed(false);
+      setTested("");
+      setPreview("");
+      setDownloadUrl("");
+      setDiagnostic(undefined);
+      setMessage(
+        restore
+          ? "已恢复并保存原生图连接，未发送生图请求。"
+          : "已保存聊天流式兼容配置，未发送生图请求。",
+      );
+    });
   const textField = (
     label: string,
     field: keyof ImageProfile,
@@ -358,6 +404,32 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
               `识别为 ${imageProtocols[protocol]}。`}
             实际请求地址：<code>{endpoint}</code>
           </p>
+          {(compatible || profile.compatibilityBackup) && (
+            <div className="image-compatibility">
+              <strong>
+                {profile.compatibilityBackup
+                  ? "已启用聊天流式兼容"
+                  : "生图等待时连接中断？"}
+              </strong>
+              <p className="hint">
+                若服务支持同一模型通过聊天接口生图，可切换为聊天流式连接，接收服务陆续返回的内容。
+                切换后会保存配置，沿用模型与密钥，原配置可恢复。切换本身不生图；下次手动生成仍会计费。
+              </p>
+              {profile.compatibilityBackup ? (
+                <button type="button" onClick={() => saveCompatibility(true)}>
+                  恢复原生图连接
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!profile.model.trim()}
+                  onClick={() => saveCompatibility()}
+                >
+                  启用聊天流式兼容
+                </button>
+              )}
+            </div>
+          )}
           {protocol === "responses" && (
             <>
               <p className="hint">

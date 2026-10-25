@@ -88,11 +88,12 @@ async function downloadImageBytes(
     fetcher(safeImageUrl(url).toString(), {
       signal,
       credentials: "omit",
-      redirect: "error",
+      redirect: "follow",
       referrerPolicy: "no-referrer",
     }),
     signal,
   );
+  if (download.url) safeImageUrl(download.url);
   await report?.update({ downloadStatus: download.status });
   if (!download.ok)
     throw Error(
@@ -188,6 +189,7 @@ export async function requestImage(
   const bodyOptions = {
     signal: requestSignal,
     onBytes: (responseBytes: number) => report.update({ responseBytes }, true),
+    onFormat: (responseType: "json" | "sse") => report.update({ responseType }),
   };
   try {
     await report.update({ stage: "requesting" });
@@ -200,6 +202,7 @@ export async function requestImage(
         signal: requestSignal,
         credentials: "omit",
         redirect: "error",
+        referrerPolicy: "no-referrer",
       }),
       requestSignal,
     );
@@ -257,6 +260,7 @@ export async function requestImage(
               signal: requestSignal,
               credentials: "omit",
               redirect: "error",
+              referrerPolicy: "no-referrer",
             }),
             requestSignal,
           );
@@ -268,6 +272,7 @@ export async function requestImage(
           const received = report.value.responseBytes;
           const parsed = await readImageResponse(result, p.resultPath, {
             signal: requestSignal,
+            onFormat: bodyOptions.onFormat,
             onBytes: (count) =>
               report.update({ responseBytes: received + count }, true),
           });

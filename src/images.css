@@ -31,6 +31,16 @@
   font-size: 12px;
   white-space: normal;
 }
+.image-compatibility {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--border, #d5ddd3);
+  border-radius: 12px;
+}
+.image-compatibility button {
+  max-width: 100%;
+  white-space: normal;
+}
 .image-connection-status {
   display: flex;
   flex-wrap: wrap;

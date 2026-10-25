@@ -15,6 +15,270 @@ async function settings(page: Page, url: string) {
     .getByLabel("生图 API Key", { exact: true })
     .fill("fixture-connection-secret");
 }
+
+test("chat streaming compatibility saves and restores the original connection across reload without requests", async ({
+  page,
+}) => {
+  const calls: string[] = [];
+  await page.route("https://connection.fixture.test/**", (route) => {
+    calls.push(route.request().method());
+    return route.abort();
+  });
+  const url = "https://connection.fixture.test/proxy/v1/images/generations";
+  await settings(page, url);
+  await page.getByLabel("生图模型", { exact: true }).fill("[按次]画室别名");
+  await page.getByLabel("在此设备记住生图密钥", { exact: true }).check();
+  await page
+    .getByRole("button", { name: "启用聊天流式兼容", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "恢复原生图连接", exact: true }),
+  ).toBeVisible();
+  let saved = (await readStore(page, "imageProfiles"))[0];
+  expect(saved).toMatchObject({
+    url: "https://connection.fixture.test/proxy/v1/chat/completions",
+    protocol: "chat",
+    stream: true,
+    key: "fixture-connection-secret",
+    model: "[按次]画室别名",
+    compatibilityBackup: { url, protocol: "auto", stream: false },
+  });
+  expect(JSON.stringify(saved.compatibilityBackup)).not.toContain(
+    "fixture-connection-secret",
+  );
+  await page.reload();
+  await expect(page.getByLabel("生图 API Key", { exact: true })).toHaveValue(
+    "fixture-connection-secret",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator(".image-compatibility").scrollIntoViewIfNeeded();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  mkdirSync("work/image-recovery-qa", { recursive: true });
+  await page.screenshot({
+    path: "work/image-recovery-qa/compatibility-mobile.png",
+  });
+  await page
+    .getByRole("button", { name: "恢复原生图连接", exact: true })
+    .click();
+  await expect(page.getByLabel("生图接口地址", { exact: true })).toHaveValue(
+    url,
+  );
+  saved = (await readStore(page, "imageProfiles"))[0];
+  expect(saved.protocol).toBe("auto");
+  expect(saved.stream).toBe(false);
+  expect(saved.compatibilityBackup).toBeUndefined();
+  expect(saved.key).toBe("fixture-connection-secret");
+  await page.reload();
+  await page
+    .getByRole("button", { name: "启用聊天流式兼容", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "恢复原生图连接", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByLabel("生图接口地址", { exact: true })
+    .fill("https://another.fixture.test/v1/chat/completions");
+  await expect(
+    page.getByRole("button", { name: "恢复原生图连接", exact: true }),
+  ).toHaveCount(0);
+  expect(calls).toEqual([]);
+});
+
+test("manual streaming switch recovers from an idle connection cut without automatic paid fallback", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const original = window.fetch;
+    (window as any).__imagePostCalls = [];
+    window.fetch = function (...args) {
+      if (args[1]?.method === "POST")
+        (window as any).__imagePostCalls.push(String(args[0]));
+      return original.apply(this, args);
+    };
+  });
+  const calls: { path: string; body: any; referer?: string }[] = [];
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const server = createServer((req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Authorization, Content-Type",
+    );
+    if (req.method === "OPTIONS") return void res.end();
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      calls.push({
+        path: req.url!,
+        body: JSON.parse(body),
+        referer: req.headers.referer,
+      });
+      if (req.url?.endsWith("images/generations")) {
+        timers.add(setTimeout(() => res.destroy(), 350));
+        return;
+      }
+      // Simulate a relay that sends heartbeats, mislabels SSE, then leaves the connection open.
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write(": still generating\n\n");
+      timers.add(
+        setTimeout(() => {
+          res.write(
+            `data: ${JSON.stringify({ choices: [{ delta: { images: [{ image_url: { url: image } }] } }] })}\n\n`,
+          );
+          res.write(
+            `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+          );
+        }, 150),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as { port: number };
+  try {
+    await settings(
+      page,
+      `http://127.0.0.1:${address.port}/v1/images/generations`,
+    );
+    await page.getByLabel("生图模型", { exact: true }).fill("fixture-image");
+    const generate = page.getByRole("button", {
+      name: "生成测试图（消耗一次额度）",
+      exact: true,
+    });
+    await generate.click();
+    await expect(page.locator(".image-connection-message")).toContainText(
+      "等待接口响应时连接失败",
+    );
+    // Chromium may resend an HTTP request after ERR_EMPTY_RESPONSE below fetch.
+    // Count application submissions separately from server-side deliveries.
+    expect(
+      await page.evaluate(() => (window as any).__imagePostCalls),
+    ).toHaveLength(1);
+    expect(calls.every((c) => c.path === "/v1/images/generations")).toBe(true);
+    const beforeSwitch = calls.length;
+    await page
+      .getByRole("button", { name: "启用聊天流式兼容", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "恢复原生图连接", exact: true }),
+    ).toBeVisible();
+    expect(calls).toHaveLength(beforeSwitch);
+    expect(
+      await page.evaluate(() => (window as any).__imagePostCalls),
+    ).toHaveLength(1);
+    await generate.click();
+    await expect(page.locator(".image-test-preview")).toBeVisible({
+      timeout: 8000,
+    });
+    expect(calls).toHaveLength(beforeSwitch + 1);
+    expect(
+      await page.evaluate(() => (window as any).__imagePostCalls),
+    ).toHaveLength(2);
+    expect(calls.at(-1)).toMatchObject({
+      path: "/v1/chat/completions",
+      body: { model: "fixture-image", stream: true },
+    });
+    expect(calls.at(-1)!.body.messages[0].content).toContain("禁止生成自拍");
+    expect(calls.every((c) => !c.referer)).toBe(true);
+    const diagnostic = page.locator(".image-diagnostics");
+    await diagnostic.locator("summary").click();
+    await expect(diagnostic).toContainText("SSE（流式）");
+    await expect(diagnostic).toContainText("图片已接收（完成）");
+  } finally {
+    timers.forEach(clearTimeout);
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("generated image CDN redirects use credential-free GETs and never replay generation", async ({
+  page,
+  context,
+}) => {
+  let posts = 0;
+  const downloads: {
+    method: string;
+    path: string;
+    headers: Record<string, unknown>;
+  }[] = [];
+  const storage = createServer((req, res) => {
+    downloads.push({
+      method: req.method!,
+      path: "storage",
+      headers: req.headers,
+    });
+    res.writeHead(200, {
+      "Content-Type": "image/webp",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(Buffer.from(bitmap, "base64"));
+  });
+  await new Promise<void>((resolve) => storage.listen(0, "127.0.0.1", resolve));
+  const storagePort = (storage.address() as { port: number }).port;
+  const server = createServer((req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Authorization, Content-Type",
+    );
+    if (req.method === "OPTIONS") return void res.end();
+    if (req.method === "POST") {
+      posts++;
+      req.resume();
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          data: [{ url: `http://${req.headers.host}/redirect` }],
+        }),
+      );
+      return;
+    }
+    downloads.push({ method: req.method!, path: "cdn", headers: req.headers });
+    res.writeHead(302, {
+      Location: `http://127.0.0.1:${storagePort}/result.webp`,
+    });
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  try {
+    await context.addCookies([
+      {
+        name: "private",
+        value: "fixture",
+        domain: "127.0.0.1",
+        path: "/",
+        sameSite: "Lax",
+      },
+    ]);
+    await settings(page, `http://127.0.0.1:${port}/v1/images/generations`);
+    await page.getByLabel("生图模型", { exact: true }).fill("fixture-image");
+    await page
+      .getByRole("button", { name: "生成测试图（消耗一次额度）", exact: true })
+      .click();
+    await expect(page.locator(".image-test-preview")).toBeVisible();
+    expect(posts).toBe(1);
+    expect(downloads.map((d) => `${d.method} ${d.path}`)).toEqual([
+      "GET cdn",
+      "GET storage",
+    ]);
+    for (const download of downloads) {
+      for (const field of ["authorization", "x-api-key", "cookie", "referer"])
+        expect(download.headers).not.toHaveProperty(field);
+    }
+  } finally {
+    for (const active of [server, storage]) {
+      active.closeAllConnections();
+      await new Promise<void>((resolve) => active.close(() => resolve()));
+    }
+  }
+});
+
 test("model discovery, chat image stream, tested combinations and responsive settings", async ({
   page,
 }) => {

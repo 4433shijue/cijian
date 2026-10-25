@@ -84,6 +84,8 @@ export const imageProfileSchema = z.preprocess(
     id: z.string(),
     name: z.string(),
     remember: z.boolean().default(false),
+    // Connection fields only: never copy the API key into the restore snapshot.
+    compatibilityBackup: imageConnectionSchema.optional(),
     verified: z
       .array(
         z.object({
