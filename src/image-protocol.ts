@@ -11,6 +11,7 @@ import {
   resolvedImageProtocol,
   safeImageUrl,
 } from "./image-connection";
+import { imageJsonBoundary, type ImageJsonState } from "./image-json";
 
 const forbidden =
   /^(?:__proto__|prototype|constructor|authorization|api[-_]?key|access[-_]?token|secret|password|headers)$/i;
@@ -421,6 +422,7 @@ export async function readImageResponse(
   resultPath = "",
   options: ImageBodyOptions & {
     onFormat?: (format: "json" | "sse") => void | Promise<void>;
+    onJsonState?: (state: ImageJsonState) => void | Promise<void>;
   } = {},
 ) {
   let last: any,
@@ -474,11 +476,26 @@ export async function readImageResponse(
     ].includes(data?.type);
   };
   const decoder = new TextDecoder();
+  const jsonBoundary = imageJsonBoundary();
+  const jsonResult = async () => {
+    let data: any;
+    try {
+      data = JSON.parse(buffer);
+    } catch {
+      await options.onJsonState?.("invalid");
+      throw Error("生图接口返回的 JSON 格式无效，未自动重试");
+    }
+    await options.onJsonState?.("complete");
+    if (Array.isArray(data)) data.forEach(providerFailure);
+    else providerFailure(data);
+    return { data, image: extractImageResult(data, resultPath) };
+  };
   let buffer = "",
     complete = false,
     format: "json" | "sse" | undefined;
   for await (const bytes of imageBodyChunks(response, undefined, options)) {
-    buffer += decoder.decode(bytes, { stream: true });
+    let text = decoder.decode(bytes, { stream: true });
+    buffer += text;
     if (!format) {
       const start = buffer.trimStart();
       // Relays sometimes label SSE as JSON/plain text. Wait for split field prefixes.
@@ -490,9 +507,28 @@ export async function readImageResponse(
         continue;
       else format = "json";
       buffer = start;
+      text = buffer;
       await options.onFormat?.(format);
+      if (format === "json") await options.onJsonState?.("incomplete");
     }
-    if (format === "json") continue;
+    if (format === "json") {
+      let state = jsonBoundary.push(text);
+      if (state === "complete") {
+        const tail = decoder.decode();
+        buffer += tail;
+        state = jsonBoundary.push(tail);
+      }
+      if (state === "invalid") {
+        await options.onJsonState?.("invalid");
+        throw Error(
+          "生图接口未返回有效的单份 JSON 或 SSE，请核对协议；未自动重试",
+        );
+      }
+      // A complete JSON document is the result boundary even if the gateway
+      // leaves the HTTP body open. Do not salvage incomplete strings or objects.
+      if (state === "complete") return await jsonResult();
+      continue;
+    }
     let separator: RegExpExecArray | null;
     while ((separator = /\r?\n\r?\n|\r\r/.exec(buffer))) {
       const block = buffer.slice(0, separator.index);
@@ -505,19 +541,20 @@ export async function readImageResponse(
     if (complete) break;
   }
   if (!complete) {
-    buffer += decoder.decode();
+    const tail = decoder.decode();
+    buffer += tail;
+    if (format === "json") jsonBoundary.push(tail);
     if (format === "sse" && buffer.trim()) event(buffer);
   }
   if (format !== "sse") {
-    let data: any;
-    try {
-      data = JSON.parse(buffer);
-    } catch {
-      throw Error("生图接口未返回可读取的 JSON 或 SSE，请核对协议");
+    const state = jsonBoundary.push("");
+    if (format === "json" && state === "incomplete") {
+      await options.onJsonState?.("incomplete");
+      throw Error(
+        "生图响应在 JSON 收完整前结束，无法读取完整图片；服务端可能已计费，未自动重试",
+      );
     }
-    if (Array.isArray(data)) data.forEach(providerFailure);
-    else providerFailure(data);
-    return { data, image: extractImageResult(data, resultPath) };
+    return await jsonResult();
   }
   if (!last) throw Error("生图服务返回了空流式响应");
   result ||= extractImageResult({

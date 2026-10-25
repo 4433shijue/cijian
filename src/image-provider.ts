@@ -18,6 +18,7 @@ import {
   imageValueAt,
   readImageResponse,
 } from "./image-protocol";
+import type { ImageJsonState } from "./image-json";
 export { imageEndpoint } from "./image-connection";
 
 const MAX_IMAGE = 10 * 1024 * 1024;
@@ -188,8 +189,10 @@ export async function requestImage(
   const requestSignal = deadline.signal;
   const bodyOptions = {
     signal: requestSignal,
-    onBytes: (responseBytes: number) => report.update({ responseBytes }, true),
+    onBytes: (responseBytes: number) =>
+      report.update({ responseBytes, responseLastByteAt: Date.now() }, true),
     onFormat: (responseType: "json" | "sse") => report.update({ responseType }),
+    onJsonState: (jsonState: ImageJsonState) => report.update({ jsonState }),
   };
   try {
     await report.update({ stage: "requesting" });
@@ -267,14 +270,22 @@ export async function requestImage(
           await report.update({
             httpStatus: result.status,
             responseType: imageResponseType(result),
+            jsonState: undefined,
           });
           if (!result.ok) throw imageHttpError(result.status);
           const received = report.value.responseBytes;
           const parsed = await readImageResponse(result, p.resultPath, {
             signal: requestSignal,
             onFormat: bodyOptions.onFormat,
+            onJsonState: bodyOptions.onJsonState,
             onBytes: (count) =>
-              report.update({ responseBytes: received + count }, true),
+              report.update(
+                {
+                  responseBytes: received + count,
+                  responseLastByteAt: Date.now(),
+                },
+                true,
+              ),
           });
           data = parsed.data;
           const state = String(
@@ -344,12 +355,33 @@ export async function requestImage(
       throw Error("生图已停止；服务端可能已计费，请确认后再重试");
     if (deadline.expired)
       throw Error(
-        `${imageStageLabels[report.value.stage]}超时${report.value.stage === "receiving" ? `（已接收 ${report.value.responseBytes} 字节）` : ""}；服务端可能已计费，未自动重试`,
+        `${imageStageLabels[report.value.stage]}超时${report.value.stage === "receiving" ? `（已接收 ${report.value.responseBytes} 字节）` : ""}${report.value.jsonState === "incomplete" ? "，JSON 尚未收完整" : ""}；服务端可能已计费，未自动重试`,
       );
-    if (e instanceof TypeError)
+    if (
+      e instanceof TypeError ||
+      (e instanceof DOMException && e.name === "NetworkError")
+    ) {
+      if (
+        (report.value.stage === "receiving" ||
+          report.value.stage === "polling") &&
+        report.value.responseBytes > 0
+      )
+        throw Error(
+          `生图响应传输中断（已接收 ${report.value.responseBytes} 字节）${report.value.jsonState === "incomplete" ? "，JSON 尚未收完整" : "，未取得完整结果"}；服务端可能已计费，未自动重试`,
+        );
+      if (
+        report.value.stage === "receiving" &&
+        report.value.httpStatus !== undefined
+      )
+        throw Error(
+          "已收到接口响应头，但响应数据读取失败；服务端可能已计费，未自动重试",
+        );
+      if (report.value.stage === "processing")
+        throw Error("已收到图片数据，但图片处理失败；未自动重试");
       throw Error(
         `${imageStageLabels[report.value.stage]}时连接失败，请检查网络和浏览器跨域支持；未自动重试`,
       );
+    }
     throw e;
   } finally {
     deadline.stop();

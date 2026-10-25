@@ -642,9 +642,15 @@ test("non-stream response timeout exposes copyable diagnostics on mobile without
   await page.screenshot({ path: "work/image-recovery-qa/timeout-mobile.png" });
 });
 
-for (const mode of ["sse", "partial-json"] as const) {
-  test(`gateway connection stays open after ${mode}`, async ({ page }) => {
+for (const mode of [
+  "sse",
+  "partial-json",
+  "complete-json",
+  "broken-json",
+] as const) {
+  test(`gateway result recovery for ${mode}`, async ({ page }) => {
     let posts = 0;
+    const timers = new Set<ReturnType<typeof setTimeout>>();
     const server = createServer((req, res) => {
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader(
@@ -665,8 +671,23 @@ for (const mode of ["sse", "partial-json"] as const) {
         res.write(
           `data: ${JSON.stringify({ choices: [{ delta: { images: [{ image_url: { url: image } }] } }] })}\n\ndata: [DONE]\n\n`,
         );
+      } else if (mode === "complete-json") {
+        const payload = JSON.stringify({
+          data: [{ b64_json: bitmap }],
+          note: "x".repeat(650000),
+        });
+        const middle = Math.floor(payload.length / 2);
+        res.write(payload.slice(0, middle));
+        timers.add(
+          setTimeout(() => {
+            if (!res.destroyed) res.write(payload.slice(middle));
+          }, 100),
+        );
+      } else if (mode === "broken-json") {
+        res.write('{"data":[{"b64_json":"' + bitmap.slice(0, 300000));
+        timers.add(setTimeout(() => res.destroy(), 250));
       } else res.write('{"choices":[');
-      // Intentionally never end: reproduce relay responses with an open body.
+      // Complete JSON/SSE deliberately have no HTTP EOF; broken JSON loses the socket.
     });
     await new Promise<void>((resolve) =>
       server.listen(0, "127.0.0.1", resolve),
@@ -689,11 +710,24 @@ for (const mode of ["sse", "partial-json"] as const) {
           exact: true,
         })
         .click();
-      if (mode === "sse")
+      if (mode === "sse" || mode === "complete-json")
         await expect(page.locator(".image-test-preview")).toBeVisible({
           timeout: 8000,
         });
-      else
+      else if (mode === "broken-json") {
+        // WebKit can report an abruptly closed body as EOF, while Chromium
+        // rejects read(). Both must reject the unfinished JSON, without retrying.
+        await expect(page.locator(".image-connection-message")).toContainText(
+          /生图响应传输中断|JSON 收完整前结束/,
+        );
+        await expect(page.locator(".image-connection-message")).toContainText(
+          /JSON (尚未收完整|收完整前结束)/,
+        );
+        await expect(
+          page.locator(".image-connection-message"),
+        ).not.toContainText("跨域");
+        await expect(page.locator(".image-test-preview")).toHaveCount(0);
+      } else
         await expect(page.locator(".image-connection-message")).toContainText(
           "接收生图结果超时（已接收 12 字节）",
           { timeout: 15000 },
@@ -704,6 +738,14 @@ for (const mode of ["sse", "partial-json"] as const) {
       await expect(diagnostic).toContainText(
         mode === "sse" ? "SSE（流式）" : "JSON（非流式）",
       );
+      if (mode !== "sse") {
+        await expect(diagnostic).toContainText(
+          mode === "complete-json"
+            ? "JSON 完整性：已收完整并通过格式校验"
+            : "JSON 完整性：尚未收完整",
+        );
+        await expect(diagnostic).toContainText("距最后收到数据");
+      }
       expect(posts).toBe(1);
       mkdirSync("work/image-recovery-qa", { recursive: true });
       await diagnostic.scrollIntoViewIfNeeded();
@@ -711,6 +753,7 @@ for (const mode of ["sse", "partial-json"] as const) {
         path: `work/image-recovery-qa/${mode}-desktop.png`,
       });
     } finally {
+      timers.forEach(clearTimeout);
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

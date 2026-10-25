@@ -21,11 +21,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - run: npx playwright test e2e/modal-regression.spec.ts e2e/images.spec.ts e2e/image-connections.spec.ts e2e/backup-records.spec.ts --reporter=line
         env:
           RUN_LIVE: '0'
           RUN_THEATER_LIVE: '0'
+      - run: npx playwright test e2e/image-connections.spec.ts --browser=webkit --grep "gateway result recovery" --reporter=line
       - run: npm run build
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/

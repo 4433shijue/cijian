@@ -19,6 +19,8 @@ export const imageDiagnosticSchema = z.object({
   httpStatus: z.number().int().optional(),
   responseType: z.enum(["json", "sse", "image", "other"]).optional(),
   responseBytes: z.number().nonnegative(),
+  responseLastByteAt: z.number().nonnegative().optional(),
+  jsonState: z.enum(["incomplete", "complete", "invalid"]).optional(),
   downloadBytes: z.number().nonnegative(),
   downloadStatus: z.number().int().optional(),
   resultKind: z.enum(["url", "base64", "binary"]).optional(),
@@ -107,6 +109,16 @@ export function imageDiagnosticText(d: ImageDiagnostic) {
       : [`收到响应头：${(d.responseMs / 1000).toFixed(1)} 秒`]),
     `返回类型：${d.responseType ? type[d.responseType] : "未知"}`,
     `已接收结果：${d.responseBytes} 字节`,
+    ...(d.responseLastByteAt === undefined
+      ? []
+      : [
+          `距最后收到数据：${(Math.max(0, d.updatedAt - d.responseLastByteAt) / 1000).toFixed(1)} 秒`,
+        ]),
+    ...(d.jsonState === undefined
+      ? []
+      : [
+          `JSON 完整性：${d.jsonState === "complete" ? "已收完整并通过格式校验" : d.jsonState === "invalid" ? "格式无效" : "尚未收完整"}`,
+        ]),
     `图片结果：${d.resultKind === "url" ? "图片地址" : d.resultKind === "base64" ? "Base64" : d.resultKind === "binary" ? "图片文件" : "尚未解析出图片"}`,
     `图片下载：${d.downloadStatus === undefined ? "尚未收到下载响应" : `HTTP ${d.downloadStatus}`}；${d.downloadBytes} 字节`,
     `任务查询次数：${d.polls}`,
