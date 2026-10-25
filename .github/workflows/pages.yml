@@ -22,7 +22,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npx playwright install --with-deps chromium
-      - run: npx playwright test e2e/modal-regression.spec.ts e2e/images.spec.ts e2e/backup-records.spec.ts --reporter=line
+      - run: npx playwright test e2e/modal-regression.spec.ts e2e/images.spec.ts e2e/image-connections.spec.ts e2e/backup-records.spec.ts --reporter=line
         env:
           RUN_LIVE: '0'
           RUN_THEATER_LIVE: '0'

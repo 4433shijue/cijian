@@ -16,6 +16,7 @@ import {
 import { requestImage, downloadGeneratedImage } from "./image-provider";
 import { validateImageConnection } from "./image-protocol";
 import { imageContentHash, storeImageReference } from "./image-storage";
+import type { ImageProgress } from "./image-diagnostics";
 
 const controls = new Map<string, AbortController>();
 const chains = new Map<string, Promise<unknown>>();
@@ -44,6 +45,11 @@ export async function stopImageJob(id: string) {
         status: "interrupted",
         leaseUntil: 0,
         error: "已停止；服务端可能已处理请求，请确认后手动重试",
+        diagnostic: job.diagnostic && {
+          ...job.diagnostic,
+          outcome: "stopped",
+          updatedAt: Date.now(),
+        },
         updated: Date.now(),
       });
   });
@@ -343,6 +349,16 @@ async function executeJob(id: string) {
   if (!job) return;
   const control = new AbortController();
   controls.set(id, control);
+  const progress: ImageProgress = async (diagnostic) => {
+    await db.transaction("rw", db.imageJobs, async () => {
+      const current = await db.imageJobs.get(id);
+      if (
+        current?.executionId === executionId &&
+        current.status === "generating"
+      )
+        await db.imageJobs.update(id, { diagnostic });
+    });
+  };
   let watcher: ReturnType<typeof setInterval> | undefined;
   try {
     const sourceStory = await currentSource(job);
@@ -362,7 +378,7 @@ async function executeJob(id: string) {
       throw Error("任务已停止");
     await db.imageJobs.update(id, {
       leaseUntil:
-        Date.now() + (((profile && profile.timeout) || 180) + 900) * 1000,
+        Date.now() + (((profile && profile.timeout) || 180) * 2 + 900) * 1000,
       updated: Date.now(),
       error: "",
     });
@@ -395,6 +411,8 @@ async function executeJob(id: string) {
         job.downloadUrl,
         control.signal,
         (profile && profile.timeout) || 180,
+        fetch,
+        progress,
       );
     } else {
       if (!profile) throw Error("生图接口不存在");
@@ -535,6 +553,7 @@ async function executeJob(id: string) {
             await db.imageJobs.update(id, { downloadUrl: url });
           });
         },
+        progress,
       );
     }
     control.signal.throwIfAborted();
@@ -674,6 +693,7 @@ export async function retryImageJob(id: string, regenerate = false) {
         status: "pending",
         executionId: uid(),
         ...(regenerate ? { downloadUrl: undefined } : {}),
+        diagnostic: undefined,
         error: "",
         leaseUntil: Date.now() + 30 * 60_000,
       });
@@ -700,6 +720,7 @@ export async function initializeImages() {
         status: "interrupted",
         leaseUntil: 0,
         error: "上次生图中断，已保存的文字和图片保留；点击重试才会再次请求",
+        diagnostic: job.diagnostic && { ...job.diagnostic, outcome: "stopped" },
       });
     if (typeof navigator !== "undefined" && navigator.locks)
       await navigator.locks.request(

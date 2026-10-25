@@ -70,6 +70,24 @@
   max-width: min(100%, 360px);
   border-radius: 12px;
 }
+.image-diagnostics {
+  min-width: 0;
+  margin-block: 8px;
+}
+.image-diagnostics pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.image-diagnostics summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+.image-diagnostics textarea {
+  width: 100%;
+  min-height: 160px;
+}
 .novel-image-panel {
   border-top: 1px solid var(--border, #d5ddd3);
   margin: 20px 0 12px;

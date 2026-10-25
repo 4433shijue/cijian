@@ -11,6 +11,7 @@ import {
 } from "./image-generation";
 import { imageWorking, type ImageJob } from "./image-types";
 import { Modal } from "./Modal";
+import { ImageDiagnostics } from "./ImageDiagnostics";
 import "./images.css";
 
 const labels: Record<ImageJob["status"], string> = {
@@ -111,6 +112,7 @@ export function ImageJobCard({
         )}
       </div>
       {(job.error || error) && <p className="hint">{error || job.error}</p>}
+      {!readOnly && <ImageDiagnostics diagnostic={job.diagnostic} />}
       {expanded && asset && (
         <Modal title="故事配图" onClose={() => setExpanded(false)}>
           <img

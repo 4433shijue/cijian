@@ -93,6 +93,10 @@ export function remapImage(
     leaseUntil: 0,
     executionId: undefined,
     downloadUrl: undefined,
+    diagnostic: j.diagnostic && {
+      ...j.diagnostic,
+      outcome: imageWorking(j.status) ? "stopped" : j.diagnostic.outcome,
+    },
     error: imageWorking(j.status)
       ? "导入的生图任务已中断，点击重试才会请求"
       : j.error,

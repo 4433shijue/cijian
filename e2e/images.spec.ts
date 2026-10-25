@@ -305,6 +305,10 @@ test("failed downloads survive reload without another generation and reading hid
     page.getByRole("button", { name: "重新下载图片", exact: true }),
   ).toBeVisible();
   await page.reload();
+  const diagnostics = page.locator(".image-job .image-diagnostics").first();
+  await diagnostics.locator("summary").click();
+  await expect(diagnostics).toContainText("下载图片（失败）");
+  await expect(diagnostics).toContainText("HTTP 503");
   await page.getByRole("button", { name: "沉浸阅读", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "重新下载图片", exact: true }),

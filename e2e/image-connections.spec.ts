@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync, mkdirSync } from "node:fs";
+import { createServer } from "node:http";
 import { seedJourney, readStore } from "./fixtures";
 
 const bitmap = readFileSync("src/assets/decor/chat-banner-v1.webp").toString(
@@ -273,3 +274,181 @@ test("custom async generation preserves its endpoint and polls instead of resubm
     .poll(async () => (await readStore(page, "imageProfiles"))[0]?.pollUrl)
     .toBe("/jobs/{id}");
 });
+
+test("test image diagnostics retain download recovery without another paid request", async ({
+  page,
+}) => {
+  let posts = 0,
+    downloads = 0;
+  await page.route("https://connection.fixture.test/**", (route) => {
+    posts++;
+    return route.fulfill({
+      json: {
+        choices: [
+          {
+            message: {
+              content:
+                "![image](https://cdn.fixture.test/result.webp?signature=private-download-fixture)",
+            },
+          },
+        ],
+      },
+    });
+  });
+  await page.route("https://cdn.fixture.test/**", (route) => {
+    downloads++;
+    expect(route.request().headers()).not.toHaveProperty("authorization");
+    return route.fulfill(
+      downloads === 1
+        ? { status: 503, body: "not ready" }
+        : { contentType: "image/webp", body: Buffer.from(bitmap, "base64") },
+    );
+  });
+  await settings(page, "https://connection.fixture.test/v1/chat/completions");
+  await page.getByLabel("生图模型", { exact: true }).fill("fixture-image");
+  await page
+    .getByRole("button", { name: "生成测试图（消耗一次额度）", exact: true })
+    .click();
+  const recovery = page.getByRole("button", {
+    name: "重新下载测试图（不重新生图）",
+    exact: true,
+  });
+  await expect(recovery).toBeVisible();
+  const diagnostic = page.locator(".image-diagnostics");
+  await diagnostic.locator("summary").click();
+  await expect(diagnostic).toContainText("HTTP 200");
+  await expect(diagnostic).toContainText("HTTP 503");
+  await expect(diagnostic).toContainText("下载图片（失败）");
+  await expect(diagnostic).not.toContainText("private-download-fixture");
+  await expect(diagnostic).not.toContainText("fixture-connection-secret");
+  await recovery.click();
+  await expect(page.locator(".image-test-preview")).toBeVisible();
+  await expect(diagnostic).toContainText("重新下载，没有重新生图");
+  expect(posts).toBe(1);
+  expect(downloads).toBe(2);
+});
+
+test("non-stream response timeout exposes copyable diagnostics on mobile without resubmission", async ({
+  page,
+}) => {
+  let posts = 0;
+  await page.route("https://connection.fixture.test/**", () => {
+    posts++;
+  });
+  await settings(page, "https://connection.fixture.test/v1/chat/completions");
+  await page.getByLabel("生图模型", { exact: true }).fill("fixture-image");
+  await page
+    .locator(".image-settings summary")
+    .filter({ hasText: "接口兼容设置" })
+    .click();
+  await page.getByLabel("生图等待秒数", { exact: true }).fill("10");
+  await page
+    .getByRole("button", { name: "生成测试图（消耗一次额度）", exact: true })
+    .click();
+  await expect(page.locator(".image-connection-message")).toContainText(
+    "等待接口响应超时",
+    { timeout: 15000 },
+  );
+  const diagnostic = page.locator(".image-diagnostics");
+  await diagnostic.locator("summary").click();
+  await expect(diagnostic).toContainText("尚未收到响应头");
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async () => {
+          throw Error("fixture denied");
+        },
+      },
+    });
+  });
+  await page.getByRole("button", { name: "复制生图诊断", exact: true }).click();
+  await expect(page.getByLabel("请选中复制诊断", { exact: true })).toHaveValue(
+    /等待接口响应（超时）/,
+  );
+  expect(posts).toBe(1);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await diagnostic.scrollIntoViewIfNeeded();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  mkdirSync("work/image-recovery-qa", { recursive: true });
+  await page.screenshot({ path: "work/image-recovery-qa/timeout-mobile.png" });
+});
+
+for (const mode of ["sse", "partial-json"] as const) {
+  test(`gateway connection stays open after ${mode}`, async ({ page }) => {
+    let posts = 0;
+    const server = createServer((req, res) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Authorization, Content-Type",
+      );
+      if (req.method === "OPTIONS") {
+        res.end();
+        return;
+      }
+      posts++;
+      req.resume();
+      res.writeHead(200, {
+        "Content-Type":
+          mode === "sse" ? "text/event-stream" : "application/json",
+      });
+      if (mode === "sse") {
+        res.write(
+          `data: ${JSON.stringify({ choices: [{ delta: { images: [{ image_url: { url: image } }] } }] })}\n\ndata: [DONE]\n\n`,
+        );
+      } else res.write('{"choices":[');
+      // Intentionally never end: reproduce relay responses with an open body.
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address() as { port: number };
+    try {
+      await settings(
+        page,
+        `http://127.0.0.1:${address.port}/v1/chat/completions`,
+      );
+      await page.getByLabel("生图模型", { exact: true }).fill("fixture-image");
+      await page
+        .locator(".image-settings summary")
+        .filter({ hasText: "接口兼容设置" })
+        .click();
+      await page.getByLabel("生图等待秒数", { exact: true }).fill("10");
+      await page
+        .getByRole("button", {
+          name: "生成测试图（消耗一次额度）",
+          exact: true,
+        })
+        .click();
+      if (mode === "sse")
+        await expect(page.locator(".image-test-preview")).toBeVisible({
+          timeout: 8000,
+        });
+      else
+        await expect(page.locator(".image-connection-message")).toContainText(
+          "接收生图结果超时（已接收 12 字节）",
+          { timeout: 15000 },
+        );
+      const diagnostic = page.locator(".image-diagnostics");
+      await diagnostic.locator("summary").click();
+      await expect(diagnostic).toContainText("HTTP 200");
+      await expect(diagnostic).toContainText(
+        mode === "sse" ? "SSE（流式）" : "JSON（非流式）",
+      );
+      expect(posts).toBe(1);
+      mkdirSync("work/image-recovery-qa", { recursive: true });
+      await diagnostic.scrollIntoViewIfNeeded();
+      await page.screenshot({
+        path: `work/image-recovery-qa/${mode}-desktop.png`,
+      });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+}

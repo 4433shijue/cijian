@@ -6,6 +6,8 @@ import {
 import {
   imageHeaders,
   limitedImageBody,
+  imageBodyChunks,
+  type ImageBodyOptions,
   resolveImageEndpoint,
   resolvedImageProtocol,
   safeImageUrl,
@@ -412,9 +414,20 @@ function providerFailure(data: any) {
   )
     throw Error("服务报告生成失败、受限或未完成；未自动重试，请查看服务记录");
 }
-export async function readImageResponse(response: Response, resultPath = "") {
-  const text = new TextDecoder().decode(await limitedImageBody(response));
-  if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+export async function readImageResponse(
+  response: Response,
+  resultPath = "",
+  options: ImageBodyOptions = {},
+) {
+  if (
+    !response.headers
+      .get("content-type")
+      ?.toLowerCase()
+      .includes("text/event-stream")
+  ) {
+    const text = new TextDecoder().decode(
+      await limitedImageBody(response, undefined, options),
+    );
     let data: any;
     try {
       data = JSON.parse(text);
@@ -429,13 +442,14 @@ export async function readImageResponse(response: Response, resultPath = "") {
     result: string | undefined,
     content = "";
   const imageDeltas = new Map<number, string>();
-  for (const block of text.replace(/\r\n/g, "\n").split(/\n\n/)) {
+  const event = (block: string) => {
     const raw = block
-      .split("\n")
+      .split(/\r\n|\r|\n/)
       .filter((l) => l.startsWith("data:"))
       .map((l) => l.slice(5).trimStart())
       .join("\n");
-    if (!raw || raw === "[DONE]") continue;
+    if (raw === "[DONE]") return true;
+    if (!raw) return false;
     let data: any;
     try {
       data = JSON.parse(raw);
@@ -467,6 +481,31 @@ export async function readImageResponse(response: Response, resultPath = "") {
         /^(?:data:|https?:\/\/)/.test(value) ? value : prior + value,
       );
     }
+    return [
+      "response.completed",
+      "image_generation.completed",
+      "image_edit.completed",
+    ].includes(data?.type);
+  };
+  const decoder = new TextDecoder();
+  let buffer = "",
+    complete = false;
+  for await (const bytes of imageBodyChunks(response, undefined, options)) {
+    buffer += decoder.decode(bytes, { stream: true });
+    let separator: RegExpExecArray | null;
+    while ((separator = /\r?\n\r?\n|\r\r/.exec(buffer))) {
+      const block = buffer.slice(0, separator.index);
+      buffer = buffer.slice(separator.index + separator[0].length);
+      if (event(block)) {
+        complete = true;
+        break;
+      }
+    }
+    if (complete) break;
+  }
+  if (!complete) {
+    buffer += decoder.decode();
+    if (buffer.trim()) event(buffer);
   }
   if (!last) throw Error("生图服务返回了空流式响应");
   result ||= extractImageResult({

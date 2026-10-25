@@ -1,5 +1,13 @@
 import { imageConnectionSchema, type ImageProfile } from "./image-types";
 import {
+  imageAbortable,
+  imageDeadline,
+  imageReporter,
+  imageResponseType,
+  imageStageLabels,
+  type ImageProgress,
+} from "./image-diagnostics";
+import {
   imageHeaders,
   imageHttpError,
   limitedImageBody,
@@ -74,42 +82,75 @@ async function downloadImageBytes(
   url: string,
   signal: AbortSignal,
   fetcher = fetch,
+  report?: ReturnType<typeof imageReporter>,
 ) {
-  const download = await fetcher(safeImageUrl(url).toString(), {
+  const download = await imageAbortable(
+    fetcher(safeImageUrl(url).toString(), {
+      signal,
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    }),
     signal,
-    credentials: "omit",
-    redirect: "error",
-    referrerPolicy: "no-referrer",
-  });
+  );
+  await report?.update({ downloadStatus: download.status });
   if (!download.ok)
     throw Error(
       "图片已生成，但下载失败；可重新下载，未重新生图。若链接已过期，可自行选择重新生成",
     );
-  return limitedImageBody(download, MAX_IMAGE);
+  return limitedImageBody(download, MAX_IMAGE, {
+    signal,
+    onBytes: (downloadBytes) => report?.update({ downloadBytes }, true),
+  });
 }
 export async function downloadGeneratedImage(
   url: string,
   signal: AbortSignal,
   timeout = 180,
   fetcher = fetch,
+  onProgress?: ImageProgress,
 ) {
-  const downloadSignal = AbortSignal.any([
-    signal,
-    AbortSignal.timeout(timeout * 1000),
-  ]);
+  let deadline = imageDeadline(signal, timeout * 1000);
+  const report = imageReporter(onProgress);
   try {
-    downloadSignal.throwIfAborted();
-    const result = await normalizeImage(
-      await downloadImageBytes(url, downloadSignal, fetcher),
+    await report.update({
+      operation: "download",
+      stage: "downloading",
+      resultKind: "url",
+    });
+    deadline.signal.throwIfAborted();
+    const bytes = await downloadImageBytes(
+      url,
+      deadline.signal,
+      fetcher,
+      report,
     );
-    downloadSignal.throwIfAborted();
+    deadline.signal.throwIfAborted();
+    deadline.stop();
+    deadline = imageDeadline(signal, 30000);
+    await report.update({ stage: "processing" });
+    const result = await imageAbortable(normalizeImage(bytes), deadline.signal);
+    deadline.signal.throwIfAborted();
+    await report.update({ stage: "complete", outcome: "success" });
     return result;
   } catch (e) {
-    if (downloadSignal.aborted)
-      throw Error("图片下载已停止或超时；地址已保留，没有重新生图");
+    await report.update({
+      outcome: signal.aborted
+        ? "stopped"
+        : deadline.expired
+          ? "timeout"
+          : "failed",
+    });
+    if (signal.aborted) throw Error("图片下载已停止；地址已保留，没有重新生图");
+    if (deadline.expired)
+      throw Error(
+        `${imageStageLabels[report.value.stage]}超时；地址已保留，没有重新生图`,
+      );
     if (e instanceof TypeError)
       throw Error("图片下载连接失败，请检查网络与跨域支持；没有重新生图");
     throw e;
+  } finally {
+    deadline.stop();
   }
 }
 
@@ -137,20 +178,36 @@ export async function requestImage(
   signal: AbortSignal,
   fetcher = fetch,
   onDownloadReady?: (url: string) => Promise<void>,
+  onProgress?: ImageProgress,
 ) {
   const p = imageConnectionSchema.parse(profile);
   const request = buildImageRequest(p, key, prompt, references);
-  const timeout = AbortSignal.timeout(p.timeout * 1000),
-    requestSignal = AbortSignal.any([signal, timeout]);
+  let deadline = imageDeadline(signal, p.timeout * 1000);
+  const report = imageReporter(onProgress);
+  const requestSignal = deadline.signal;
+  const bodyOptions = {
+    signal: requestSignal,
+    onBytes: (responseBytes: number) => report.update({ responseBytes }, true),
+  };
   try {
+    await report.update({ stage: "requesting" });
     requestSignal.throwIfAborted();
-    const response = await fetcher(request.url, {
-      method: "POST",
-      headers: request.headers,
-      body: request.body,
-      signal: requestSignal,
-      credentials: "omit",
-      redirect: "error",
+    const response = await imageAbortable(
+      fetcher(request.url, {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+        signal: requestSignal,
+        credentials: "omit",
+        redirect: "error",
+      }),
+      requestSignal,
+    );
+    await report.update({
+      stage: "receiving",
+      httpStatus: response.status,
+      responseType: imageResponseType(response),
+      responseMs: Date.now() - report.value.startedAt,
     });
     if (!response.ok) throw imageHttpError(response.status);
     let bytes: Uint8Array;
@@ -159,9 +216,14 @@ export async function requestImage(
         response.headers.get("content-type") || "",
       )
     ) {
-      bytes = await limitedImageBody(response, MAX_IMAGE);
+      await report.update({ resultKind: "binary" });
+      bytes = await limitedImageBody(response, MAX_IMAGE, bodyOptions);
     } else {
-      let { data, image } = await readImageResponse(response, p.resultPath);
+      let { data, image } = await readImageResponse(
+        response,
+        p.resultPath,
+        bodyOptions,
+      );
       if (p.pollUrl && !image) {
         const id = imageValueAt(data, p.taskIdPath);
         if (
@@ -186,15 +248,29 @@ export async function requestImage(
             .split(",")
             .map((s) => s.trim().toLowerCase());
         for (;;) {
+          await report.update({ stage: "polling" });
           await waitForPoll(p.pollInterval * 1000, requestSignal);
-          const result = await fetcher(pollUrl.toString(), {
-            headers: imageHeaders(p, key),
-            signal: requestSignal,
-            credentials: "omit",
-            redirect: "error",
+          await report.update({ polls: report.value.polls + 1 });
+          const result = await imageAbortable(
+            fetcher(pollUrl.toString(), {
+              headers: imageHeaders(p, key),
+              signal: requestSignal,
+              credentials: "omit",
+              redirect: "error",
+            }),
+            requestSignal,
+          );
+          await report.update({
+            httpStatus: result.status,
+            responseType: imageResponseType(result),
           });
           if (!result.ok) throw imageHttpError(result.status);
-          const parsed = await readImageResponse(result, p.resultPath);
+          const received = report.value.responseBytes;
+          const parsed = await readImageResponse(result, p.resultPath, {
+            signal: requestSignal,
+            onBytes: (count) =>
+              report.update({ responseBytes: received + count }, true),
+          });
           data = parsed.data;
           const state = String(
             imageValueAt(data, p.statusPath) ?? "",
@@ -215,13 +291,20 @@ export async function requestImage(
         );
       if (/^https?:\/\//.test(image)) {
         const url = safeImageUrl(image);
+        await report.update({ resultKind: "url" });
         await onDownloadReady?.(url.toString());
+        requestSignal.throwIfAborted();
+        deadline.stop();
+        deadline = imageDeadline(signal, p.timeout * 1000);
+        await report.update({ stage: "downloading" });
         bytes = await downloadImageBytes(
           url.toString(),
-          requestSignal,
+          deadline.signal,
           fetcher,
+          report,
         );
       } else {
+        await report.update({ resultKind: "base64" });
         const b64 = image.startsWith("data:")
           ? image.slice(image.indexOf(",") + 1)
           : image;
@@ -233,19 +316,37 @@ export async function requestImage(
         }
       }
     }
-    requestSignal.throwIfAborted();
-    const normalized = await normalizeImage(bytes);
-    requestSignal.throwIfAborted();
+    deadline.signal.throwIfAborted();
+    deadline.stop();
+    deadline = imageDeadline(signal, 30000);
+    await report.update({ stage: "processing" });
+    const normalized = await imageAbortable(
+      normalizeImage(bytes),
+      deadline.signal,
+    );
+    deadline.signal.throwIfAborted();
+    await report.update({ stage: "complete", outcome: "success" });
     return normalized;
   } catch (e) {
+    await report.update({
+      outcome: signal.aborted
+        ? "stopped"
+        : deadline.expired
+          ? "timeout"
+          : "failed",
+    });
     if (signal.aborted)
       throw Error("生图已停止；服务端可能已计费，请确认后再重试");
-    if (timeout.aborted)
-      throw Error("生图等待超时；服务端可能已计费，未自动重试");
+    if (deadline.expired)
+      throw Error(
+        `${imageStageLabels[report.value.stage]}超时${report.value.stage === "receiving" ? `（已接收 ${report.value.responseBytes} 字节）` : ""}；服务端可能已计费，未自动重试`,
+      );
     if (e instanceof TypeError)
       throw Error(
-        "无法连接图片服务或下载图片，请检查网络和浏览器跨域支持；未自动重试",
+        `${imageStageLabels[report.value.stage]}时连接失败，请检查网络和浏览器跨域支持；未自动重试`,
       );
     throw e;
+  } finally {
+    deadline.stop();
   }
 }

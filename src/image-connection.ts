@@ -3,6 +3,7 @@ import {
   type ImageConnection,
   type ImageProtocol,
 } from "./image-types";
+import { imageAbortable } from "./image-diagnostics";
 
 export const imageProtocols: Record<ImageProtocol, string> = {
   auto: "自动识别",
@@ -171,29 +172,55 @@ export function imageHeaders(p: ImageConnection, key: string) {
       auth === "bearer" ? `Bearer ${key.trim()}` : key.trim(),
   };
 }
-export async function limitedImageBody(
+export interface ImageBodyOptions {
+  signal?: AbortSignal;
+  onBytes?: (bytes: number) => void | Promise<void>;
+}
+export async function* imageBodyChunks(
   response: Response,
   max = 20 * 1024 * 1024,
+  options: ImageBodyOptions = {},
 ) {
   if (Number(response.headers.get("content-length")) > max)
     throw Error("接口响应过大，已停止读取");
   const reader = response.body?.getReader();
   if (!reader) throw Error("服务返回了空响应");
-  const chunks: Uint8Array[] = [];
   let size = 0;
+  let finished = false;
   try {
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      options.signal?.throwIfAborted();
+      const { done, value } = await imageAbortable(
+        reader.read(),
+        options.signal,
+      );
+      if (done) {
+        finished = true;
+        break;
+      }
       size += value.length;
       if (size > max) {
-        await reader.cancel();
         throw Error("接口响应过大，已停止读取");
       }
-      chunks.push(value);
+      await options.onBytes?.(size);
+      yield value;
     }
   } finally {
+    // Some gateways never close after [DONE]. Cancellation must not wait for them.
+    if (!finished) void reader.cancel().catch(() => {});
     reader.releaseLock();
+  }
+}
+export async function limitedImageBody(
+  response: Response,
+  max = 20 * 1024 * 1024,
+  options: ImageBodyOptions = {},
+) {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for await (const value of imageBodyChunks(response, max, options)) {
+    chunks.push(value);
+    size += value.length;
   }
   const bytes = new Uint8Array(size);
   let offset = 0;

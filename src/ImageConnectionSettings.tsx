@@ -8,7 +8,13 @@ import {
   type ImageProfile,
 } from "./image-types";
 import { imageKey, saveImageProfile } from "./image-generation";
-import { requestImage, referenceFile } from "./image-provider";
+import {
+  requestImage,
+  referenceFile,
+  downloadGeneratedImage,
+} from "./image-provider";
+import { ImageDiagnostics } from "./ImageDiagnostics";
+import type { ImageDiagnostic } from "./image-diagnostics";
 import {
   fetchImageModels,
   imageModelsEndpoint,
@@ -56,6 +62,8 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
   const [search, setSearch] = useState("");
   const [imageOnly, setImageOnly] = useState(false);
   const [preview, setPreview] = useState("");
+  const [downloadUrl, setDownloadUrl] = useState("");
+  const [diagnostic, setDiagnostic] = useState<ImageDiagnostic>();
   const [reference, setReference] = useState("");
   const [tested, setTested] = useState("");
   const [listed, setListed] = useState(false);
@@ -84,6 +92,8 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
     setMessage("");
     setTested("");
     setPreview("");
+    setDownloadUrl("");
+    setDiagnostic(undefined);
   };
   let connectionId = "";
   const normalized = imageConnectionSchema.safeParse(profile);
@@ -191,6 +201,8 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
                 setMessage("");
                 setTested("");
                 setPreview("");
+                setDownloadUrl("");
+                setDiagnostic(undefined);
               }}
             />
           </label>
@@ -548,6 +560,9 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
                 onChange={(e) => change({ timeout: Number(e.target.value) })}
               />
             </label>
+            <p className="hint">
+              生成结果和图片下载分别使用此等待时间；超时不会自动重新生图。
+            </p>
             <label className="field">
               额外请求参数（JSON）
               <textarea
@@ -678,6 +693,8 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
                       setReference(data);
                       setTested("");
                       setPreview("");
+                      setDownloadUrl("");
+                      setDiagnostic(undefined);
                     }
                   });
                 }}
@@ -698,6 +715,8 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
                   onClick={() => {
                     setReference("");
                     setTested("");
+                    setDownloadUrl("");
+                    setDiagnostic(undefined);
                   }}
                 >
                   移除测试参考图
@@ -727,6 +746,8 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
                 void task("image", async (signal) => {
                   setMessage("正在生成测试图…");
                   setPreview("");
+                  setDownloadUrl("");
+                  setDiagnostic(undefined);
                   setTested("");
                   const connection = imageConnectionSchema.parse(profile);
                   const result = await requestImage(
@@ -735,9 +756,17 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
                     "一盆放在窗台上的绿植，柔和日光，无人物。若有参考图，保留物品的外观。",
                     reference ? [reference] : [],
                     signal,
+                    fetch,
+                    async (url) => {
+                      if (mounted.current) setDownloadUrl(url);
+                    },
+                    (value) => {
+                      if (mounted.current) setDiagnostic(value);
+                    },
                   );
                   if (!mounted.current || signal.aborted) return;
                   setPreview(result.data);
+                  setDownloadUrl("");
                   setTested(connectionId);
                   setProfile((p) => ({
                     ...p,
@@ -759,7 +788,7 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
           </div>
         </fieldset>
       </form>
-      {["models", "image"].includes(busy) && control.current && (
+      {["models", "image", "download"].includes(busy) && control.current && (
         <button onClick={() => control.current?.abort()}>
           {busy === "models" ? "停止拉取" : "停止测试"}
         </button>
@@ -769,6 +798,44 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
           {message}
         </p>
       )}
+      {downloadUrl && !busy && !preview && (
+        <button
+          type="button"
+          onClick={() =>
+            void task("download", async (signal) => {
+              const result = await downloadGeneratedImage(
+                downloadUrl,
+                signal,
+                profile.timeout,
+                fetch,
+                (value) => {
+                  if (mounted.current) setDiagnostic(value);
+                },
+              );
+              if (!mounted.current || signal.aborted) return;
+              setPreview(result.data);
+              setDownloadUrl("");
+              setTested(connectionId);
+              const connection = imageConnectionSchema.parse(profile);
+              setProfile((p) => ({
+                ...p,
+                verified: [
+                  { testedAt: Date.now(), connection },
+                  ...p.verified.filter(
+                    (v) => JSON.stringify(v.connection) !== connectionId,
+                  ),
+                ].slice(0, 10),
+              }));
+              setMessage(
+                "测试图片已重新下载，没有重新生图。点击保存可保留测通配置。",
+              );
+            })
+          }
+        >
+          重新下载测试图（不重新生图）
+        </button>
+      )}
+      <ImageDiagnostics diagnostic={diagnostic} />
       {preview && (
         <img
           className="image-test-preview"

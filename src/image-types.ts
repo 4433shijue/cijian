@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { imageDiagnosticSchema } from "./image-diagnostics";
 
 export const imageSettingsSchema = z.object({
   novelMode: z.enum(["manual", "every", "auto"]).default("manual"),
@@ -144,6 +145,7 @@ export const imageJobSchema = z.object({
   assetId: z.string(),
   // Temporary signed URLs stay local and are deliberately excluded from backups.
   downloadUrl: z.string().max(16000).optional(),
+  diagnostic: imageDiagnosticSchema.optional(),
   error: z.string(),
   attempts: z.number().int().nonnegative(),
   executionId: z.string().optional(),
