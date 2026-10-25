@@ -73,7 +73,7 @@ it("round-trips protocol settings and historical combinations through both backu
     ];
     await saveImageProfile(p, "fixture-only-secret");
     const backup = await exportBackup();
-    expect(backup.version).toBe(11);
+    expect(backup.version).toBe(12);
     expect(JSON.stringify(backup)).not.toContain("fixture-only-secret");
     expect(backup.imageProfiles[0]).toMatchObject({
       protocol: "custom",

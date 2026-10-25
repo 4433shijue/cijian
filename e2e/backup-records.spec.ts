@@ -49,7 +49,7 @@ test("a story with ten full-size reference pictures exports and restores through
   await page.getByRole("button", { name: "备份这本故事", exact: true }).click();
   const path = (await (await pending).path())!;
   const wire = JSON.parse(await readFile(path, "utf8"));
-  expect(wire.version).toBe(11);
+  expect(wire.version).toBe(12);
   expect(wire.stories.length).toBeGreaterThan(1);
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.goto("/#settings");

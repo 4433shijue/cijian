@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, keyFor } from "./db";
+import { db, keyFor, sessionKeys } from "./db";
 import { uid } from "./types";
 import {
   imageConnectionSchema,
   imageProfileSchema,
+  imageWorking,
   type ImageProfile,
 } from "./image-types";
 import { imageKey, saveImageProfile } from "./image-generation";
@@ -27,22 +28,145 @@ import {
 import { validateImageConnection } from "./image-protocol";
 
 export function ImageConnectionSettings() {
+  const [draft, setDraft] = useState<ImageProfile>();
+  const [formState, setFormState] = useState({ busy: false, dirty: false });
+  const [message, setMessage] = useState("");
   const state = useLiveQuery(async () => {
     const prefs = await db.preferences.get("preferences");
     return {
+      profiles: await db.imageProfiles.toArray(),
       profile: prefs?.activeImageProfile
         ? await db.imageProfiles.get(prefs.activeImageProfile)
         : undefined,
     };
   }, []);
+  const mayLeave = () =>
+    !formState.busy &&
+    (!formState.dirty || confirm("放弃未保存的生图配置修改？"));
+  const manage = async (work: () => Promise<void>) => {
+    try {
+      await work();
+      setMessage("");
+    } catch (e) {
+      setMessage(String(e));
+    }
+  };
   return state ? (
-    <ImageConnectionForm
-      key={state.profile?.id || "new"}
-      value={state.profile}
-    />
+    <div>
+      <section className="settings-card image-settings">
+        <h2>生图接口预设</h2>
+        <label className="field">
+          当前生图接口预设
+          <select
+            aria-label="当前生图接口预设"
+            disabled={formState.busy}
+            value={draft ? "new" : state.profile?.id || ""}
+            onChange={(e) => {
+              const id = e.target.value;
+              if (!mayLeave()) return;
+              void manage(async () => {
+                await db.preferences.update("preferences", {
+                  activeImageProfile: id,
+                });
+                setDraft(undefined);
+              });
+            }}
+          >
+            <option value="" disabled>
+              尚未配置
+            </option>
+            {draft && <option value="new">正在编辑新预设</option>}
+            {state.profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} · {p.model}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="row image-connection-actions">
+          <button
+            disabled={formState.busy}
+            onClick={() => {
+              if (mayLeave())
+                setDraft(
+                  imageProfileSchema.parse({
+                    id: uid(),
+                    name: "新的生图接口",
+                    url: "",
+                    model: "",
+                    protocol: "auto",
+                    size: "",
+                  }),
+                );
+            }}
+          >
+            新建生图接口预设
+          </button>
+          <button
+            disabled={formState.busy || !state.profile || !!draft}
+            onClick={() => {
+              if (
+                !state.profile ||
+                !mayLeave() ||
+                !confirm(`删除接口预设“${state.profile.name}”？已有图片保留。`)
+              )
+                return;
+              void manage(async () => {
+                const id = state.profile!.id;
+                await db.transaction(
+                  "rw",
+                  db.imageProfiles,
+                  db.preferences,
+                  db.imageJobs,
+                  async () => {
+                    if (
+                      (await db.imageJobs.toArray()).some(
+                        (j) =>
+                          imageWorking(j.status) &&
+                          (!j.connectionProfileId ||
+                            j.connectionProfileId === id),
+                      )
+                    )
+                      throw Error(
+                        "此预设仍有进行中的配图，请先停止或等待任务完成",
+                      );
+                    await db.imageProfiles.delete(id);
+                    const next = (await db.imageProfiles.toArray())[0];
+                    await db.preferences.update("preferences", {
+                      activeImageProfile: next?.id,
+                    });
+                  },
+                );
+                sessionKeys.delete(`image:${id}`);
+              });
+            }}
+          >
+            删除当前接口预设
+          </button>
+        </div>
+        <p className="hint">
+          每套预设分别保存地址、模型、密钥与参考图能力。切换和保存不会生图，已排队任务保留原配置；手动重试使用当前接口，重新下载只取回原图。
+        </p>
+        {message && <p role="alert">{message}</p>}
+      </section>
+      <ImageConnectionForm
+        key={draft?.id || state.profile?.id || "new"}
+        value={draft || state.profile}
+        onStateChange={setFormState}
+        onSaved={() => setDraft(undefined)}
+      />
+    </div>
   ) : null;
 }
-function ImageConnectionForm({ value }: { value?: ImageProfile }) {
+function ImageConnectionForm({
+  value,
+  onStateChange,
+  onSaved,
+}: {
+  value?: ImageProfile;
+  onStateChange: (state: { busy: boolean; dirty: boolean }) => void;
+  onSaved: () => void;
+}) {
   const [profile, setProfile] = useState<ImageProfile>(() =>
     imageProfileSchema.parse(
       value || {
@@ -56,6 +180,7 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
     ),
   );
   const [key, setKey] = useState(() => (value ? imageKey(value) : ""));
+  const initialProfile = useRef(JSON.stringify(profile));
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
   const [models, setModels] = useState<ImageModelOption[]>([]);
@@ -70,6 +195,16 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
   const [listed, setListed] = useState(false);
   const control = useRef<AbortController | null>(null);
   const mounted = useRef(true);
+  useEffect(() => {
+    onStateChange({
+      busy: !!busy,
+      dirty:
+        JSON.stringify(profile) !==
+          (value
+            ? JSON.stringify(imageProfileSchema.parse(value))
+            : initialProfile.current) || key !== (value ? imageKey(value) : ""),
+    });
+  }, [busy, profile, key, value, onStateChange]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -169,6 +304,7 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
           : imageConnectionSchema.parse(profile),
       });
       await saveImageProfile(next, key.trim());
+      onSaved();
       if (!mounted.current) return;
       setProfile(next);
       setModels([]);
@@ -216,12 +352,30 @@ function ImageConnectionForm({ value }: { value?: ImageProfile }) {
               imageProfileSchema.parse(profile),
               key.trim(),
             );
+            onSaved();
             if (mounted.current)
               setMessage("生图配置已保存。请到作品设置选择自动配图方式。");
           });
         }}
       >
         <fieldset disabled={!!busy}>
+          {textField("生图接口预设名称", "name")}
+          <button
+            type="button"
+            onClick={() =>
+              void task("duplicate", async () => {
+                const copy = imageProfileSchema.parse({
+                  ...profile,
+                  id: uid(),
+                  name: profile.name + " · 副本",
+                });
+                await saveImageProfile(copy, key.trim());
+                onSaved();
+              })
+            }
+          >
+            另存为新接口预设
+          </button>
           <label className="field">
             生图接口地址
             <input

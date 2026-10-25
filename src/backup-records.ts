@@ -93,7 +93,7 @@ export class BackupRecordDecoder {
 }
 
 export function decodeBackupRecords(raw: unknown) {
-  if (!raw || typeof raw !== "object" || (raw as any).version !== 11)
+  if (!raw || typeof raw !== "object" || ![11, 12].includes((raw as any).version))
     return raw;
   const decoded: Record<string, unknown> = { ...raw };
   for (const [table, rows] of Object.entries(raw)) {

@@ -1,4 +1,5 @@
 import { imageTables } from "./image-types";
+import { resolveImageStyle, portableImageSettings, mergeImageStyles } from "./image-styles";
 import { imageLinks, checkImageRow, remapImage } from "./image-backup";
 import { generatorTables } from "./generator-types";
 import { completionBackupRows } from "./completion-backup";
@@ -538,6 +539,7 @@ export async function commitStaged(
           ? { ...imported, activeProfile: remap.id(imported.activeProfile), activeImageProfile: imported.activeImageProfile ? remap.id(imported.activeImageProfile) : undefined, generatorProfileId: imported.generatorProfileId ? remap.id(imported.generatorProfileId) : undefined }
           : {}),
         stylePresets: styles,
+        imageStylePresets: apply ? imported?.imageStylePresets : mergeImageStyles(existing?.imageStylePresets, imported?.imageStylePresets),
         theaterPresets: theaterPresets.presets,
       });
       control.check(); await migrateStories();
@@ -559,6 +561,7 @@ export async function exportBackupBlob(
     control,
     async (writer) => {
       const s = storyId ? await db.stories.get(storyId) : undefined;
+      const imagePrefs = await db.preferences.get("preferences");
       if (storyId && !s) throw Error("这本故事已不存在");
       const castRoles = new Set(
         s?.roles.flatMap((r) => [r.id, r.sourceId || ""]) || [],
@@ -583,7 +586,7 @@ export async function exportBackupBlob(
       await writer.write(
         JSON.stringify({
           format: "little-scene",
-          version: 11,
+          version: 12,
           created: new Date().toISOString(),
           scope: s ? "story" : "library",
           ...(s ? { title: s.title } : {}),
@@ -617,6 +620,7 @@ export async function exportBackupBlob(
             row.remember = false;
           }
           if (table === "stories") row.theaterDensity = row.theaterDensity ?? "standard";
+          if (table === "stories") row.images = portableImageSettings(row, imagePrefs?.imageStylePresets);
           if (table === "theaters") row.density = row.density ?? "standard";
           if (s && table === "world") row.storyIds = [s.id];
           if (s && table === "preferences") {
@@ -625,6 +629,9 @@ export async function exportBackupBlob(
             delete row.generatorProfileId; delete row.generatorConnection; delete row.generatorLegacyMigrated;
             row.developer = false;
             row.prompts = {};
+            row.imagePromptOverrides = undefined;
+            const relatedImageStyles = new Set([s.images?.stylePresetId, resolveImageStyle(s, imagePrefs?.imageStylePresets).id, ...s.roles.flatMap((r) => (r.imageReferences || []).map((ref) => ref.styleId))]);
+            row.imageStylePresets = row.imageStylePresets?.filter((p: any) => relatedImageStyles.has(p.id));
             row.stylePresets = row.stylePresets?.filter(
               (p: any) => p.id === s.stylePresetId,
             );

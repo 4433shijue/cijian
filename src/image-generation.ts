@@ -6,6 +6,7 @@ import { parseJSON } from "./output";
 import {
   imageSettings,
   imageProfileSchema,
+  imageConnectionSchema,
   imagePlanSchema,
   imageWorking,
   isSelfie,
@@ -17,6 +18,32 @@ import { requestImage, downloadGeneratedImage } from "./image-provider";
 import { validateImageConnection } from "./image-protocol";
 import { imageContentHash, storeImageReference } from "./image-storage";
 import type { ImageProgress } from "./image-diagnostics";
+import {
+  resolveImageStyle,
+  selectCharacterReferences,
+  planningPreference,
+  referenceViews,
+} from "./image-styles";
+import { imageReferencePolicy } from "./image-identity";
+
+export type ImageCreationOptions = {
+  styleId?: string;
+  referenceMode?: "configured" | "text";
+};
+
+async function connectionSnapshot() {
+  const prefs = await db.preferences.get("preferences");
+  const profile = prefs?.activeImageProfile
+    ? await db.imageProfiles.get(prefs.activeImageProfile)
+    : undefined;
+  return {
+    connectionProfileId: profile?.id,
+    connectionName: profile?.name,
+    connectionSnapshot: profile
+      ? imageConnectionSchema.parse(profile)
+      : undefined,
+  };
+}
 
 const controls = new Map<string, AbortController>();
 const chains = new Map<string, Promise<unknown>>();
@@ -62,14 +89,18 @@ export async function stopStoryImages(storyId: string) {
     if (imageWorking(job.status)) await stopImageJob(job.id);
 }
 
-function baseJob(
+async function baseJob(
   s: Story,
   sourceId: string,
   version: string,
   sourceText: string,
   automatic: boolean,
-): ImageJob {
+  options: ImageCreationOptions = {},
+): Promise<ImageJob> {
+  const prefs = await db.preferences.get("preferences");
+  const style = resolveImageStyle(s, prefs?.imageStylePresets, options.styleId);
   return {
+    ...(await connectionSnapshot()),
     id: uid(),
     storyId: s.id,
     sourceKind: s.kind,
@@ -81,10 +112,13 @@ function baseJob(
     audience: [],
     sourceText,
     style:
-      imageSettings(s.images).style ||
-      (s.kind === "phone"
-        ? "自然的手机随手拍，真实光线，生活感"
-        : "自然细腻的故事插画"),
+      style.positive +
+      (style.id !== "custom-only" && s.images?.style
+        ? `\n补充要求：${s.images.style}`
+        : ""),
+    styleSnapshot: style,
+    planningPrompt: planningPreference(prefs, s.kind),
+    referenceMode: options.referenceMode || "configured",
     automatic,
     selective: automatic && imageSettings(s.images).novelMode === "auto",
     actorName: "",
@@ -103,8 +137,12 @@ function baseJob(
 async function insertJob(job: ImageJob) {
   const hashes = new Map<string, string>();
   for (const role of job.roles)
-    if (role.reference && !hashes.has(role.reference))
-      hashes.set(role.reference, await imageContentHash(role.reference));
+    for (const data of [
+      role.reference,
+      ...(role.references || []).map((r) => r.reference),
+    ])
+      if (data && !hashes.has(data))
+        hashes.set(data, await imageContentHash(data));
   return db.transaction(
     "rw",
     db.imageJobs,
@@ -146,7 +184,7 @@ async function insertJob(job: ImageJob) {
         }
       }
       // Store each reference separately so a job remains small in chunked backups.
-      for (const role of job.roles)
+      for (const role of job.roles) {
         if (role.reference) {
           role.reference = await storeImageReference(
             job.storyId,
@@ -155,12 +193,24 @@ async function insertJob(job: ImageJob) {
             hashes.get(role.reference)!,
           );
         }
+        for (const ref of role.references || [])
+          ref.reference = await storeImageReference(
+            job.storyId,
+            role.name,
+            ref.reference,
+            hashes.get(ref.reference)!,
+          );
+      }
       await db.imageJobs.add(job);
       return { job, added: true };
     },
   );
 }
-export async function createNovelImage(eventId: string, automatic = false) {
+export async function createNovelImage(
+  eventId: string,
+  automatic = false,
+  options: ImageCreationOptions = {},
+) {
   const e = await db.events.get(eventId),
     s = e && (await db.stories.get(e.storyId));
   if (
@@ -173,12 +223,21 @@ export async function createNovelImage(eventId: string, automatic = false) {
   )
     throw Error("只能为已保存的正文配图");
   if (automatic && imageSettings(s.images).novelMode === "manual") return;
-  const job = baseJob(s, e.id, e.versionId, e.text, automatic);
+  const job = await baseJob(s, e.id, e.versionId, e.text, automatic, options);
   job.roles = s.roles.map((r) => ({
     id: r.id,
     name: r.name,
     appearance: r.imageAppearance || "",
-    reference: r.imageReference || "",
+    look: r.imageLook || "",
+    reference:
+      selectCharacterReferences(r, job.styleSnapshot!.id)[0]?.data || "",
+    references: selectCharacterReferences(r, job.styleSnapshot!.id).map(
+      (ref) => ({
+        name: ref.name,
+        view: referenceViews[ref.view],
+        reference: ref.data,
+      }),
+    ),
   }));
   const result = await insertJob(job);
   if (result.added && result.job.status === "pending") launchImageJob(job.id);
@@ -188,6 +247,7 @@ export async function createPhoneImage(
   recordId: string,
   automatic = false,
   runId?: string,
+  options: ImageCreationOptions = {},
 ) {
   const r = await db.phoneRecords.get(recordId),
     s = r && (await db.stories.get(r.storyId));
@@ -206,12 +266,13 @@ export async function createPhoneImage(
     (automatic && !imageSettings(s.images).phoneEnabled)
   )
     return;
-  const job = baseJob(
+  const job = await baseJob(
     s,
     r.id,
     r.versionId,
     r.body.imagePrompt || r.body.text,
     automatic,
+    options,
   );
   job.selective = false;
   job.actorId = r.speakerId;
@@ -268,10 +329,15 @@ async function planImage(job: ImageJob, control: AbortController) {
     style: job.style,
     photographer: job.actorName,
     habit: job.habit,
-    characters: job.roles.map(({ reference: _, ...r }) => r),
+    characters: job.roles.map((r) => ({
+      id: r.id,
+      name: r.name,
+      appearance: r.appearance,
+      look: r.look || "",
+    })),
   });
   const report = assemble(
-    system,
+    `${system}\n画面编排偏好（只在不违反以上规则时使用）：${job.planningPrompt || "忠于场景，保持人物外貌一致"}\n${NO_SELFIE}`,
     input,
     [],
     profile.context,
@@ -363,13 +429,30 @@ async function executeJob(id: string) {
   try {
     const sourceStory = await currentSource(job);
     if (!job.downloadUrl) assertAutomaticImagesEnabled(job, sourceStory);
-    const prefs = await db.preferences.get("preferences"),
-      profile =
-        prefs?.activeImageProfile &&
-        (await db.imageProfiles.get(prefs.activeImageProfile));
+    const prefs = await db.preferences.get("preferences");
+    const profileId = job.connectionProfileId || prefs?.activeImageProfile;
+    const savedProfile = profileId
+      ? await db.imageProfiles.get(profileId)
+      : undefined;
     if (
       !job.downloadUrl &&
-      (!profile || (!imageKey(profile) && profile.auth !== "none"))
+      savedProfile &&
+      job.connectionSnapshot &&
+      (savedProfile.url !== job.connectionSnapshot.url ||
+        savedProfile.auth !== job.connectionSnapshot.auth)
+    )
+      throw Error(
+        "此任务的接口地址或鉴权方式已改变。请确认当前接口后手动重试；未发送生图请求",
+      );
+    const profile = savedProfile
+      ? { ...savedProfile, ...job.connectionSnapshot }
+      : undefined;
+    // Capture the credential alongside its endpoint before asynchronous planning.
+    // Editing this preset must never send a newly entered key to the old host.
+    const requestKey = profile ? imageKey(profile) : "";
+    if (
+      !job.downloadUrl &&
+      (!profile || (!requestKey && profile.auth !== "none"))
     )
       throw Error("先到设置保存生图接口与 API Key，再重试这张图片");
     if (!job.downloadUrl && profile) validateImageConnection(profile);
@@ -457,7 +540,9 @@ async function executeJob(id: string) {
       if (
         isSelfie(job.style) ||
         job.roles.some(
-          (r) => job.plan!.roleIds.includes(r.id) && isSelfie(r.appearance),
+          (r) =>
+            job.plan!.roleIds.includes(r.id) &&
+            isSelfie(r.appearance + (r.look || "")),
         )
       )
         throw Error(
@@ -467,22 +552,55 @@ async function executeJob(id: string) {
         job!.plan!.roleIds.includes(r.id),
       );
       const references: string[] = [];
-      if (profile.references !== "off")
-        for (const role of selected.filter((r) => r.reference)) {
-          const reference = await db.imageAssets.get(role.reference);
-          if (!reference || reference.storyId !== job.storyId)
-            throw Error("人物参考图已缺失，请为当前正文重新创建配图");
-          references.push(reference.data);
-        }
-      const prompt = `${job.plan.description}\n画风：${job.style}\n${selected.map((r) => `${r.name}的固定外貌：${r.appearance || "按场景描述"}`).join("\n")}\n${
-        references.length
-          ? "参考图只用于保持对应人物的外貌，不复制参考图构图。参考图顺序：" +
-            selected
-              .filter((r) => r.reference)
-              .map((r) => r.name)
-              .join("、")
-          : ""
-      }\n${NO_SELFIE}${job.sourceKind === "phone" ? "后置镜头朝向外部，拍摄者及其脸、身体、镜面倒影均不出现在画面中。" : ""}\n只绘制已描述的瞬间，不加文字、水印或后续剧情。`;
+      const bindings: string[] = [];
+      const identityInputs: NonNullable<ImageJob["identityInputs"]> = [];
+      const referencePolicy = imageReferencePolicy(
+        profile,
+        job.referenceMode === "text",
+      );
+      for (const role of selected) {
+        const refs = role.references?.length
+          ? role.references
+          : role.reference
+            ? [{ name: "默认定妆", view: "正面", reference: role.reference }]
+            : [];
+        const usingRefs = referencePolicy.enabled;
+        const names: string[] = [];
+        if (usingRefs)
+          for (const ref of refs) {
+            // Keep a bounded request with an explicit label for every image/person.
+            if (references.length >= 12) break;
+            const asset = await db.imageAssets.get(ref.reference);
+            if (!asset || asset.storyId !== job.storyId)
+              throw Error("人物参考图已缺失，请为当前正文重新创建配图");
+            references.push(asset.data);
+            names.push(`${ref.name} · ${ref.view}`);
+            bindings.push(
+              `参考图 ${references.length} = ${role.name}（编号 ${role.id}），${ref.view}，${ref.name}`,
+            );
+          }
+        const text = !!role.appearance.trim();
+        identityInputs.push({
+          id: role.id,
+          name: role.name,
+          method: names.length
+            ? text
+              ? "both"
+              : "reference"
+            : text
+              ? "text"
+              : "scene",
+          references: names,
+          note: !usingRefs
+            ? referencePolicy.reason
+            : refs.length > names.length
+              ? "达到本次 12 张参考图上限，未发送的参考以文字外貌补充"
+              : !refs.length
+                ? "此画风暂无适用参考图"
+                : "",
+        });
+      }
+      const prompt = `${job.plan.description}\n画风：${job.style}\n避免元素：${job.styleSnapshot?.negative || "人物串脸、文字、水印"}\n人物设定（固定外貌优先于画风的通用美化，不改变人物年龄、骨相、体型；本场造型不改变身份）：\n${selected.map((r) => `${r.name}（编号 ${r.id}）的固定外貌：${r.appearance || "按参考图和场景描述，不另造一张通用脸"}\n本场造型：${r.look || "遵循正文的服装与造型"}`).join("\n")}\n${bindings.length ? "参考图只用于对应人物的身份，不复制构图或衣服。按编号分别对应，禁止混合不同角色的脸。文字设定中的年龄、发色、瞳色和特征必须保留。\n" + bindings.join("\n") : ""}\n${NO_SELFIE}${job.sourceKind === "phone" ? "后置镜头朝向外部，拍摄者及其脸、身体、镜面倒影均不出现在画面中。" : ""}\n只绘制已描述的瞬间，不加文字、水印或后续剧情。`;
       if (prompt.length > 32000)
         throw Error("画面描述与外貌设定过长，请精简后重试");
       await db.transaction(
@@ -525,6 +643,7 @@ async function executeJob(id: string) {
           job!.attempts = current.attempts + 1;
           await db.imageJobs.update(id, {
             prompt,
+            identityInputs,
             status: "generating",
             attempts: job!.attempts,
             updated: Date.now(),
@@ -533,7 +652,7 @@ async function executeJob(id: string) {
       );
       image = await requestImage(
         profile,
-        imageKey(profile),
+        requestKey,
         prompt,
         references,
         control.signal,
@@ -685,11 +804,16 @@ export async function retryImageJob(id: string, regenerate = false) {
     )
       throw Error("自拍请求已禁止，请修改图片消息或画面来源");
     await currentSource(job);
+    // Explicit retry adopts the currently selected connection; download recovery
+    // stays a GET and retains the original request metadata.
+    const connection =
+      job.downloadUrl && !regenerate ? {} : await connectionSnapshot();
     await db.transaction("rw", db.imageJobs, async () => {
       const current = await db.imageJobs.get(id);
       if (!current || imageWorking(current.status))
         throw Error("任务已在其他页面启动");
       await db.imageJobs.update(id, {
+        ...connection,
         status: "pending",
         executionId: uid(),
         ...(regenerate ? { downloadUrl: undefined } : {}),

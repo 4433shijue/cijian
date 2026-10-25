@@ -1,4 +1,5 @@
 import { imageTables, imageSchemas, imageSettingsSchema } from "./image-types";
+import { imageStyleSchema, imageReferenceSchema, imagePromptOverridesSchema, portableImageSettings, mergeImageStyles } from "./image-styles";
 import { decodeBackupRecords } from "./backup-records";
 import { imageLinks, checkImageRow, remapImage } from "./image-backup";
 import { generatorTables, generatorSchemas } from "./generator-types";
@@ -28,6 +29,7 @@ const paragraph = z.object({
   public: z.boolean(),
 });
 const role = z.object({
+  imageLook: str.optional(), imageReferences: z.array(imageReferenceSchema).max(12).optional(),
   imageAppearance: str.optional(), imageReference: str.optional(), photoHabit: str.optional(),
   id: str,
   name: str,
@@ -268,6 +270,8 @@ const profile = z.object({
   key: str.optional(),
 });
 const prefs = z.object({
+  imageStylePresets: z.array(imageStyleSchema).max(100).optional(),
+  imagePromptOverrides: imagePromptOverridesSchema.optional(),
   activeImageProfile: str.optional(),
   id: z.literal("preferences"),
   activeProfile: str,
@@ -346,7 +350,7 @@ const schema = z.object({
   phoneAssets: z.array(phoneSchemas.phoneAssets).default([]),
   phoneRuns: z.array(phoneSchemas.phoneRuns).default([]),
   format: z.literal("little-scene"),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10), z.literal(11), z.literal(12)]),
   created: str,
   roles: z.array(role),
   stories: z.array(story),
@@ -612,9 +616,10 @@ export async function exportBackup() {
       const legacy = completionBackupRows(
         await db.roleCompletionDrafts.get("role-completion"),
       );
+      const imagePrefs = await db.preferences.get("preferences");
       return {
         format: "little-scene",
-        version: 11,
+        version: 12,
         imageProfiles: (await db.imageProfiles.toArray()).map(p => ({ ...imageSchemas.imageProfiles.parse(p), remember: false })),
         imageJobs: (await db.imageJobs.toArray()).map(({ downloadUrl, ...job }) => job),
         imageAssets: await db.imageAssets.toArray(),
@@ -645,6 +650,7 @@ export async function exportBackup() {
             ...story
           }) => ({
             ...story,
+            images: portableImageSettings(story, imagePrefs?.imageStylePresets),
             theaterDensity: story.theaterDensity ?? "standard",
           }),
         ),
@@ -846,6 +852,7 @@ export async function importBackup(value: unknown, replace = false) {
         existing
           ? {
               ...existing,
+              imageStylePresets: mergeImageStyles(existing.imageStylePresets, imported.imageStylePresets),
               theaterPresets: theaterPresets.presets,
               prompts: { ...existing.prompts, ...imported.prompts },
               stylePresets: [

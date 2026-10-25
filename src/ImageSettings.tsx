@@ -1,101 +1,16 @@
 import { useEffect, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "./db";
-import type { Role, Story } from "./types";
+import type { Story } from "./types";
 import { imageSettings, type ImageSettings } from "./image-types";
-import { referenceFile } from "./image-provider";
+import { ImageStylePicker } from "./ImageStylePicker";
+import { resolveImageStyle } from "./image-styles";
 import { StoryImageJobs } from "./ImagePanel";
 import { exportIllustratedStory } from "./image-export";
 import { compactImageStorage, imageStorageUsage } from "./image-storage";
 import "./images.css";
 
-export function RoleImageFields({
-  role,
-  onChange,
-  onBusyChange,
-}: {
-  role: Role;
-  onChange: (patch: Partial<Role>) => void;
-  onBusyChange?: (busy: boolean) => void;
-}) {
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  return (
-    <details className="role-image-fields">
-      <summary>人物插画与拍照习惯</summary>
-      <label className="field">
-        插画外貌设定
-        <textarea
-          value={role.imageAppearance || ""}
-          onChange={(e) => onChange({ imageAppearance: e.target.value })}
-          placeholder="发型、发色、体型、固定特征；只用于配图"
-        />
-      </label>
-      <label className="field">
-        人物参考图
-        <input
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          disabled={busy}
-          onChange={async (e) => {
-            const file = e.target.files?.[0];
-            e.target.value = "";
-            if (!file) return;
-            setBusy(true);
-            onBusyChange?.(true);
-            setError("");
-            try {
-              onChange({ imageReference: await referenceFile(file) });
-            } catch (e) {
-              setError(String(e));
-            } finally {
-              setBusy(false);
-              onBusyChange?.(false);
-            }
-          }}
-        />
-      </label>
-      {/^data:image\/(png|jpeg|webp);base64,/.test(
-        role.imageReference || "",
-      ) && (
-        <img
-          className="image-reference-preview"
-          src={role.imageReference}
-          alt={`${role.name}的插画参考图`}
-        />
-      )}
-      <div className="row">
-        <button
-          type="button"
-          disabled={!/^data:image\/(png|jpeg|webp);base64,/.test(role.avatar)}
-          onClick={() => onChange({ imageReference: role.avatar })}
-        >
-          用现有头像作参考
-        </button>
-        <button
-          type="button"
-          disabled={!role.imageReference}
-          onClick={() => onChange({ imageReference: "" })}
-        >
-          清除参考图
-        </button>
-      </div>
-      <label className="field">
-        角色拍照习惯
-        <textarea
-          value={role.photoHabit || ""}
-          onChange={(e) => onChange({ photoHabit: e.target.value })}
-          placeholder="例如偶尔分享风景和食物，被问到时再拍照"
-        />
-      </label>
-      <p className="hint">
-        禁止生成自拍。参考图用于正文插画，照片按角色实际能看到和愿意分享的内容生成。
-      </p>
-      {busy && <p role="status">正在处理参考图…</p>}
-      {error && <p role="alert">{error}</p>}
-    </details>
-  );
-}
+export { CharacterImageFields as RoleImageFields } from "./CharacterImageFields";
 
 export function StoryImageSettings({ story }: { story: Story }) {
   const [settings, setSettings] = useState(() => imageSettings(story.images));
@@ -189,6 +104,13 @@ export function StoryImageSettings({ story }: { story: Story }) {
           </div>
         </>
       )}
+      <ImageStylePicker
+        value={settings.stylePresetId || resolveImageStyle(story).id}
+        fallback={settings.stylePresetSnapshot}
+        onChange={(stylePresetId, preset) =>
+          void update({ stylePresetId, stylePresetSnapshot: preset })
+        }
+      />
       <label className="field">
         {story.kind === "novel" ? "插画画风" : "照片风格"}
         <textarea

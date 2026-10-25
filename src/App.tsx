@@ -8,6 +8,7 @@ import { updateStory } from "./story-service";
 import { StoryImageSettings, RoleImageFields } from "./ImageSettings";
 import { lazyPanel } from "./lazy-panel";
 const PhonePanel = lazyPanel(() => import("./PhonePanel"));
+const ImageStudioSettings = lazyPanel(() => import("./ImageStudioSettings"));
 const ImageConnectionSettings = lazyPanel(() => import("./ImageConnectionSettings").then(m => ({ default: m.ImageConnectionSettings })));
 import { NovelImagePanel } from "./ImagePanel";
 import { useEffect, useLayoutEffect, useState, useRef, type ReactNode } from "react";
@@ -3028,6 +3029,7 @@ function SettingsPage({ notify }: { notify: Notice }) {
           </>
         )}
       </section>
+      {prefs.developer && <ImageStudioSettings />}
       {prefs.developer && <StylePresetSettings prefs={prefs} notify={notify} />}
       {prefs.developer && <TheaterPresetSettings prefs={prefs} notify={notify} />}
       {edit && (

@@ -77,7 +77,11 @@ export async function compactImageStorage(storyId: string) {
       const linked = jobs.filter(
         (j) =>
           j.assetId === asset.id ||
-          j.roles.some((r) => r.reference === asset.id),
+          j.roles.some(
+            (r) =>
+              r.reference === asset.id ||
+              r.references?.some((ref) => ref.reference === asset.id),
+          ),
       );
       if (!linked.length) {
         await db.imageAssets.delete(asset.id);
@@ -93,9 +97,15 @@ export async function compactImageStorage(storyId: string) {
         for (const job of linked)
           await db.imageJobs.update(job.id, {
             assetId: job.assetId === asset.id ? duplicate.id : job.assetId,
-            roles: job.roles.map((r) =>
-              r.reference === asset.id ? { ...r, reference: duplicate.id } : r,
-            ),
+            roles: job.roles.map((r) => ({
+              ...r,
+              reference: r.reference === asset.id ? duplicate.id : r.reference,
+              references: r.references?.map((ref) => ({
+                ...ref,
+                reference:
+                  ref.reference === asset.id ? duplicate.id : ref.reference,
+              })),
+            })),
           });
         await db.imageAssets.delete(asset.id);
         removed++;

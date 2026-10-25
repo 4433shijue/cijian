@@ -133,7 +133,7 @@ export class BackupParser {
       }
       this.parts.push(text.slice(start, i));
       this.length += i - start;
-      const limit = this.state === "item" && this.metadata.version !== 11
+      const limit = this.state === "item" && ![11, 12].includes(Number(this.metadata.version))
         ? MAX_RESTORED_RECORD_CHARS : MAX_RECORD_CHARS;
       if (this.length > limit)
         throw Error(
@@ -173,10 +173,10 @@ export class BackupParser {
       throw Error("备份文件被截断，没有读到完整结尾");
     if (
       this.metadata.format !== "little-scene" ||
-      ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(this.metadata.version as number) ||
+      ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(this.metadata.version as number) ||
       typeof this.metadata.created !== "string"
     )
-      throw Error("这不是支持的此间备份（需要 version 1～11）");
+      throw Error("这不是支持的此间备份（需要 version 1～12）");
     for (const key of backupTables.filter(
       (t) => !imageTables.includes(t as any) && !generatorTables.includes(t as any) && !extraTables.includes(t as any) && !t.startsWith("phone") && t !== "chatBatches" && t !== "roleDrafts" && t !== "theaters",
     ))

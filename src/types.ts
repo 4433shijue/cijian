@@ -120,6 +120,8 @@ export interface Paragraph {
   public: boolean;
 }
 export interface Role {
+  imageLook?: string;
+  imageReferences?: import("./image-styles").CharacterImageReference[];
   imageAppearance?: string;
   imageReference?: string;
   photoHabit?: string;
@@ -291,6 +293,8 @@ export interface Profile {
   testedWithoutKey?: boolean;
 }
 export interface Preferences {
+  imageStylePresets?: import("./image-styles").ImageStyle[];
+  imagePromptOverrides?: Partial<Record<"novel" | "phone", { enabled: boolean; text: string }>>;
   activeImageProfile?: string;
   id: "preferences";
   activeProfile: string;

@@ -50,6 +50,9 @@ import {
 } from "../src/backup-transfer";
 import { illustratedStoryHtml } from "../src/image-export";
 import { buildReaderPackage, createReaderHTML } from "../src/phone-reader";
+import { adoptImageReference } from "../src/image-character";
+import { builtInImageStyles } from "../src/image-styles";
+import { compactImageStorage } from "../src/image-storage";
 
 vi.mock("../src/model", () => ({ generate: vi.fn() }));
 const model = vi.mocked(generate);
@@ -365,7 +368,7 @@ it("backs up pictures, settings and recovery records without keys; remaps relati
   });
   const job = await settled((await createNovelImage((await prose()).id))!.id);
   const backup = await exportBackup();
-  expect(backup.version).toBe(11);
+  expect(backup.version).toBe(12);
   expect(JSON.stringify(backup)).not.toContain("image-secret-fixture");
   expect(() => validateBackup(backup)).not.toThrow();
   await importBackup(backup);
@@ -721,4 +724,279 @@ it("does not send a prompt when a selected appearance or style asks for a selfie
   expect(job.status).toBe("failed");
   expect(job.error).toContain("自拍");
   expect(fetcher).not.toHaveBeenCalled();
+});
+
+it("always sends fixed textual identity and separate outfit through text-only models", async () => {
+  const role = {
+    ...story.roles[0],
+    imageAppearance: "灰绿色眼睛，窄长脸，左眼下有痣",
+    imageLook: "奶白色针织衫",
+    imageReference: dataUrl,
+  };
+  await db.stories.update(story.id, { roles: [role, ...story.roles.slice(1)] });
+  model.mockResolvedValue(response({ ...plan, roleIds: [role.id] }));
+  const job = await settled((await createNovelImage((await prose()).id))!.id);
+  expect(job.status).toBe("complete");
+  const body = JSON.parse(
+    (fetcher.mock.calls[0][1] as RequestInit).body as string,
+  );
+  expect(body.prompt).toContain(role.imageAppearance);
+  expect(body.prompt).toContain(role.imageLook);
+  expect(body.prompt).toContain("韩系高完成度");
+  expect(body).not.toHaveProperty("images");
+  expect(job.identityInputs?.[0]).toMatchObject({
+    method: "text",
+    references: [],
+  });
+  expect(job.styleSnapshot?.id).toBe("korean-3d");
+  expect(JSON.stringify(job)).not.toContain("image-secret-fixture");
+});
+
+it("binds multiple views to the right character and uses text for an unsupported full generation endpoint", async () => {
+  const role = {
+    ...story.roles[0],
+    imageAppearance: "琥珀色瞳孔",
+    imageReferences: [
+      {
+        id: "front",
+        name: "定妆正面",
+        view: "front" as const,
+        styleId: "korean-3d",
+        data: dataUrl,
+      },
+      {
+        id: "water",
+        name: "水彩定妆",
+        view: "side" as const,
+        styleId: "watercolor",
+        data: dataUrl,
+      },
+    ],
+  };
+  await db.stories.update(story.id, { roles: [role, ...story.roles.slice(1)] });
+  await saveImageProfile(
+    { ...imageProfile(), references: "multipart" },
+    "image-secret-fixture",
+  );
+  model.mockResolvedValue(response({ ...plan, roleIds: [role.id] }));
+  const event = await prose();
+  const job = await settled((await createNovelImage(event.id))!.id);
+  expect(job.status).toBe("complete");
+  expect(job.identityInputs?.[0]).toMatchObject({
+    method: "both",
+    references: ["定妆正面 · 正面"],
+  });
+  const form = (fetcher.mock.calls[0][1] as RequestInit).body as FormData;
+  expect(form.get("prompt")).toContain(
+    `参考图 1 = ${role.name}（编号 ${role.id}）`,
+  );
+  expect(form.get("prompt")).toContain("琥珀色瞳孔");
+  expect(form.getAll("image[]")).toHaveLength(1);
+  await saveImageProfile(
+    {
+      ...imageProfile(),
+      endpointMode: "full",
+      url: "https://images.fixture.test/v1/images/generations",
+      references: "auto",
+    },
+    "image-secret-fixture",
+  );
+  const fallback = await settled((await createNovelImage(event.id))!.id);
+  expect(fallback.status).toBe("complete");
+  expect(fallback.identityInputs?.[0].method).toBe("text");
+  expect(fallback.identityInputs?.[0].note).toContain("generations");
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
+it("one-picture text-only mode skips references on a capable endpoint without changing the stored preset", async () => {
+  story.roles[0].imageAppearance = "红棕短发";
+  story.roles[0].imageReference = dataUrl;
+  await db.stories.update(story.id, { roles: story.roles });
+  await saveImageProfile(
+    { ...imageProfile(), references: "auto" },
+    "image-secret-fixture",
+  );
+  model.mockResolvedValue(response({ ...plan, roleIds: [story.roles[0].id] }));
+  const job = await settled(
+    (await createNovelImage((await prose()).id, false, {
+      referenceMode: "text",
+    }))!.id,
+  );
+  expect(job.status).toBe("complete");
+  expect(fetcher.mock.calls[0][0]).toContain("/images/generations");
+  expect(job.identityInputs?.[0].method).toBe("text");
+  expect((await db.imageProfiles.get(imageProfile().id))?.references).toBe(
+    "auto",
+  );
+});
+
+it("queued jobs freeze connection and style while explicit retries adopt the current connection", async () => {
+  let release!: (value: any) => void;
+  model
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    )
+    .mockResolvedValue(response(plan));
+  const one = (await createNovelImage((await prose("一杯热茶")).id))!;
+  await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+  const two = (await createNovelImage((await prose("窗边的雨伞")).id, false, {
+    styleId: "watercolor",
+  }))!;
+  await saveImageProfile(
+    {
+      ...imageProfile(),
+      id: "another",
+      name: "另一套接口",
+      url: "https://another.fixture.test/v1",
+      model: "other",
+    },
+    "another-secret",
+  );
+  release(response(plan));
+  expect((await settled(one.id)).status).toBe("complete");
+  const job = await settled(two.id);
+  expect(job.status).toBe("complete");
+  expect(job.styleSnapshot?.id).toBe("watercolor");
+  expect(
+    fetcher.mock.calls.every((c) =>
+      String(c[0]).includes("images.fixture.test"),
+    ),
+  ).toBe(true);
+  await db.imageJobs.update(two.id, { status: "failed", assetId: "" });
+  await retryImageJob(two.id);
+  expect(fetcher.mock.calls.at(-1)?.[0]).toContain("another.fixture.test");
+  expect((await db.imageJobs.get(two.id))?.styleSnapshot?.id).toBe(
+    "watercolor",
+  );
+});
+
+it("uses developer planning preference without sending binary reference data to the text model", async () => {
+  story.roles[0].imageReference = dataUrl;
+  await db.stories.update(story.id, { roles: story.roles });
+  await db.preferences.update("preferences", {
+    imagePromptOverrides: {
+      novel: { enabled: true, text: "只选择情绪克制的中景" },
+    },
+  });
+  await settled((await createNovelImage((await prose()).id))!.id);
+  expect(model.mock.calls[0][2]).toContain("只选择情绪克制的中景");
+  expect(model.mock.calls[0][2]).toContain("禁止生成自拍");
+  expect(model.mock.calls[0][3]).not.toContain(PNG);
+  expect(model.mock.calls[0][3]).not.toContain("reference");
+});
+
+it("never sends a replaced preset key to the previous endpoint while planning is in flight", async () => {
+  let release!: (value: any) => void;
+  model.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const one = (await createNovelImage((await prose("热茶")).id))!;
+  await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+  const queued = (await createNovelImage((await prose("雨伞")).id))!;
+  await saveImageProfile(
+    { ...imageProfile(), url: "https://replacement.fixture.test/v1" },
+    "replacement-fixture-key",
+  );
+  release(response(plan));
+  expect((await settled(one.id)).status).toBe("complete");
+  expect(fetcher.mock.calls[0][0]).toContain("images.fixture.test");
+  expect(
+    new Headers((fetcher.mock.calls[0][1] as RequestInit).headers).get(
+      "Authorization",
+    ),
+  ).toBe("Bearer image-secret-fixture");
+  const stopped = await settled(queued.id);
+  expect(stopped.status).toBe("failed");
+  expect(stopped.error).toContain("接口地址或鉴权方式已改变");
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+it("only adopts an explicitly chosen pictured role, preserving global cards and old images", async () => {
+  const roleId = story.roles[0].id;
+  model.mockResolvedValue(response({ ...plan, roleIds: [roleId] }));
+  const job = await settled((await createNovelImage((await prose()).id))!.id);
+  expect(
+    (await db.stories.get(story.id))?.roles[0].imageReferences,
+  ).toBeUndefined();
+  const globalBefore = await db.roles.toArray();
+  await expect(
+    adoptImageReference(job.id, story.roles[1].id, {
+      name: "错误角色",
+      view: "front",
+      styleId: "",
+    }),
+  ).rejects.toThrow("实际出现");
+  await adoptImageReference(job.id, roleId, {
+    name: "确认定妆",
+    view: "front",
+    styleId: "korean-3d",
+  });
+  expect(
+    (await db.stories.get(story.id))?.roles[0].imageReferences?.[0].data,
+  ).toBe(dataUrl);
+  expect(await db.roles.toArray()).toEqual(globalBefore);
+  expect((await db.imageJobs.get(job.id))?.assetId).toBe(job.assetId);
+});
+
+it("round trips identity, style and multi-view job references through both backup paths and storage cleanup", async () => {
+  const custom = {
+    ...builtInImageStyles[0],
+    id: "my-style",
+    name: "我的定妆画风",
+  };
+  story.roles[0].imageAppearance = "浅灰瞳孔";
+  story.roles[0].imageLook = "米色外套";
+  story.roles[0].imageReferences = [
+    {
+      id: "my-ref",
+      name: "正面",
+      view: "front",
+      styleId: custom.id,
+      data: dataUrl,
+    },
+  ];
+  await db.stories.update(story.id, {
+    roles: story.roles,
+    images: imageSettings({
+      stylePresetId: custom.id,
+      stylePresetSnapshot: custom,
+    }),
+  });
+  await db.preferences.update("preferences", { imageStylePresets: [custom] });
+  model.mockResolvedValue(response({ ...plan, roleIds: [story.roles[0].id] }));
+  const job = await settled((await createNovelImage((await prose()).id))!.id);
+  await compactImageStorage(story.id);
+  expect(
+    await db.imageAssets.get(job.roles[0].references![0].reference),
+  ).toBeDefined();
+  const backup = await exportBackup();
+  expect(
+    validateBackup(backup).stories.find((s) => s.id === story.id)?.roles[0]
+      .imageLook,
+  ).toBe("米色外套");
+  await importBackup(backup);
+  const copied = (await db.imageJobs.toArray()).find((j) => j.id !== job.id)!;
+  expect(copied.roles[0].references![0].reference).not.toBe(
+    job.roles[0].references![0].reference,
+  );
+  expect(
+    await db.imageAssets.get(copied.roles[0].references![0].reference),
+  ).toBeDefined();
+  const blob = await exportBackupBlob(uid(), story.id);
+  const session = uid();
+  await stageBackup(blob.blob, session);
+  await commitStaged(session, { replace: false, applySettings: false });
+  const all = await db.imageJobs.toArray();
+  expect(all).toHaveLength(3);
+  for (const j of all)
+    expect(
+      (await db.imageAssets.get(j.roles[0].references![0].reference))?.storyId,
+    ).toBe(j.storyId);
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });

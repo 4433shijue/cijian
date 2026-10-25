@@ -178,3 +178,52 @@
 .novel-image-panel {
   scroll-margin-block-end: calc(var(--reader-bottom, 80px) + 30px);
 }
+.character-reference-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: 12px;
+}
+.character-reference-card {
+  padding: 14px;
+  border: 1px solid var(--border, #d5ddd3);
+  border-radius: 12px;
+  min-width: 0;
+}
+.character-reference-card img {
+  margin-inline: auto;
+  height: 160px;
+}
+.character-reference-card input,
+.character-reference-card select {
+  min-width: 0;
+  max-width: 100%;
+}
+.image-job-settings,
+.image-scene-options {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border, #d5ddd3);
+  border-radius: 12px;
+}
+.image-job-settings summary,
+.image-scene-options summary {
+  cursor: pointer;
+}
+.image-job-settings textarea {
+  width: 100%;
+  min-height: 180px;
+}
+.image-job-settings pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.image-planning-editor {
+  margin: 14px 0;
+}
+.image-studio-settings .row {
+  flex-wrap: wrap;
+}
+.image-style-picker {
+  max-width: 100%;
+}

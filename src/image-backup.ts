@@ -4,8 +4,11 @@ export function imageLinks(table: string, row: any): [string, string][] {
   if (table === "imageProfiles") return [];
   const links: [string, string][] = [["stories", row.storyId]];
   if (table === "imageJobs") {
-    for (const role of row.roles)
+    for (const role of row.roles) {
       if (role.reference) links.push(["imageAssets", role.reference]);
+      for (const ref of role.references || [])
+        if (ref.reference) links.push(["imageAssets", ref.reference]);
+    }
     links.push([
       row.sourceKind === "novel" ? "events" : "phoneRecords",
       row.sourceId,
@@ -83,10 +86,18 @@ export function remapImage(
     actorId: map(j.actorId),
     audience: j.audience.map(map),
     assetId: map(j.assetId),
+    connectionProfileId: j.connectionProfileId
+      ? map(j.connectionProfileId)
+      : undefined,
+    identityInputs: j.identityInputs?.map((r) => ({ ...r, id: map(r.id) })),
     roles: j.roles.map((r) => ({
       ...r,
       id: map(r.id),
       reference: map(r.reference),
+      references: r.references?.map((ref) => ({
+        ...ref,
+        reference: map(ref.reference),
+      })),
     })),
     plan: j.plan && { ...j.plan, roleIds: j.plan.roleIds.map(map) },
     status: imageWorking(j.status) ? "interrupted" : j.status,

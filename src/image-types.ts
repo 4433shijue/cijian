@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { imageDiagnosticSchema } from "./image-diagnostics";
+import { imageStyleSchema } from "./image-styles";
 
 export const imageSettingsSchema = z.object({
   novelMode: z.enum(["manual", "every", "auto"]).default("manual"),
   phoneEnabled: z.boolean().default(false),
   style: z.string().default(""),
+  stylePresetId: z.string().optional(),
+  stylePresetSnapshot: imageStyleSchema.optional(),
   perTurn: z.number().int().min(1).max(5).default(1),
   perRun: z.number().int().min(1).max(100).default(5),
 });
@@ -82,7 +85,7 @@ export const imageProfileSchema = z.preprocess(
   migrateImageProfile,
   imageConnectionSchema.extend({
     id: z.string(),
-    name: z.string(),
+    name: z.string().trim().min(1).max(100),
     remember: z.boolean().default(false),
     // Connection fields only: never copy the API key into the restore snapshot.
     compatibilityBackup: imageConnectionSchema.optional(),
@@ -120,6 +123,23 @@ export const imageJobSchema = z.object({
   audience: z.array(z.string()),
   sourceText: z.string(),
   style: z.string(),
+  styleSnapshot: imageStyleSchema.optional(),
+  planningPrompt: z.string().max(6000).optional(),
+  connectionProfileId: z.string().optional(),
+  connectionName: z.string().optional(),
+  connectionSnapshot: imageConnectionSchema.optional(),
+  referenceMode: z.enum(["configured", "text"]).optional(),
+  identityInputs: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        method: z.enum(["text", "reference", "both", "scene"]),
+        references: z.array(z.string()),
+        note: z.string(),
+      }),
+    )
+    .optional(),
   automatic: z.boolean(),
   selective: z.boolean(),
   actorName: z.string(),
@@ -129,7 +149,18 @@ export const imageJobSchema = z.object({
       id: z.string(),
       name: z.string(),
       appearance: z.string(),
+      look: z.string().optional(),
       reference: z.string(),
+      references: z
+        .array(
+          z.object({
+            name: z.string(),
+            view: z.string(),
+            reference: z.string(),
+          }),
+        )
+        .max(3)
+        .optional(),
     }),
   ),
   status: z.enum([
