@@ -1896,3 +1896,7 @@ details pre {
     padding: 6px 9px;
   }
 }
+
+.workshop-modes { display: flex; gap: 8px; margin: 8px 0 18px; }
+.workshop-modes button { flex: 1; }
+.workshop-modes [aria-current="page"] { background: #446947; color: #fff; }

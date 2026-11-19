@@ -1,4 +1,11 @@
 import { db, keyFor, saveProfile } from "./db";
+import {
+  confirmedSettings,
+  currentQuestions,
+  guidedRules,
+  validateGuidedInterview,
+} from "./generator-guidance";
+import { guidedInterviewSchema } from "./generator-types";
 import { uid, paragraphs, type Profile, type Preferences } from "./types";
 import { assemble } from "./context";
 import { generate } from "./model";
@@ -88,6 +95,8 @@ export async function saveGeneratorDraft(value: GeneratorSession) {
       selectionDraft: value.selectionDraft,
       setupDraft: value.setupDraft,
       editor: value.editor,
+      draftRoleId: value.draftRoleId,
+      sourceDraft: value.sourceDraft,
       input: s.turnIds.length ? s.input : inputSchema.parse(value.input),
       version: s.version + 1,
       updated: Date.now(),
@@ -102,6 +111,24 @@ export async function configureGenerator(
   selections: GeneratorSelection[],
 ) {
   input = inputSchema.parse(input);
+  if (input.experience === "guided") {
+    input.targets = input.targets.map((t, i) => ({
+      ...t,
+      name:
+        t.name.trim() ||
+        `${t.roleKind && !["暂不定", "其他"].includes(t.roleKind) ? t.roleKind : "新角色"}${input.multiple ? i + 1 : ""}`,
+      autoName: t.autoName || !t.name.trim(),
+    }));
+    if (!input.source.trim() && !input.guidance.trim())
+      input.guidance = "陪我从零捏角色，先一起确定方向。";
+    if (input.creationKind === "pair" && input.targets.length !== 2)
+      throw Error("一起捏一对需要两位目标人物。");
+    if (
+      input.creationKind === "partner" &&
+      !selections.some((x) => x.kind === "role" && x.purpose === "relationship")
+    )
+      throw Error("请先选择要为哪位已有角色捏搭档。");
+  }
   if (
     input.targets.some((t) => !t.name.trim()) ||
     !input.targets.length ||
@@ -190,6 +217,88 @@ export async function generatorData(id: string) {
     db.generatorResults.where("sessionId").equals(id).toArray(),
   ]);
   return { session: s, materials, turns, steps, results };
+}
+
+export async function changeGeneratorSetting(
+  id: string,
+  from: string,
+  to: string,
+) {
+  return db.transaction(
+    "rw",
+    db.generatorSessions,
+    db.generatorTurns,
+    async () => {
+      const s = await session(id);
+      idle(s);
+      const turns = (await db.generatorTurns.bulkGet(s.turnIds)).filter(
+        (t): t is GeneratorTurn => !!t,
+      );
+      if (from && !confirmedSettings(turns).includes(from))
+        throw Error("这条设定已变化，请重新打开后修改。");
+      if (from === to.trim() || (!from && !to.trim())) return s;
+      const turn: GeneratorTurn = {
+        id: uid(),
+        sessionId: id,
+        revision: s.revision,
+        created: Date.now(),
+        kind: "user",
+        text: from
+          ? to.trim()
+            ? `修改已确定设定：${from}\n改为：${to.trim()}`
+            : `撤回设定：${from}。后续不要再采用。`
+          : `补充已确定设定：${to.trim()}`,
+        answers: [],
+        settingChange: { from, to: to.trim() },
+      };
+      await db.generatorTurns.add(bounded(turn));
+      const next = {
+        ...s,
+        turnIds: [...s.turnIds, turn.id],
+        version: s.version + 1,
+        updated: Date.now(),
+      };
+      await db.generatorSessions.put(bounded(next));
+      return next;
+    },
+  );
+}
+
+export async function syncGeneratorSource(id: string, source: string) {
+  return db.transaction(
+    "rw",
+    db.generatorSessions,
+    db.generatorTurns,
+    async () => {
+      const s = await session(id);
+      idle(s);
+      if (s.sourceDraft === source) return s;
+      const turn: GeneratorTurn = {
+        id: uid(),
+        sessionId: id,
+        revision: s.revision,
+        created: Date.now(),
+        kind: "user",
+        answers: [],
+        draftUpdate: true,
+        text: source.trim()
+          ? `我在自己写里更新了角色草稿，请以这份最新草稿为准继续，保留未涉及的已确认设定：\n${source}`
+          : "我清空了手写草稿，请继续根据访谈中已经确认的设定创作。",
+      };
+      if (s.turnIds.length) await db.generatorTurns.add(bounded(turn));
+      const next = {
+        ...s,
+        sourceDraft: source,
+        input: { ...s.input, source },
+        ...(s.setupDraft ? { setupDraft: { ...s.setupDraft, source } } : {}),
+        turnIds: s.turnIds.length ? [...s.turnIds, turn.id] : [],
+        version: s.version + 1,
+        updated: Date.now(),
+      };
+      await db.generatorSessions.put(bounded(next));
+      return next;
+    },
+  );
 }
 export async function deleteGenerator(id: string) {
   await db.transaction(
@@ -459,6 +568,9 @@ async function makeSteps(
     ...s.input,
     targets: s.input.targets.map((t) => ({
       ...t,
+      autoName: latest.some((r) => r.kind === "card" && r.targetId === t.id)
+        ? false
+        : t.autoName,
       name:
         latest.find((r) => r.kind === "card" && r.targetId === t.id)?.card
           ?.name || t.name,
@@ -487,14 +599,22 @@ async function makeSteps(
         prefs,
       ) +
       (s.input.mode === "if" ? "\n" + prompt("generatorIf", prefs) : "") +
+      (input.experience === "guided" ? "\n" + guidedRules : "") +
       "\n" +
       (task.kind === "interview"
         ? "输出 message、confirmed、conflicts、unknown、questions、ready。问题和选项各有唯一 id；选项文本用 text，问题用 text 和 multiple。ready=true 时 questions 必须为空。"
         : task.kind === "card"
-          ? cardRules
+          ? cardRules +
+            (input.experience === "guided"
+              ? "\n只有目标 autoName=true 时允许用作者在访谈中确定的名字或拟定新名字替代暂称；其他姓名和所有 targetId 不变。"
+              : "")
           : "只生成本次需要的新世界书，使用 worlds 数组，可为空。每项 title、text、type、audience、roleIds、knownBy。角色关联只可用目标名单 ID；公开范围不确定设 author，knownBy 为空。") +
       "\n返回符合以下结构的完整 JSON：" +
-      JSON.stringify(wire(task.kind));
+      JSON.stringify(
+        task.kind === "interview" && input.experience === "guided"
+          ? generatorWire(guidedInterviewSchema)
+          : wire(task.kind),
+      );
     const user = JSON.stringify({
       task: task.kind,
       input,
@@ -506,6 +626,9 @@ async function makeSteps(
         text: m.text,
       })),
       history,
+      confirmedSettings: confirmedSettings(
+        history.filter((t): t is GeneratorTurn => !!t),
+      ),
       existingResults: latest.map((r) => ({
         id: r.id,
         card: r.card,
@@ -632,8 +755,9 @@ function evidenceTexts(value: unknown): string[] {
 function readJSON(raw: string) {
   return parseCompletionJSON(raw).value;
 }
-function validateInterview(value: unknown) {
+function validateInterview(value: unknown, input?: GeneratorInput) {
   const v = interviewSchema.parse(value);
+  if (input) validateGuidedInterview(v, input);
   if (
     new Set(v.questions.map((q) => q.id)).size !== v.questions.length ||
     v.questions.some(
@@ -779,7 +903,14 @@ async function executeStep(
         }
       },
       fetch,
-      { schema: wire(step.kind), schemaName: "cijian_generator_" + step.kind },
+      {
+        schema:
+          step.kind === "interview" &&
+          JSON.parse(step.user).input?.experience === "guided"
+            ? generatorWire(guidedInterviewSchema)
+            : wire(step.kind),
+        schemaName: "cijian_generator_" + step.kind,
+      },
     );
     raw = result.text;
     await writes;
@@ -831,7 +962,26 @@ async function acceptStep(
       await checkStepContext(step, s);
       let resultId = "";
       if (step.kind === "interview") {
-        const interview = validateInterview(parsed);
+        const request = JSON.parse(step.user);
+        const interview = validateInterview(parsed, request.input);
+        if (request.history.at(-1)?.action === "refresh") {
+          if (interview.ready)
+            throw Error("换选项时不能直接成稿，原始回复已保留。");
+          const previous = currentQuestions(request.history.slice(0, -1));
+          if (
+            interview.questions.length !== previous.length ||
+            interview.questions.some((q, i) => q.text !== previous[i]?.text)
+          )
+            throw Error("换选项应保留原来的问题，原始回复已保留。");
+          if (
+            interview.questions.some((q, i) =>
+              q.options.every(
+                (o, j) => o.text === previous[i]?.options[j]?.text,
+              ),
+            )
+          )
+            throw Error("返回的选项没有变化，原始回复已保留。");
+        }
         resultId = uid();
         const turn: GeneratorTurn = {
           id: resultId,
@@ -866,7 +1016,10 @@ async function acceptStep(
         if (step.kind === "card") {
           const card = cardSchema.parse(parsed);
           const target = step.targets.find((t) => t.id === step.targetId);
-          if (card.targetId !== target?.id || card.name !== target.name)
+          if (
+            card.targetId !== target?.id ||
+            (!target?.autoName && card.name !== target?.name)
+          )
             throw Error("模型改变了目标人物身份，回复未采用");
           const payload = JSON.parse(step.user);
           const sources = new Map<string, string[]>([
@@ -940,10 +1093,10 @@ async function validateAnswers(
   answers: GeneratorAnswer[],
   text: string,
 ) {
-  const last = s.turnIds.length
-    ? await db.generatorTurns.get(s.turnIds.at(-1)!)
-    : undefined;
-  const questions = last?.interview?.questions || [];
+  const turns = (await db.generatorTurns.bulkGet(s.turnIds)).filter(
+    (t): t is GeneratorTurn => !!t,
+  );
+  const questions = currentQuestions(turns);
   if (new Set(answers.map((a) => a.questionId)).size !== answers.length)
     throw Error("回答的问题重复");
   for (const a of answers) {
@@ -976,6 +1129,7 @@ export async function advanceGenerator(
   answers: GeneratorAnswer[] = [],
   force = false,
   onRaw?: (raw: string) => void,
+  action?: "refresh",
 ) {
   return withRun(id, async (token, signal) => {
     let s = await session(id);
@@ -1000,6 +1154,7 @@ export async function advanceGenerator(
               ? "先生成一版，缺少的细节可留白。"
               : "请阅读已选资料，开始访谈。"),
           answers,
+          ...(action ? { action } : {}),
         };
         await db.generatorTurns.add(bounded(turn));
         s = {

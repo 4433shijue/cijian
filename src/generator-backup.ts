@@ -125,6 +125,7 @@ export function remapGenerator(
     "questionId",
     "candidateId",
     "savedRoleId",
+    "draftRoleId",
   ]);
   const lists = new Set([
     "materialIds",

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { GuidedStart, FloatingSettings } from "./CharacterWorkshop";
+import { confirmedSettings, currentQuestions } from "./generator-guidance";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Modal } from "./Modal";
 import { RoleCompletionAssistant } from "./RoleCompletionAssistant";
@@ -21,6 +23,8 @@ import {
   saveGeneratorResults,
   recoverGeneratorStep,
   saveGeneratorConnection,
+  changeGeneratorSetting,
+  syncGeneratorSource,
 } from "./generator";
 import {
   newGeneratorInput,
@@ -29,6 +33,7 @@ import {
   type GeneratorSelection,
   type GeneratorAnswer,
   type GeneratorResult,
+  type GeneratorCard,
 } from "./generator-types";
 import "./generator.css";
 import {
@@ -40,6 +45,13 @@ type Props = {
   onClose: () => void;
   notify: (message: string) => void;
   initialSource?: string;
+  guided?: boolean;
+  initialName?: string;
+  draftRoleId?: string;
+  sessionId?: string;
+  onSession?: (id: string) => void;
+  onManual?: () => void;
+  onUseCard?: (card: GeneratorCard) => Promise<void>;
 };
 type Data = Awaited<ReturnType<typeof generatorData>>;
 const err = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -98,6 +110,13 @@ function GeneratorDialog({
   notify,
   initialSource,
   onLegacy,
+  guided: startGuided,
+  initialName,
+  draftRoleId,
+  sessionId,
+  onSession,
+  onManual,
+  onUseCard,
 }: Props & { onLegacy: () => void }) {
   const sessions =
     useLiveQuery(
@@ -125,6 +144,7 @@ function GeneratorDialog({
   const pending = useRef(Promise.resolve());
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mounted = useRef(true);
+  const answerForm = useRef<HTMLFieldSetElement>(null);
   const initialization = useRef<Promise<GeneratorSession> | undefined>(
     undefined,
   );
@@ -134,6 +154,7 @@ function GeneratorDialog({
     setData(d);
     ref.current = d.session;
     setCurrent(d.session);
+    onSession?.(d.session.id);
     if (restoreForm) {
       setInput(d.session.setupDraft || d.session.input);
       setSelections(
@@ -154,6 +175,38 @@ function GeneratorDialog({
     mounted.current = true;
     initialization.current ||= migrateCompletionGenerator().then(async () => {
       const last = await db.generatorSessions.orderBy("updated").last();
+      if (sessionId) {
+        const saved = await db.generatorSessions.get(sessionId);
+        if (saved)
+          return startGuided
+            ? syncGeneratorSource(saved.id, initialSource || "")
+            : saved;
+      }
+      if (startGuided) {
+        const linked = draftRoleId
+          ? (
+              await db.generatorSessions
+                .filter((s) => s.draftRoleId === draftRoleId)
+                .sortBy("updated")
+            ).at(-1)
+          : undefined;
+        if (linked) return syncGeneratorSource(linked.id, initialSource || "");
+        const s = await createGenerator(initialSource);
+        return saveGeneratorDraft({
+          ...s,
+          draftRoleId,
+          sourceDraft: initialSource || "",
+          input: {
+            ...s.input,
+            experience: "guided",
+            pace: "gentle",
+            creationKind: "solo",
+            targets: [
+              { id: uid(), name: initialName || "", roleKind: "暂不定" },
+            ],
+          },
+        });
+      }
       return initialSource?.trim()
         ? createGenerator(initialSource)
         : last || createGenerator();
@@ -241,9 +294,20 @@ function GeneratorDialog({
   async function open(id?: string) {
     try {
       await flush();
-      const s = id
-        ? await db.generatorSessions.get(id)
-        : await createGenerator();
+      let s = id ? await db.generatorSessions.get(id) : await createGenerator();
+      if (s && !id && startGuided)
+        s = await saveGeneratorDraft({
+          ...s,
+          draftRoleId,
+          sourceDraft: initialSource || "",
+          input: {
+            ...s.input,
+            experience: "guided",
+            pace: "gentle",
+            creationKind: "solo",
+            targets: [{ id: uid(), name: "", roleKind: "暂不定" }],
+          },
+        });
       if (s) {
         await refresh(s.id);
         setSetup(!s.turnIds.length && !s.legacy);
@@ -260,7 +324,28 @@ function GeneratorDialog({
     data?.session.turnIds
       .map((id) => data.turns.find((t) => t.id === id))
       .filter((t) => !!t) || [];
-  const questions = turns.at(-1)?.interview?.questions || [];
+  const questions = currentQuestions(turns);
+  const guided = input.experience === "guided";
+  const settings = confirmedSettings(turns);
+  useEffect(() => {
+    if (!guided || setup || busy || tab !== "对话" || !questions.length) return;
+    const timer = setTimeout(
+      () => answerForm.current?.scrollIntoView({ block: "start" }),
+      50,
+    );
+    return () => clearTimeout(timer);
+  }, [guided, setup, busy, tab, turns.at(-1)?.id]);
+  useEffect(() => {
+    if (
+      guided &&
+      !busy &&
+      turns.at(-1)?.interview?.ready &&
+      data?.results.some(
+        (r) => r.revision === current?.revision && !r.needsReview,
+      )
+    )
+      setTab("结果");
+  }, [guided, busy, turns.at(-1)?.id, data?.results.length]);
   const answerLabel = (turnId: string, a: GeneratorAnswer) => {
     const q = turns
       .slice(
@@ -301,68 +386,133 @@ function GeneratorDialog({
       ],
     });
   };
+  async function start() {
+    if (!current) return;
+    await perform(async () => {
+      const s = await configureGenerator(current.id, input, selections);
+      ref.current = s;
+      setCurrent(s);
+      setInput(s.input);
+      setSetup(false);
+      await advanceGenerator(s.id, "", [], false, setRaw);
+    });
+  }
+  function nextAction(action: "refresh" | "blank" | "delegate") {
+    if (!current) return;
+    void perform(() =>
+      advanceGenerator(
+        current.id,
+        action === "refresh"
+          ? "这组选项没有我想要的方向。保留当前问题，换成四个核心设定完全不同的新方向；不要采用本轮任何未提交选项，也先不要成稿。"
+          : action === "blank"
+            ? "这轮先跳过，保留留白，继续聊其他方面。"
+            : "这轮交给你决定，请结合已经确定的设定继续。",
+        action === "refresh"
+          ? []
+          : questions.map((q) => ({
+              questionId: q.id,
+              options: [],
+              text: "",
+              disposition: action,
+            })),
+        false,
+        setRaw,
+        action === "refresh" ? "refresh" : undefined,
+      ),
+    );
+  }
   return (
     <Modal
-      title="角色卡生成器"
+      title={guided ? "写角色卡 · 陪我捏角色" : "角色卡生成器"}
       onClose={() => {
         void close();
       }}
     >
-      <div className="generator">
+      <div className={`generator${guided ? " generator-guided" : ""}`}>
+        {onManual && (
+          <nav className="workshop-modes" aria-label="写角色卡方式">
+            <button disabled={busy} onClick={() => void close(onManual)}>
+              自己写
+            </button>
+            <button aria-current="page">陪我捏角色</button>
+          </nav>
+        )}
         <header className="generator-intro">
           <span className="eyebrow">CHARACTER WORKSHOP</span>
           <h3>聊一聊，让人物慢慢清晰。</h3>
-          <p>选择参考，回答几个问题，写出属于你的新角色。原始资料始终保留。</p>
+          <p>
+            {guided
+              ? "四个不同方向，也可以直接说你的想法。我们一点点把人物聊出来。"
+              : "选择参考，回答几个问题，写出属于你的新角色。原始资料始终保留。"}
+          </p>
         </header>
-        <div className="generator-toolbar">
-          <label>
-            生成会话
-            <select
-              aria-label="生成会话"
-              disabled={busy}
-              value={current?.id || ""}
-              onChange={(e) => void open(e.target.value)}
-            >
-              {sessions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.title}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button disabled={busy} onClick={() => void open()}>
-            新建访谈
-          </button>
-          <button disabled={busy} onClick={() => setConnection(!connection)}>
-            接口设置
-          </button>
-          <button disabled={busy} onClick={() => void close(onLegacy)}>
-            旧版快速补全与恢复
-          </button>
-          {current && (
-            <button
-              disabled={busy}
-              onClick={() => {
-                if (
-                  confirm(
-                    "删除此访谈和恢复记录？已经保存到库里的新资料会保留。",
-                  )
-                )
-                  void perform(async () => {
-                    await deleteGenerator(current.id);
-                    const s = await createGenerator();
-                    await refresh(s.id);
-                    setSetup(true);
-                  });
-              }}
-            >
-              删除会话
+        <details className="workshop-tools" open={guided ? undefined : true}>
+          <summary hidden={!guided}>访谈记录与工具</summary>
+          <div className="generator-toolbar">
+            <label>
+              生成会话
+              <select
+                aria-label="生成会话"
+                disabled={busy}
+                value={current?.id || ""}
+                onChange={(e) => void open(e.target.value)}
+              >
+                {sessions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button disabled={busy} onClick={() => void open()}>
+              新建访谈
             </button>
+            <button disabled={busy} onClick={() => setConnection(!connection)}>
+              接口设置
+            </button>
+            <button disabled={busy} onClick={() => void close(onLegacy)}>
+              旧版快速补全与恢复
+            </button>
+            {current && (
+              <button
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    confirm(
+                      "删除此访谈和恢复记录？已经保存到库里的新资料会保留。",
+                    )
+                  )
+                    void perform(async () => {
+                      await deleteGenerator(current.id);
+                      let s = await createGenerator();
+                      if (startGuided)
+                        s = await saveGeneratorDraft({
+                          ...s,
+                          draftRoleId,
+                          sourceDraft: initialSource || "",
+                          input: {
+                            ...s.input,
+                            experience: "guided",
+                            pace: "gentle",
+                            creationKind: "solo",
+                            targets: [
+                              { id: uid(), name: "", roleKind: "暂不定" },
+                            ],
+                          },
+                        });
+                      await refresh(s.id);
+                      setSetup(true);
+                    });
+                }}
+              >
+                删除会话
+              </button>
+            )}
+          </div>
+          {connection && (
+            <GeneratorConnection onError={setError} disabled={busy} />
           )}
-        </div>
-        {connection && (
-          <GeneratorConnection onError={setError} disabled={busy} />
-        )}
+        </details>
         <div aria-live="polite" className="generator-status">
           {busy ? "正在整理人物…" : saving}
           {current?.lease && !busy && current.lease.until > Date.now() && (
@@ -404,7 +554,19 @@ function GeneratorDialog({
                     {setup ? "收起参考与目标" : "参考资料与目标"}
                   </button>
                 </div>
-                {setup && (
+                {setup && guided && (
+                  <GuidedStart
+                    input={input}
+                    onChange={changeInput}
+                    roles={roles}
+                    worlds={worlds}
+                    selections={selections}
+                    onSelect={choose}
+                    disabled={busy}
+                    onStart={() => void start()}
+                  />
+                )}
+                {setup && !guided && (
                   <fieldset disabled={busy} className="generator-setup">
                     <label>
                       创作方式
@@ -736,7 +898,7 @@ function GeneratorDialog({
                       key={t.id}
                     >
                       <strong>
-                        {t.kind === "user" ? "你的想法" : "角色生成器"}
+                        {t.kind === "user" ? "你的想法" : "陪你捏角色"}
                       </strong>
                       <p>{t.text}</p>
                       {t.answers.map((a) => (
@@ -771,7 +933,11 @@ function GeneratorDialog({
                   ))}
                 </div>
                 {!setup && (
-                  <fieldset disabled={busy} className="generator-answer-form">
+                  <fieldset
+                    ref={answerForm}
+                    disabled={busy}
+                    className="generator-answer-form"
+                  >
                     {questions.map((q) => {
                       const a = current.answers.find(
                         (a) => a.questionId === q.id,
@@ -784,7 +950,7 @@ function GeneratorDialog({
                               （{q.multiple ? "可多选" : "单选"}，也可自定义）
                             </small>
                           </legend>
-                          {q.options.map((o) => (
+                          {q.options.map((o, index) => (
                             <label className="generator-option" key={o.id}>
                               <input
                                 type={q.multiple ? "checkbox" : "radio"}
@@ -803,13 +969,48 @@ function GeneratorDialog({
                                   })
                                 }
                               />
-                              <span>{o.text}</span>
+                              <span>
+                                {guided && (
+                                  <strong className="workshop-direction">
+                                    {index + 1}. {o.direction}
+                                  </strong>
+                                )}
+                                {o.text}
+                              </span>
                             </label>
                           ))}
+                          {guided && (
+                            <button
+                              className="workshop-custom"
+                              aria-pressed={
+                                !!a &&
+                                a.disposition === "answer" &&
+                                !a.options.length
+                              }
+                              onClick={(e) => {
+                                changeAnswer(q.id, {
+                                  options: [],
+                                  disposition: "answer",
+                                });
+                                e.currentTarget.parentElement
+                                  ?.querySelector("textarea")
+                                  ?.focus();
+                              }}
+                            >
+                              5. 我自己写
+                            </button>
+                          )}
                           <label>
-                            自定义补充
+                            {guided
+                              ? "直接输入，或给选择加一句补充"
+                              : "自定义补充"}
                             <textarea
                               aria-label="自定义补充"
+                              placeholder={
+                                guided
+                                  ? "也可以说“选一，但不要……”；你的补充会一起带入后面的对话。"
+                                  : undefined
+                              }
                               value={a?.text || ""}
                               onChange={(e) =>
                                 changeAnswer(q.id, {
@@ -858,6 +1059,19 @@ function GeneratorDialog({
                       />
                     </label>
                     <div className="generator-inline">
+                      {guided && !!questions.length && (
+                        <>
+                          <button onClick={() => nextAction("refresh")}>
+                            换一组选项
+                          </button>
+                          <button onClick={() => nextAction("blank")}>
+                            这轮先跳过
+                          </button>
+                          <button onClick={() => nextAction("delegate")}>
+                            这轮交给 AI
+                          </button>
+                        </>
+                      )}
                       <button
                         className="primary"
                         onClick={() =>
@@ -911,7 +1125,7 @@ function GeneratorDialog({
               >
                 <h3>设定与参考</h3>
                 {[
-                  ["已经确定", knowledge?.confirmed],
+                  ...(!guided ? [["已经确定", settings]] : []),
                   ["需要讨论的冲突", knowledge?.conflicts],
                   ["暂时留白", knowledge?.unknown],
                 ].map(([label, items]) => (
@@ -1143,6 +1357,18 @@ function GeneratorDialog({
                       </>
                     )}
                     <div className="generator-inline">
+                      {onUseCard && r.card && (
+                        <button
+                          disabled={busy}
+                          onClick={() =>
+                            void perform(async () => {
+                              await onUseCard(r.card!);
+                            })
+                          }
+                        >
+                          带回自己写
+                        </button>
+                      )}
                       <button
                         disabled={busy}
                         onClick={() => {
@@ -1495,6 +1721,20 @@ function GeneratorDialog({
               </section>
             </div>
           </>
+        )}
+        {guided && current && (
+          <FloatingSettings
+            key={current.id}
+            items={settings}
+            conflicts={knowledge?.conflicts || []}
+            unknown={knowledge?.unknown || []}
+            disabled={busy}
+            onSave={async (from, to) => {
+              await flush();
+              await changeGeneratorSetting(current.id, from, to);
+              await refresh(current.id, false);
+            }}
+          />
         )}
       </div>
     </Modal>

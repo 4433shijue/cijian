@@ -542,7 +542,7 @@ function RoleEditor({
           </p>
         )}
         <fieldset className="role-editor-fields" disabled={busy}>
-          {onComplete && <div className="role-completion-entry"><button type="button" disabled={busy || reading} onClick={() => onComplete(current.current)}><Feather size={16} />用这些设定帮我补全</button><span className="hint">写下人物或故事，AI 帮你整理成详细角色卡。</span></div>}
+          {onComplete && <div className="role-completion-entry"><nav className="workshop-modes" aria-label="写角色卡方式"><button type="button" aria-current="page">自己写</button><button type="button" disabled={busy || reading} onClick={() => onComplete(current.current)}><Feather size={16} />陪我捏角色</button></nav><span className="hint">写了一半也可以切过去，带着已有设定继续聊。</span></div>}
           <div className="role-top">
             <Avatar role={r} size={68} />
             <Field label="头像">
@@ -648,7 +648,15 @@ function RolesPage({ notify }: { notify: Notice }) {
   const roles = useLiveQuery(() => db.roles.toArray(), []) || [];
   const [editing, setEditing] = useState<{ role: Role; creating: boolean }>();
   const [opening, setOpening] = useState(false);
-  const [completion, setCompletion] = useState<{ source?: string }>();
+  const [completion, setCompletion] = useState<{ source?: string; guided?: boolean; name?: string; draftRoleId?: string; sessionId?: string }>();
+  const [guidedSession, setGuidedSession] = useState<{ roleId: string; id: string }>();
+  const openGuided = (role: Role) => {
+    setEditing({ role, creating: true });
+    setCompletion({ guided: true, name: role.name, draftRoleId: role.id,
+      sessionId: guidedSession?.roleId === role.id ? guidedSession.id : undefined,
+      source: [role.name ? `人物名字：${role.name}` : "", role.bio ? `公开简介：\n${role.bio}` : "", role.persona ? `完整人设：\n${role.persona}` : ""].filter(Boolean).join("\n\n"),
+    });
+  };
   return (
     <div className="page">
       <header className="page-heading">
@@ -659,6 +667,13 @@ function RolesPage({ notify }: { notify: Notice }) {
         </div>
         <div className="roles-heading-actions">
         <button onClick={() => setCompletion({})}><Feather size={17} />帮我补全</button>
+        <button disabled={opening} onClick={async () => {
+          setOpening(true);
+          try {
+            const role = await loadRoleDraft() || { id: uid(), name: "", bio: "", persona: "", avatar: "", paragraphs: [], updated: Date.now() };
+            await saveRoleDraft(role); openGuided(role);
+          } catch { notify("角色草稿暂时没能读取，请重试。"); } finally { setOpening(false); }
+        }}><Feather size={17} />陪我捏角色</button>
         <button
           className="primary"
           disabled={opening}
@@ -724,14 +739,7 @@ function RolesPage({ notify }: { notify: Notice }) {
         <RoleEditor
           value={editing.role}
           onDraftChange={editing.creating ? saveRoleDraft : undefined}
-          onComplete={editing.creating ? (role) => {
-            setEditing({ ...editing, role });
-            setCompletion({ source: [
-              role.name ? `人物名字：${role.name}` : "",
-              role.bio ? `公开简介：\n${role.bio}` : "",
-              role.persona ? `完整人设：\n${role.persona}` : "",
-            ].filter(Boolean).join("\n\n") });
-          } : undefined}
+          onComplete={editing.creating ? role => { void saveRoleDraft(role).then(() => openGuided(role)).catch(() => notify("角色草稿暂时没能保存，请重试，当前输入仍在。")); } : undefined}
           onClose={() => setEditing(undefined)}
           onSave={async (r) => {
             if (editing.creating) await saveCreatedRole(r);
@@ -740,7 +748,17 @@ function RolesPage({ notify }: { notify: Notice }) {
           }}
         />
       )}
-      {completion && <RoleCompletionAssistant initialSource={completion.source} notify={notify} onClose={() => setCompletion(undefined)} />}
+      {completion && <RoleCompletionAssistant initialSource={completion.source} guided={completion.guided} initialName={completion.name} draftRoleId={completion.draftRoleId} sessionId={completion.sessionId}
+        onSession={completion.guided ? id => setGuidedSession({ roleId: completion.draftRoleId!, id }) : undefined}
+        onManual={completion.guided ? () => setCompletion(undefined) : undefined}
+        onUseCard={completion.guided ? async card => {
+          const previous = editing?.role;
+          const persona = card.sections.map(s => `${s.title}\n${s.content}`).join("\n\n");
+          const role: Role = { ...previous, id: previous?.id || uid(), name: card.name, bio: card.bio, persona, avatar: previous?.avatar || "", paragraphs: paragraphs(persona), updated: Date.now() };
+          await saveRoleDraft(role);
+          setEditing({ role, creating: true }); setCompletion(undefined);
+        } : undefined}
+        notify={notify} onClose={() => setCompletion(undefined)} />}
     </div>
   );
 }

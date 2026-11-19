@@ -12,7 +12,12 @@ export const generatorTables = [
   "generatorSteps",
   "generatorResults",
 ] as const;
-export const targetSchema = z.object({ id, name: str });
+export const targetSchema = z.object({
+  id,
+  name: str,
+  roleKind: str.optional(),
+  autoName: z.boolean().optional(),
+});
 export const inputSchema = z.object({
   mode: z.enum(["create", "refine", "if"]),
   freedom: z.enum(["faithful", "free"]),
@@ -21,13 +26,16 @@ export const inputSchema = z.object({
   core: str,
   multiple: z.boolean(),
   targets: z.array(targetSchema),
+  experience: z.enum(["guided", "classic"]).optional(),
+  pace: z.enum(["gentle", "quick"]).optional(),
+  creationKind: z.enum(["solo", "partner", "pair"]).optional(),
 });
 export const questionSchema = z.object({
   id,
   text: id,
   multiple: z.boolean(),
   options: z
-    .array(z.object({ id, text: id }))
+    .array(z.object({ id, text: id, direction: str.optional() }))
     .min(2)
     .max(5),
 });
@@ -100,6 +108,8 @@ export const generatorSchemas = {
     created: num,
     updated: num,
     legacy: z.boolean().optional(),
+    draftRoleId: str.optional(),
+    sourceDraft: str.optional(),
     draft: str,
     answers: z.array(answerSchema),
     selectionDraft: z
@@ -146,6 +156,9 @@ export const generatorSchemas = {
     text: str,
     answers: z.array(answerSchema),
     interview: interviewSchema.optional(),
+    settingChange: z.object({ from: str, to: str }).optional(),
+    draftUpdate: z.boolean().optional(),
+    action: z.enum(["refresh"]).optional(),
   }),
   generatorSteps: z.object({
     id,
@@ -213,14 +226,25 @@ export const newGeneratorInput = (): GeneratorInput => ({
   targets: [],
 });
 
+// Old conversations retain their original question format. New guided requests
+// have a strict wire contract; persisted questions stay backwards compatible.
+export const guidedInterviewSchema = interviewSchema.extend({
+  questions: z
+    .array(
+      questionSchema.extend({
+        options: z.array(z.object({ id, text: id, direction: id })).length(4),
+      }),
+    )
+    .max(3),
+});
+
 // Only the small, closed output schema vocabulary is converted for provider adapters.
 export function generatorWire(schema: z.ZodTypeAny): any {
   if (schema instanceof z.ZodObject) {
     const properties = Object.fromEntries(
-      Object.entries(schema.shape).map(([k, v]) => [
-        k,
-        generatorWire(v as z.ZodTypeAny),
-      ]),
+      Object.entries(schema.shape)
+        .filter(([, v]) => !(v instanceof z.ZodOptional))
+        .map(([k, v]) => [k, generatorWire(v as z.ZodTypeAny)]),
     );
     return {
       type: "object",
@@ -230,7 +254,22 @@ export function generatorWire(schema: z.ZodTypeAny): any {
     };
   }
   if (schema instanceof z.ZodArray)
-    return { type: "array", items: generatorWire(schema.element) };
+    return {
+      type: "array",
+      items: generatorWire(schema.element),
+      ...(schema._def.exactLength
+        ? {
+            minItems: schema._def.exactLength.value,
+            maxItems: schema._def.exactLength.value,
+          }
+        : {}),
+      ...(schema._def.minLength
+        ? { minItems: schema._def.minLength.value }
+        : {}),
+      ...(schema._def.maxLength
+        ? { maxItems: schema._def.maxLength.value }
+        : {}),
+    };
   if (schema instanceof z.ZodEnum)
     return { type: "string", enum: schema.options };
   if (schema instanceof z.ZodBoolean) return { type: "boolean" };

@@ -22,8 +22,11 @@ import {
   recoverGeneratorStep,
   forkGeneratorRecovery,
   saveGeneratorDraft,
+  changeGeneratorSetting,
+  syncGeneratorSource,
 } from "../src/generator";
 import { generatorResultGroups } from "../src/generator-results";
+import { confirmedSettings } from "../src/generator-guidance";
 import {
   generatorTables,
   newGeneratorInput,
@@ -522,7 +525,7 @@ it("round-trips complete sessions with remapped identities in both backup paths 
   mock();
   await advanceGenerator(s.id);
   const b = await exportBackup();
-  expect(b.version).toBe(12);
+  expect(b.version).toBe(13);
   validateBackup(b);
   await importBackup(b);
   expect(await db.generatorSessions.count()).toBe(2);
@@ -1009,4 +1012,192 @@ it("records migration independently so deleting or importing a compatibility ses
   const count = await db.generatorSessions.count();
   await migrateCompletionGenerator();
   expect(await db.generatorSessions.count()).toBe(count);
+});
+
+const guidedAsk = {
+  ...ready,
+  ready: false,
+  confirmed: ["温柔但有距离感"],
+  questions: [
+    {
+      id: "distance",
+      text: "他为何保持距离？",
+      multiple: false,
+      options: [
+        {
+          id: "a",
+          direction: "习惯独立",
+          text: "一直自己照顾自己，不懂怎样接受他人的照顾。",
+        },
+        {
+          id: "b",
+          direction: "守护秘密",
+          text: "身份必须保密，靠近别人会让对方卷入危险。",
+        },
+        {
+          id: "c",
+          direction: "人生志向",
+          text: "准备远赴异乡实现梦想，不愿留下感情牵挂。",
+        },
+        {
+          id: "d",
+          direction: "天性自在",
+          text: "享受自由来往，认为亲密也可以有各自的空间。",
+        },
+      ],
+    },
+  ],
+};
+async function guidedSetup(pair = false) {
+  const s = await createGenerator();
+  return configureGenerator(
+    s.id,
+    {
+      ...newGeneratorInput(),
+      experience: "guided",
+      pace: "gentle",
+      creationKind: pair ? "pair" : "solo",
+      multiple: pair,
+      targets: [
+        { id: "one", name: "", roleKind: "攻" },
+        ...(pair ? [{ id: "two", name: "", roleKind: "受" }] : []),
+      ],
+    },
+    [],
+  );
+}
+it("guided mode starts without names, composes two separate cards and preserves source roles", async () => {
+  const s = await guidedSetup(true);
+  expect(s.input.targets.every((t) => t.autoName)).toBe(true);
+  mock((p) =>
+    p.task === "interview"
+      ? ready
+      : p.task === "world"
+        ? { worlds: [] }
+        : card(p.targetId, p.targetId === "one" ? "沈遥" : "叶宁"),
+  );
+  await advanceGenerator(s.id);
+  const d = await generatorData(s.id);
+  expect(d.results.map((r) => r.card?.name).sort()).toEqual(
+    ["叶宁", "沈遥"].sort(),
+  );
+  await saveGeneratorResults(
+    s.id,
+    d.results.map((r) => r.id),
+  );
+  expect(await db.roles.get(role.id)).toEqual(role);
+  expect(await db.roles.count()).toBe(3);
+});
+it("guided choices include custom text and authoritative setting changes in the next request and backup", async () => {
+  const s = await guidedSetup();
+  mock(() => guidedAsk);
+  await advanceGenerator(s.id);
+  await changeGeneratorSetting(
+    s.id,
+    "温柔但有距离感",
+    "温柔独立，没有情伤，不要创伤设定",
+  );
+  const m = mock(() => guidedAsk);
+  await advanceGenerator(s.id, "", [
+    {
+      questionId: "distance",
+      options: ["a"],
+      text: "选一，但不要安排悲惨身世",
+      disposition: "answer",
+    },
+  ]);
+  expect(m.requests[0].payload.confirmedSettings).toContain(
+    "温柔独立，没有情伤，不要创伤设定",
+  );
+  expect(m.requests[0].payload.history.at(-1).answers[0].text).toContain(
+    "不要安排悲惨身世",
+  );
+  expect(m.requests[0].body.messages[0].content).toContain("四个完全不同");
+  await importBackup(await exportBackup(), true);
+  const copied = (await db.generatorSessions.toArray())[0];
+  const d = await generatorData(copied.id);
+  expect(copied.input.experience).toBe("guided");
+  const turns = d.session.turnIds.map((id) =>
+    d.turns.find((t) => t.id === id)!,
+  );
+  expect(confirmedSettings(turns)).toEqual([
+    "温柔独立，没有情伤，不要创伤设定",
+  ]);
+  const recovered = mock(() => guidedAsk);
+  for (const p of await db.profiles.toArray())
+    await db.profiles.put({ ...p, key: "fixture-key-only", remember: true });
+  await advanceGenerator(copied.id, "继续聊");
+  expect(recovered.requests[0].payload.confirmedSettings).toContain(
+    "温柔独立，没有情伤，不要创伤设定",
+  );
+});
+it.each(["count", "direction", "similar", "pace", "multiple"])(
+  "rejects invalid guided options: %s, keeps raw output without automatic paid retries",
+  async (failure) => {
+    const s = await guidedSetup();
+    const bad = structuredClone(guidedAsk);
+    if (failure === "count") bad.questions[0].options.pop();
+    if (failure === "direction")
+      bad.questions[0].options[1].direction =
+        bad.questions[0].options[0].direction;
+    if (failure === "similar")
+      bad.questions[0].options[1].text =
+        bad.questions[0].options[0].text + "。";
+    if (failure === "pace")
+      bad.questions.push({ ...bad.questions[0], id: "q2" });
+    if (failure === "multiple") bad.questions[0].multiple = true;
+    const m = mock(() => bad);
+    await expect(advanceGenerator(s.id)).rejects.toThrow();
+    expect(m.fetcher).toHaveBeenCalledTimes(1);
+    expect((await generatorData(s.id)).steps[0].raw).toContain("questions");
+  },
+);
+it("refreshing choices neither submits selected candidates nor accepts automatic composition", async () => {
+  const s = await guidedSetup();
+  mock(() => guidedAsk);
+  await advanceGenerator(s.id);
+  const m = mock(() => ready);
+  await expect(
+    advanceGenerator(s.id, "换一组", [], false, undefined, "refresh"),
+  ).rejects.toThrow("不能直接成稿");
+  expect(m.fetcher).toHaveBeenCalledTimes(1);
+  expect(m.requests[0].payload.history.at(-1).answers).toEqual([]);
+  expect((await generatorData(s.id)).results).toHaveLength(0);
+});
+it("source switching retains conversation and pending questions while invalidating old retries", async () => {
+  const s = await guidedSetup();
+  const m = mock(() => guidedAsk);
+  await advanceGenerator(s.id);
+  const before = await generatorData(s.id);
+  await syncGeneratorSource(s.id, "手写草稿：他是修船匠");
+  expect(m.fetcher).toHaveBeenCalledTimes(1);
+  const updated = await generatorData(s.id);
+  expect(updated.session.turnIds).toHaveLength(
+    before.session.turnIds.length + 1,
+  );
+  await advanceGenerator(s.id, "", [
+    {
+      questionId: "distance",
+      options: [],
+      text: "自己喜欢自由",
+      disposition: "answer",
+    },
+  ]);
+  expect(m.requests.at(-1).payload.input.source).toBe("手写草稿：他是修船匠");
+  await expect(retryGenerator(s.id, before.steps[0].batchId)).rejects.toThrow();
+});
+it("partner flow requires an explicitly selected relationship reference", async () => {
+  const s = await createGenerator();
+  const input = {
+    ...newGeneratorInput(),
+    experience: "guided" as const,
+    creationKind: "partner" as const,
+    targets: [{ id: "one", name: "新搭档" }],
+  };
+  await expect(configureGenerator(s.id, input, [])).rejects.toThrow("选择");
+  const configured = await configureGenerator(s.id, input, [
+    { kind: "role", sourceId: role.id, purpose: "relationship" },
+  ]);
+  expect(configured.input.targets).toHaveLength(1);
+  expect((await generatorData(s.id)).materials[0].text).toContain("林舟");
 });
