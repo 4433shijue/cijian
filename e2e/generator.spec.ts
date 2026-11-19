@@ -235,6 +235,7 @@ test("refresh restores answers and original snapshots; retry keeps original prom
     dialog(page).getByText("已自动保存", { exact: true }),
   ).toBeVisible();
   await dialog(page).getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(dialog(page)).toBeHidden();
   await page.reload();
   await open(page);
   await expect(
@@ -299,6 +300,7 @@ for (const width of [1280, 390, 360])
       fullPage: true,
     });
     await d.getByRole("button", { name: "关闭", exact: true }).click();
+    await expect(d).toBeHidden();
     await page.reload();
     await open(page);
     if (width < 700)
@@ -544,4 +546,35 @@ test("storage errors keep the author's editor content visible and prevent closin
   });
   await dialog(page).getByRole("button", { name: "关闭", exact: true }).click();
   await expect(dialog(page)).toHaveCount(0);
+});
+
+test("connection fields wait for initial storage reads before accepting edits", async ({
+  page,
+}) => {
+  await seed(page);
+  await open(page);
+  await page.evaluate(async () => {
+    const { db } = await import("/src/db.ts");
+    const original = db.preferences.get.bind(db.preferences);
+    (db.preferences as any).get = (...args: any[]) =>
+      new Promise((resolve) => {
+        (window as any).releaseConnectionRead = async () => {
+          (db.preferences as any).get = original;
+          resolve(await (original as any)(...args));
+        };
+      });
+  });
+  const d = dialog(page);
+  await d.getByRole("button", { name: "接口设置", exact: true }).click();
+  await expect(d.getByLabel("连接方式")).toBeDisabled();
+  await expect(d.getByText("正在读取接口配置…", { exact: true })).toBeVisible();
+  await page.evaluate(() => (window as any).releaseConnectionRead());
+  await expect(d.getByLabel("连接方式")).toBeEnabled();
+  await d.getByLabel("连接方式").selectOption("dedicated");
+  await d
+    .getByLabel("接口地址", { exact: true })
+    .fill("https://dedicated.fixture.test/v1");
+  await expect(d.getByLabel("接口地址", { exact: true })).toHaveValue(
+    "https://dedicated.fixture.test/v1",
+  );
 });

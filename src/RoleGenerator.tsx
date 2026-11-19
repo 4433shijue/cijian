@@ -1788,22 +1788,35 @@ function GeneratorConnection({
   });
   const [key, setKey] = useState("");
   const [saved, setSaved] = useState("");
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
+    let active = true;
     void (async () => {
       const p = await db.preferences.get("preferences");
-      setMode(p?.generatorConnection || "inherit");
       const dedicated = p?.generatorProfileId
         ? await db.profiles.get(p.generatorProfileId)
         : undefined;
+      if (!active) return;
+      setMode(p?.generatorConnection || "inherit");
       if (dedicated) {
         setProfile(dedicated);
         setKey(keyFor(dedicated));
       }
-    })().catch((e) => onError(err(e)));
+    })()
+      .catch((e) => {
+        if (active) onError(err(e));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
   return (
-    <fieldset disabled={disabled} className="generator-connection">
+    <fieldset disabled={disabled || loading} className="generator-connection">
       <legend>生成器接口设置</legend>
+      {loading && <p role="status">正在读取接口配置…</p>}
       <label>
         连接方式
         <select
